@@ -7,5 +7,23 @@
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
     "version": "0.1.0"
   },
-  "plugins": []
+  "plugins": [
+    {
+      "name": "health-insights",
+      "source": "./health-insights",
+      "description": "Personal health intelligence: ingest Apple Health data, establish baselines, generate AI-driven insights",
+      "version": "1.0.0",
+      "category": "health",
+      "tags": [
+        "health",
+        "apple-health",
+        "baselines",
+        "insights",
+        "obsidian",
+        "grafana",
+        "heatmap"
+      ],
+      "strict": true
+    }
+  ]
 }

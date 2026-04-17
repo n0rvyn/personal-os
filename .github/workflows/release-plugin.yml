@@ -9,6 +9,7 @@ on:
         required: true
         default: all
         options:
+          - health-insights
           - all
       bump:
         description: "Semver bump type"
@@ -73,7 +74,7 @@ jobs:
           }
 
           if [[ "$TARGET" == "all" ]]; then
-            PLUGINS=()
+            PLUGINS=("health-insights")
           else
             PLUGINS=("$TARGET")
           fi

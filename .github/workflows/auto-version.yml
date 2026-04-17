@@ -3,7 +3,8 @@ name: Auto Version Bump
 on:
   push:
     branches: [main]
-    paths: []
+    paths:
+      - "health-insights/**"
 
 permissions:
   contents: write
@@ -31,7 +32,7 @@ jobs:
           set -euo pipefail
 
           MARKET_FILE=".claude-plugin/marketplace.json"
-          ALL_PLUGINS=()
+          ALL_PLUGINS=("health-insights")
 
           bump_semver() {
             local version="$1"

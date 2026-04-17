@@ -1,0 +1,25 @@
+# Ignore plans directory
+docs/06-plans/
+06-discussions/
+
+.claude
+__pycache__/
+
+# temp files
+/*.txt
+!.gitignore
+!.CLAUDE.md
+!.README.md
+!CLAUDE.md
+!README.md
+
+# Playwright MCP
+/.playwright-mcp/
+/.claude
+/.codex/*
+!/.codex/
+!/.codex/INSTALL.md
+
+# User secrets: never commit .env files (only .env.example)
+**/.env
+!**/.env.example

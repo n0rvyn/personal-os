@@ -1,0 +1,11 @@
+{
+  "name": "personal-os",
+  "owner": {
+    "name": "Norvyn"
+  },
+  "metadata": {
+    "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
+    "version": "0.1.0"
+  },
+  "plugins": []
+}

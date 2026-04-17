@@ -10,6 +10,7 @@ on:
         default: all
         options:
           - health-insights
+          - session-reflect
           - all
       bump:
         description: "Semver bump type"
@@ -74,7 +75,7 @@ jobs:
           }
 
           if [[ "$TARGET" == "all" ]]; then
-            PLUGINS=("health-insights")
+            PLUGINS=("health-insights" "session-reflect")
           else
             PLUGINS=("$TARGET")
           fi

@@ -24,6 +24,21 @@
         "heatmap"
       ],
       "strict": true
+    },
+    {
+      "name": "session-reflect",
+      "source": "./session-reflect",
+      "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
+      "version": "1.0.0",
+      "category": "reflection",
+      "tags": [
+        "session-analysis",
+        "ai-collaboration",
+        "coaching",
+        "reflection",
+        "productivity"
+      ],
+      "strict": true
     }
   ]
 }

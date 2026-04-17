@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {
@@ -29,7 +29,7 @@
       "name": "session-reflect",
       "source": "./session-reflect",
       "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "category": "reflection",
       "tags": [
         "session-analysis",
@@ -59,7 +59,7 @@
       "name": "youtube-scout",
       "source": "./youtube-scout",
       "description": "YouTube video intelligence: scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, exports IEF-compliant insights",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "category": "intelligence",
       "tags": [
         "youtube",
@@ -74,7 +74,7 @@
       "name": "pkos",
       "source": "./pkos",
       "description": "Personal Knowledge Operating System: automated knowledge compilation for Obsidian vaults, IEF ingestion, digest generation, and cross-source signal aggregation",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "category": "knowledge",
       "tags": [
         "knowledge-management",

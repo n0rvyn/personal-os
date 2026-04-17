@@ -39,6 +39,21 @@
         "productivity"
       ],
       "strict": true
+    },
+    {
+      "name": "domain-intel",
+      "source": "./domain-intel",
+      "description": "Domain intelligence engine: automated collection, AI analysis, and trend synthesis from GitHub, Product Hunt, RSS, and more",
+      "version": "1.0.0",
+      "category": "intelligence",
+      "tags": [
+        "domain-intel",
+        "research",
+        "trends",
+        "github",
+        "rss"
+      ],
+      "strict": true
     }
   ]
 }

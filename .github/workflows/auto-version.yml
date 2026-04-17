@@ -6,6 +6,7 @@ on:
     paths:
       - "health-insights/**"
       - "session-reflect/**"
+      - "domain-intel/**"
 
 permissions:
   contents: write
@@ -33,7 +34,7 @@ jobs:
           set -euo pipefail
 
           MARKET_FILE=".claude-plugin/marketplace.json"
-          ALL_PLUGINS=("health-insights" "session-reflect")
+          ALL_PLUGINS=("health-insights" "session-reflect" "domain-intel")
 
           bump_semver() {
             local version="$1"

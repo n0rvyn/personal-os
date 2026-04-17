@@ -12,6 +12,7 @@ on:
           - health-insights
           - session-reflect
           - domain-intel
+          - youtube-scout
           - all
       bump:
         description: "Semver bump type"
@@ -76,7 +77,7 @@ jobs:
           }
 
           if [[ "$TARGET" == "all" ]]; then
-            PLUGINS=("health-insights" "session-reflect" "domain-intel")
+            PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout")
           else
             PLUGINS=("$TARGET")
           fi

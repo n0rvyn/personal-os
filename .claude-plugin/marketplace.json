@@ -54,6 +54,21 @@
         "rss"
       ],
       "strict": true
+    },
+    {
+      "name": "youtube-scout",
+      "source": "./youtube-scout",
+      "description": "YouTube video intelligence: scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, exports IEF-compliant insights",
+      "version": "1.0.0",
+      "category": "intelligence",
+      "tags": [
+        "youtube",
+        "video",
+        "intelligence",
+        "transcripts",
+        "ief"
+      ],
+      "strict": true
     }
   ]
 }

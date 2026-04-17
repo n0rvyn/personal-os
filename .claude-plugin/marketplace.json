@@ -84,6 +84,20 @@
         "digest"
       ],
       "strict": true
+    },
+    {
+      "name": "portfolio-lens",
+      "source": "./portfolio-lens",
+      "description": "Indie project portfolio management: scan, progress pulse, verdict refresh, reprioritize",
+      "version": "0.1.0",
+      "category": "portfolio",
+      "tags": [
+        "portfolio",
+        "project-management",
+        "product-strategy",
+        "ief"
+      ],
+      "strict": true
     }
   ]
 }

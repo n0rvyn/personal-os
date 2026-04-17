@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
@@ -89,7 +89,7 @@
       "name": "portfolio-lens",
       "source": "./portfolio-lens",
       "description": "Indie project portfolio management: scan, progress pulse, verdict refresh, reprioritize",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "portfolio",
       "tags": [
         "portfolio",

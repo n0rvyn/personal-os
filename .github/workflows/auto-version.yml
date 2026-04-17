@@ -8,6 +8,7 @@ on:
       - "session-reflect/**"
       - "domain-intel/**"
       - "youtube-scout/**"
+      - "pkos/**"
 
 permissions:
   contents: write
@@ -35,7 +36,7 @@ jobs:
           set -euo pipefail
 
           MARKET_FILE=".claude-plugin/marketplace.json"
-          ALL_PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout")
+          ALL_PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos")
 
           bump_semver() {
             local version="$1"

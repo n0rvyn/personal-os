@@ -69,6 +69,21 @@
         "ief"
       ],
       "strict": true
+    },
+    {
+      "name": "pkos",
+      "source": "./pkos",
+      "description": "Personal Knowledge Operating System: automated knowledge compilation for Obsidian vaults, IEF ingestion, digest generation, and cross-source signal aggregation",
+      "version": "1.0.0",
+      "category": "knowledge",
+      "tags": [
+        "knowledge-management",
+        "obsidian",
+        "pkm",
+        "ief",
+        "digest"
+      ],
+      "strict": true
     }
   ]
 }

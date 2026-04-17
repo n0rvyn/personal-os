@@ -20,7 +20,9 @@ intel_sources:
     max_per_sync: 20
     source_name: domain-intel
   session_reflect:
-    insights_path: ~/.claude/session-reflect/insights/
+    # Resolves at runtime to {exchange_dir}/session-reflect/ (from ~/.claude/personal-os.yaml).
+    # Explicit override here wins; leave empty to use the default.
+    insights_path: ""
     significance_threshold: 3
     max_per_sync: 20
     category: pattern

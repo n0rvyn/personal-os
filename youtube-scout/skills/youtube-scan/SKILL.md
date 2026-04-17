@@ -34,7 +34,7 @@ Resolve config path:
 Bash(command="echo ~/.youtube-scout/config.yaml")
 ```
 Store the absolute path. Read the file if it exists. Extract:
-- `export.path` (default: `~/.youtube-scout/exports`)
+- `export.path` (default: `{exchange_dir}/youtube-scout/YYYY-MM/` where `exchange_dir` is loaded from `~/.claude/personal-os.yaml`)
 - `export.min_score` (default: 3.0) — minimum weighted_total for export
 - `export.domains` (default: []) — domain list for category matching, passed to video-scorer
 - `scan.topic` (default: "AI") — topic for YouTube search

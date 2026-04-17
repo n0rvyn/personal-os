@@ -29,7 +29,7 @@
       "name": "session-reflect",
       "source": "./session-reflect",
       "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "category": "reflection",
       "tags": [
         "session-analysis",
@@ -44,7 +44,7 @@
       "name": "domain-intel",
       "source": "./domain-intel",
       "description": "Domain intelligence engine: automated collection, AI analysis, and trend synthesis from GitHub, Product Hunt, RSS, and more",
-      "version": "1.0.0",
+      "version": "1.4.0",
       "category": "intelligence",
       "tags": [
         "domain-intel",
@@ -59,7 +59,7 @@
       "name": "youtube-scout",
       "source": "./youtube-scout",
       "description": "YouTube video intelligence: scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, exports IEF-compliant insights",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "intelligence",
       "tags": [
         "youtube",
@@ -74,7 +74,7 @@
       "name": "pkos",
       "source": "./pkos",
       "description": "Personal Knowledge Operating System: automated knowledge compilation for Obsidian vaults, IEF ingestion, digest generation, and cross-source signal aggregation",
-      "version": "1.0.0",
+      "version": "0.6.1",
       "category": "knowledge",
       "tags": [
         "knowledge-management",

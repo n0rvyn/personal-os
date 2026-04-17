@@ -16,7 +16,8 @@ excluded_projects:
 # PKOS IEF export
 # Default resolved at runtime as: {exchange_dir}/session-reflect/{YYYY-MM}/
 # (loaded from ~/.claude/personal-os.yaml). Override explicitly here if needed.
-insights_path: ~/.claude/session-reflect/insights/
+# Leave empty string to use the runtime-resolved default.
+insights_path: ""
 significance_threshold: 3
 max_insights_per_export: 20
 

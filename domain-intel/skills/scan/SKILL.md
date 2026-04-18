@@ -45,6 +45,7 @@ Store the result as `WD`. **All file paths in this skill are relative to `WD`** 
    - `scan.max_items_per_source` (default: 20)
    - `scan.significance_threshold` (default: 2)
    - `scan.auto_digest` (default: false)
+   - `ief_output_dir` (optional; top-level field) — profile override for IEF output; see Step 1.5
 
 3. Read `{WD}/LENS.md` if it exists:
    - Parse YAML frontmatter → extract `figures[]` and `companies[]`
@@ -58,10 +59,25 @@ Store the result as `WD`. **All file paths in this skill are relative to `WD`** 
    date +%Y-%m
    ```
 
-5. Ensure month directory exists:
+5. Resolve IEF output directory (precedence: profile `ief_output_dir` in `config.yaml` → `{exchange_dir}/domain-intel/`):
+
+   ```bash
+   IEF_DIR=$(python3 -c "
+   import yaml, os
+   from pathlib import Path
+   cfg = yaml.safe_load(open('config.yaml')) or {}
+   override = cfg.get('ief_output_dir', '').strip()
+   if override:
+       print(str(Path(os.path.expanduser(override)).resolve()))
+   else:
+       import subprocess
+       ex = subprocess.check_output(['python3', os.environ['CLAUDE_PLUGIN_ROOT'] + '/scripts/personal_os_config.py', '--get', 'exchange_dir']).decode().strip()
+       print(f'{ex}/domain-intel')
+   ")
+   mkdir -p "$IEF_DIR/{YYYY-MM}"
    ```
-   mkdir -p ./insights/{YYYY-MM}
-   ```
+
+   Store the resolved absolute path as `IEF_DIR`. **All newly produced IEF insight writes in this scan land under `{IEF_DIR}/{YYYY-MM}/`**. The legacy `{WD}/insights/` location remains readable for pre-migration data but is not written to by this step.
 
 6. Read `{WD}/state.yaml` if it exists (for stats tracking).
 
@@ -124,16 +140,19 @@ For each item, normalize the URL:
 
 **Regex-escape the normalized URL** before using as Grep pattern: replace `.` with `\\.`, `+` with `\\+`, `?` with `\\?`, `[` with `\\[`, `]` with `\\]`.
 
-Check if the normalized URL exists in **recent** insight files only (current month + previous month):
+Check if the normalized URL exists in **recent** insight files only (current month + previous month). Search BOTH the new IEF output dir AND the legacy `{WD}/insights/` so pre-migration and post-migration files are both considered:
 ```
+Grep(pattern="{escaped_url}", path="{IEF_DIR}/{YYYY-MM}/", output_mode="files_with_matches", head_limit=1)
 Grep(pattern="{escaped_url}", path="{WD}/insights/{YYYY-MM}/", output_mode="files_with_matches", head_limit=1)
 ```
 If current day is within the first 7 days of the month, also check previous month (only if it exists):
 ```
+Glob(pattern="{IEF_DIR}/{PREV-YYYY-MM}/*.md", head_limit=1)
 Glob(pattern="{WD}/insights/{PREV-YYYY-MM}/*.md", head_limit=1)
 ```
-If glob returns results:
+If either glob returns results:
 ```
+Grep(pattern="{escaped_url}", path="{IEF_DIR}/{PREV-YYYY-MM}/", output_mode="files_with_matches", head_limit=1)
 Grep(pattern="{escaped_url}", path="{WD}/insights/{PREV-YYYY-MM}/", output_mode="files_with_matches", head_limit=1)
 ```
 
@@ -141,11 +160,12 @@ Remove items whose URL already exists. Track: `after_url_dedup = N`
 
 #### Tier 2: Title Deduplication
 
-Get titles from recent insight files (current month + previous month if applicable):
+Get titles from recent insight files (current month + previous month if applicable). Read both new and legacy dirs:
 ```
+Grep(pattern="^title:", path="{IEF_DIR}/{YYYY-MM}/", output_mode="content")
 Grep(pattern="^title:", path="{WD}/insights/{YYYY-MM}/", output_mode="content")
 ```
-If within first 7 days and `{WD}/insights/{PREV-YYYY-MM}/` exists (checked via Glob in Tier 1), also check previous month.
+If within first 7 days and `{PREV-YYYY-MM}` subdirs exist (checked via Glob in Tier 1), also check previous month.
 
 For each remaining item, compare its title against existing titles:
 - Lowercase both titles
@@ -216,7 +236,7 @@ Merge results from all analyzers. For each insight with `significance >= signifi
 
 1. Verify the ID doesn't collide with existing files. If it does, increment the sequence number.
 
-2. Write insight file to `{WD}/insights/{YYYY-MM}/{id}.md`:
+2. Write insight file to `{IEF_DIR}/{YYYY-MM}/{id}.md` (the IEF output dir resolved in Step 1.5):
 
 ```markdown
 ---
@@ -266,8 +286,8 @@ For each external source in `sources.external[]`:
    d. Check significance >= `scan.significance_threshold`
       - If below threshold → delete the source file, skip
    e. Extract month from the file's `date` field (not current scan month): `{file_YYYY-MM}`
-      - `Bash(command="mkdir -p {WD}/insights/{file_YYYY-MM}")`
-   f. Copy file to `{WD}/insights/{file_YYYY-MM}/{id}.md`
+      - `Bash(command="mkdir -p {IEF_DIR}/{file_YYYY-MM}")`
+   f. Copy file to `{IEF_DIR}/{file_YYYY-MM}/{id}.md`
       - If ID collides with existing file → increment sequence number in ID
    g. Delete the source file (consumed)
 4. Track: `imported = N`
@@ -277,7 +297,7 @@ Include imported insights in the pool for Step 6 (Convergence Signal Detection) 
 
 ### Step 6: Convergence Signal Detection
 
-Read all insights stored today (from Step 5 and Step 5.5 combined). Glob `{WD}/insights/*/` for files with today's date prefix `{YYYY-MM-DD}-*`.
+Read all insights stored today (from Step 5 and Step 5.5 combined). Glob `{IEF_DIR}/*/` AND `{WD}/insights/*/` for files with today's date prefix `{YYYY-MM-DD}-*` (legacy dir is included so that profiles that override `ief_output_dir` back to `{WD}/insights/` still behave consistently).
 
 Group by normalized topic:
 - Extract the primary tag (first tag) + category as topic key
@@ -285,7 +305,7 @@ Group by normalized topic:
 
 For each topic that appears across 2+ different source types (e.g., github + rss):
 
-Write a convergence signal file to `{WD}/insights/{YYYY-MM}/{YYYY-MM-DD}-convergence.md`:
+Write a convergence signal file to `{IEF_DIR}/{YYYY-MM}/{YYYY-MM-DD}-convergence.md`:
 
 ```markdown
 ---

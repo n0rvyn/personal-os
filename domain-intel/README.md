@@ -188,14 +188,24 @@ See [personal-os shared config spec](../../docs/personal-os-spec.md) for `{excha
 
 | Task | Entry | Suggested Cadence | Reads | Writes |
 |------|-------|-------------------|-------|--------|
-| Daily scan | `/scan` | Daily 08:00 | Configured URLs, external IEF feeds | Profile insights/ |
-| Daily digest | `/digest` | Daily 09:00 | `{WD}/insights/` | `{WD}/digests/` |
+| Daily scan | `/scan` | Daily 08:00 | Configured URLs, external IEF feeds | `{exchange_dir}/domain-intel/` (default) or profile `ief_output_dir` override |
+| Daily digest | `/digest` | Daily 09:00 | `{IEF_DIR}/` + `{WD}/insights/` | `{WD}/digests/` |
 
 Users wire these to Adam Templates (cron or event) or to host-level cron per their preference.
 
 ## Shared Config
 
-domain-intel reads `~/.claude/personal-os.yaml` for IEF exchange directory. New IEF output defaults to `{exchange_dir}/domain-intel/YYYY-MM/`. Existing `{WD}/insights/` files remain accessible. See [personal-os shared config spec](../../docs/personal-os-spec.md).
+domain-intel reads `~/.claude/personal-os.yaml` for IEF exchange directory. New IEF output from `/scan` defaults to `{exchange_dir}/domain-intel/{YYYY-MM}/`. Reads (`/intel`, `/digest`) scan both the IEF dir AND the legacy `{WD}/insights/` so pre-migration files remain accessible.
+
+**Profile override** — to keep insights inside the profile working directory, set `ief_output_dir` at the top level of `config.yaml`:
+
+```yaml
+ief_output_dir: ./insights    # writes land in {WD}/insights/ again
+```
+
+Relative paths resolve from the profile working dir; absolute paths and `~`-prefixed paths are also supported.
+
+See [personal-os shared config spec](../../docs/personal-os-spec.md).
 
 ## Optional: Browser Fallback
 

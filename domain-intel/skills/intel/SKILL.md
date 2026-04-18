@@ -22,6 +22,25 @@ Store the result as `WD`. **All file paths in this skill are relative to `WD`** 
 Read `{WD}/config.yaml`.
 - If file does not exist AND user intent is NOT "setup" or "help" → output `[domain-intel] Not initialized. Run /intel setup in this directory.` → **stop**
 
+Resolve the IEF insights directory (where newly produced insights from `/scan` land). Precedence: profile `ief_output_dir` in `config.yaml` → `{exchange_dir}/domain-intel/`:
+
+```bash
+IEF_DIR=$(python3 -c "
+import yaml, os
+from pathlib import Path
+cfg = yaml.safe_load(open('config.yaml')) or {}
+override = cfg.get('ief_output_dir', '').strip()
+if override:
+    print(str(Path(os.path.expanduser(override)).resolve()))
+else:
+    import subprocess
+    ex = subprocess.check_output(['python3', os.environ['CLAUDE_PLUGIN_ROOT'] + '/scripts/personal_os_config.py', '--get', 'exchange_dir']).decode().strip()
+    print(f'{ex}/domain-intel')
+")
+```
+
+Store the resolved absolute path as `IEF_DIR`. **When reading insights in this skill, Grep/Glob BOTH `{IEF_DIR}/` and `{WD}/insights/`** — the former holds newly produced IEF artifacts, the latter holds legacy/pre-migration files (and stays populated when a profile sets `ief_output_dir` back to `{WD}/insights/`).
+
 ### Step 1: Parse Intent
 
 Classify the user's input:
@@ -184,10 +203,12 @@ Quick overview of current state.
 1. Read `{WD}/state.yaml`
 2. Count unread insights:
    ```
+   Grep(pattern="read: false", path="{IEF_DIR}/", output_mode="count")
    Grep(pattern="read: false", path="{WD}/insights/", output_mode="count")
    ```
 3. Count total insight files this month:
    ```
+   Glob(pattern="{IEF_DIR}/{current_YYYY-MM}/*.md")
    Glob(pattern="{WD}/insights/{current_YYYY-MM}/*.md")
    ```
 
@@ -211,6 +232,7 @@ Synthesize unread insights into a briefing.
 
 1. Find all unread insight files:
    ```
+   Grep(pattern="read: false", path="{IEF_DIR}/", output_mode="files_with_matches")
    Grep(pattern="read: false", path="{WD}/insights/", output_mode="files_with_matches")
    ```
 
@@ -224,6 +246,7 @@ Synthesize unread insights into a briefing.
 
 5. Find any convergence signal files from the same dates:
    ```
+   Grep(pattern="type: signal", path="{IEF_DIR}/", output_mode="files_with_matches")
    Grep(pattern="type: signal", path="{WD}/insights/", output_mode="files_with_matches")
    ```
 
@@ -300,6 +323,7 @@ Answer a specific question from accumulated intelligence.
 
 2. Search insights for relevant content using each term:
    ```
+   Grep(pattern="{term}", path="{IEF_DIR}/", output_mode="files_with_matches", head_limit=20)
    Grep(pattern="{term}", path="{WD}/insights/", output_mode="files_with_matches", head_limit=20)
    ```
    Also search trends:
@@ -375,6 +399,7 @@ Deep dive into a specific insight.
 
 2. Find the file:
    ```
+   Grep(pattern="id: {id}", path="{IEF_DIR}/", output_mode="files_with_matches")
    Grep(pattern="id: {id}", path="{WD}/insights/", output_mode="files_with_matches")
    ```
 
@@ -386,6 +411,7 @@ Deep dive into a specific insight.
    - Extract tags from the insight
    - For each tag (up to 3):
      ```
+     Grep(pattern="{tag}", path="{IEF_DIR}/", output_mode="files_with_matches", head_limit=5)
      Grep(pattern="{tag}", path="{WD}/insights/", output_mode="files_with_matches", head_limit=5)
      ```
    - Exclude the current insight from results

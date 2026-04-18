@@ -26,6 +26,25 @@ Store the result as `WD`. **All file paths in this skill are relative to `WD`** 
 1. Read `{WD}/config.yaml`
    - If missing → output `[domain-intel] Not initialized. Run /intel setup in this directory.` → **stop**
 
+2. Resolve the IEF insights directory (where `/scan` writes new IEF artifacts). Precedence: profile `ief_output_dir` in `config.yaml` → `{exchange_dir}/domain-intel/`:
+
+   ```bash
+   IEF_DIR=$(python3 -c "
+   import yaml, os
+   from pathlib import Path
+   cfg = yaml.safe_load(open('config.yaml')) or {}
+   override = cfg.get('ief_output_dir', '').strip()
+   if override:
+       print(str(Path(os.path.expanduser(override)).resolve()))
+   else:
+       import subprocess
+       ex = subprocess.check_output(['python3', os.environ['CLAUDE_PLUGIN_ROOT'] + '/scripts/personal_os_config.py', '--get', 'exchange_dir']).decode().strip()
+       print(f'{ex}/domain-intel')
+   ")
+   ```
+
+   Store as `IEF_DIR`. Collect insights from BOTH `{IEF_DIR}/` (new) AND `{WD}/insights/` (legacy).
+
 ### Step 2: Determine Time Range
 
 Parse the argument (if any):
@@ -43,17 +62,19 @@ Set `start_date` and `end_date`.
 
 ### Step 3: Collect Insights
 
-1. For each date in the range, find matching insight files individually:
+1. For each date in the range, find matching insight files individually. Glob BOTH the new IEF dir AND the legacy dir:
    ```
    For each date (YYYY-MM-DD) from start_date to end_date:
+     Glob(pattern="{IEF_DIR}/{YYYY-MM}/{YYYY-MM-DD}-*.md")
      Glob(pattern="{WD}/insights/{YYYY-MM}/{YYYY-MM-DD}-*.md")
    ```
    Glob does not support numeric date ranges, so iterate day by day. For efficiency, batch by month: compute which `YYYY-MM` directories are relevant, then within each directory, glob each date.
 
-2. Read all matching insight files (exclude convergence signal files for now — collect those separately).
+2. Read all matching insight files (exclude convergence signal files for now — collect those separately). Deduplicate by `id` frontmatter value in case the same file exists in both directories.
 
-3. Also find convergence signal files:
+3. Also find convergence signal files in BOTH dirs:
    ```
+   Grep(pattern="type: signal", path="{IEF_DIR}/", output_mode="files_with_matches")
    Grep(pattern="type: signal", path="{WD}/insights/", output_mode="files_with_matches")
    ```
    Filter to those within the date range: for each matched file, check that the filename date prefix (`YYYY-MM-DD` in the filename) falls within [start_date, end_date]. Discard files outside the range.

@@ -54,8 +54,23 @@ if [ "$is_intel_data" = false ]; then
   exit 0
 fi
 
-# Step 2: It IS domain-intel data — verify it's going to the CWD
+# Step 2: It IS domain-intel data — verify it's going to an allowed directory.
+# Allowed destinations:
+#   1. CWD (the profile working directory)
+#   2. The resolved IEF output dir (ief_output_dir override, or {exchange_dir}/domain-intel/)
 allowed_dir=$(pwd -P)
+
+# Resolve the IEF output dir via the same precedence the skills use
+ief_dir=""
+override=$(grep -E '^ief_output_dir:' config.yaml 2>/dev/null | sed 's/ief_output_dir: *//' | tr -d '"' | head -1)
+if [ -n "$override" ]; then
+  ief_dir=$(eval echo "$override")
+elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py" ]; then
+  exchange_dir=$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py" --get exchange_dir 2>/dev/null)
+  if [ -n "$exchange_dir" ]; then
+    ief_dir="${exchange_dir}/domain-intel"
+  fi
+fi
 
 # Resolve file_path's parent directory if possible
 file_dir=$(dirname "$file_path")
@@ -72,6 +87,20 @@ case "$file_path_resolved" in
     ;;
 esac
 
+# Check if the resolved file_path starts with the IEF output dir
+if [ -n "$ief_dir" ]; then
+  case "$file_path_resolved" in
+    "$ief_dir"/*)
+      exit 0
+      ;;
+  esac
+  case "$file_path" in
+    "$ief_dir"/*)
+      exit 0
+      ;;
+  esac
+fi
+
 # Also check unresolved paths as fallback
 case "$file_path" in
   "$(pwd)"/*)
@@ -79,5 +108,5 @@ case "$file_path" in
     ;;
 esac
 
-echo "BLOCK: [domain-intel] Write blocked: $file_path is outside the current domain-intel directory ($allowed_dir). cd to the correct directory first."
+echo "BLOCK: [domain-intel] Write blocked: $file_path is outside the profile directory ($allowed_dir) and the IEF output dir ($ief_dir). cd to the correct directory first, or set ief_output_dir in config.yaml."
 exit 2

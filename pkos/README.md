@@ -142,6 +142,19 @@ CronCreate(cron="0 11 * * 0", prompt="cd ~/Obsidian/PKOS && /lint [cron]")
 
 Note: Cron jobs auto-expire after 7 days. Recreate in new sessions.
 
+## Triggerable Tasks
+
+| Task | Entry | Suggested Cadence | Reads | Writes |
+|------|-------|-------------------|-------|--------|
+| Exchange ingest | `/pkos ingest-exchange` | Daily 08:30 | `{exchange_dir}/*/` | `~/Obsidian/PKOS/` canonical notes, `.state/exchange-ingest.yaml` |
+| Intel sync | `/intel-sync` | Daily 09:00 (after domain-intel/session-reflect export) | domain-intel + session-reflect IEF under `{exchange_dir}/` | `~/Obsidian/PKOS/.state/imported-insights.yaml`, vault notes |
+| Daily digest | `/digest [cron]` | Daily 09:00 | `~/Obsidian/PKOS/` recent notes | `~/Obsidian/PKOS/10-Knowledge/digests/` |
+| Weekly signals | `/signal [cron]` | Sundays 10:00 | `~/Obsidian/PKOS/` cross-source signals | `~/Obsidian/PKOS/10-Knowledge/signals/` |
+| Wiki lint | `/lint [cron]` | Sundays 11:00 | `~/Obsidian/PKOS/` wikilinks + frontmatter | `~/Obsidian/PKOS/` lint report |
+| Harvest project notes | `/harvest` | Weekly | `~/Code/Projects/*/docs/` | `~/Obsidian/PKOS/` canonical notes |
+
+Users wire these to Adam Templates (cron or event) or to host-level cron per their preference.
+
 ## Inbox Processing
 
 When `/pkos ingest <url>` or harvest finds new content:

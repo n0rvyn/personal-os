@@ -15,7 +15,9 @@ The skill reads the intel source configuration from `~/.claude/pkos/config.yaml`
 ```yaml
 intel_sources:
   domain_intel:
-    insights_path: ""    # REQUIRED — set to your domain-intel workspace's insights/ path
+    # Resolves at runtime to {exchange_dir}/domain-intel/ (from ~/.claude/personal-os.yaml).
+    # Explicit override here wins (e.g. a per-profile insights/ path); leave empty to use the default.
+    insights_path: ""
     significance_threshold: 3
     max_per_sync: 20
     source_name: domain-intel
@@ -32,7 +34,7 @@ intel_sources:
 Validation:
 - If config file does not exist → log `[pkos] intel-sync: ~/.claude/pkos/config.yaml not found. Copy from pkos/config/pkos-config.template.yaml and configure.` → stop.
 - If `intel_sources` is empty or missing → log `[pkos] intel-sync: no intel_sources configured. Set at least one source in ~/.claude/pkos/config.yaml.` → stop.
-- For each source in `intel_sources`: if `insights_path` is empty or missing → log warning and skip that source.
+- For each source in `intel_sources`: if `insights_path` is empty AND no runtime default exists for the source key (see SOURCE_DEFAULTS in Step 2) → log warning and skip.
 
 ## Process
 
@@ -48,10 +50,11 @@ If file does not exist, initialize with empty list.
 
 ### Step 2: Scan Intel Insights
 
-Read all configured sources from `~/.claude/pkos/config.yaml` using Python YAML parsing:
+Read configured sources from `~/.claude/pkos/config.yaml` using Python YAML parsing. Sources with an empty `insights_path` fall back to the runtime default (`session_reflect` → `{exchange_dir}/session-reflect/`, `domain_intel` → `{exchange_dir}/domain-intel/`); `{exchange_dir}` comes from `~/.claude/personal-os.yaml` via `personal_os_config.py`.
+
 ```bash
-python3 -c "
-import yaml, glob, os
+EXCHANGE_ROOT=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get exchange_dir) python3 -c "
+import yaml, os
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -59,12 +62,20 @@ config_path = Path.home() / '.claude' / 'pkos' / 'config.yaml'
 with open(config_path) as f:
     config = yaml.safe_load(f)
 
+exchange_root = os.environ.get('EXCHANGE_ROOT', '')
+SOURCE_DEFAULTS = {
+    'session_reflect': 'session-reflect',
+    'domain_intel': 'domain-intel',
+}
+
 all_insight_files = []
 sources_with_files = []
 today = datetime.now()
 
 for source_key, source_cfg in config.get('intel_sources', {}).items():
     insights_path = os.path.expanduser(source_cfg.get('insights_path', ''))
+    if not insights_path and exchange_root and source_key in SOURCE_DEFAULTS:
+        insights_path = f'{exchange_root}/{SOURCE_DEFAULTS[source_key]}'
     if not insights_path:
         continue
     path_obj = Path(insights_path)

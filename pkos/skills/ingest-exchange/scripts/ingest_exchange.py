@@ -24,8 +24,10 @@ from typing import Any
 import yaml
 
 # Resolve exchange_dir from personal-os shared config
+# Script path: pkos/skills/ingest-exchange/scripts/ingest_exchange.py
+# Config lives at pkos/scripts/personal_os_config.py → parents[3] / "scripts"
 try:
-    _cfg_path = Path(__file__).resolve().parent / "personal_os_config.py"
+    _cfg_path = Path(__file__).resolve().parents[3] / "scripts" / "personal_os_config.py"
     if _cfg_path.exists():
         import importlib.util
         _spec = importlib.util.spec_from_file_location("_personal_os_config", str(_cfg_path))

@@ -80,6 +80,7 @@ Use `ingress-publisher` with:
 Command shape:
 
 ```bash
+EXCHANGE_ROOT=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get exchange_dir)
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/publish_exchange.py \
   --intent recent_feature_review \
   --project-root ~/Code \
@@ -93,13 +94,13 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/publish_exchange.py \
   --reason "Tagging strengthens note retrieval in the main workflow." \
   --action "Polish the current tagging flow before adding automation." \
   --evidence ~/Code/AppA/Sources/TaggingView.swift \
-  --exchange-root ~/Obsidian/PKOS/.exchange/product-lens
+  --exchange-root "${EXCHANGE_ROOT}/product-lens"
 ```
 
 Exchange target:
 
 ```text
-~/Obsidian/PKOS/.exchange/product-lens/recent-feature-review/
+{exchange_dir}/product-lens/recent-feature-review/
 ```
 
 ### Step 6: Return Summary

@@ -12,6 +12,29 @@ from pathlib import Path
 import yaml
 
 
+# Resolve exchange_dir from personal-os shared config.
+# Script path: portfolio-lens/scripts/publish_exchange.py
+# Config lives as sibling: portfolio-lens/scripts/personal_os_config.py
+try:
+    _cfg_path = Path(__file__).resolve().parent / "personal_os_config.py"
+    if _cfg_path.exists():
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location("_personal_os_config", str(_cfg_path))
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _PERSONAL_OS_CONFIG = _mod.load_config()
+    else:
+        _PERSONAL_OS_CONFIG = None
+except Exception:
+    _PERSONAL_OS_CONFIG = None
+
+
+def _default_exchange_root() -> str:
+    if _PERSONAL_OS_CONFIG:
+        return f"{_PERSONAL_OS_CONFIG['exchange_dir']}/product-lens"
+    return "~/Obsidian/PKOS/.exchange/product-lens"
+
+
 INTENT_TO_SUBDIR = {
     "portfolio_scan": "portfolio-scan",
     "project_progress_pulse": "progress-pulse",
@@ -45,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evidence", action="append", default=[])
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--created", default=date.today().isoformat())
-    parser.add_argument("--exchange-root", default="~/Obsidian/PKOS/.exchange/product-lens")
+    parser.add_argument("--exchange-root", default=_default_exchange_root())
     parser.add_argument("--slug", default=None)
     parser.add_argument("--sync-notion", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

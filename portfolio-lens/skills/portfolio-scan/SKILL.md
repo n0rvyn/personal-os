@@ -95,6 +95,7 @@ Dispatch `ingress-publisher` with:
 Command shape:
 
 ```bash
+EXCHANGE_ROOT=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get exchange_dir)
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/publish_exchange.py \
   --intent portfolio_scan \
   --project-root ~/Code \
@@ -104,14 +105,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/publish_exchange.py \
   --reason "Only a subset of repos show coherent recent product movement." \
   --action "Run project_progress_pulse on the top active repos." \
   --evidence ~/Code \
-  --exchange-root ~/Obsidian/PKOS/.exchange/product-lens
+  --exchange-root "${EXCHANGE_ROOT}/product-lens"
 ```
 
 Artifact target:
 
 ```text
-~/Obsidian/PKOS/.exchange/product-lens/portfolio-scan/
+{exchange_dir}/product-lens/portfolio-scan/
 ```
+
+`{exchange_dir}` resolves from `~/.claude/personal-os.yaml` (default `~/Obsidian/PKOS/.exchange`).
 
 Do not select final PKOS vault destinations here.
 

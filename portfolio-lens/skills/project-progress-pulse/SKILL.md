@@ -70,6 +70,7 @@ Use `ingress-publisher` with:
 Command shape:
 
 ```bash
+EXCHANGE_ROOT=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get exchange_dir)
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/publish_exchange.py \
   --intent project_progress_pulse \
   --project-root ~/Code \
@@ -82,14 +83,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/publish_exchange.py \
   --reason "Product files and docs moved in the same recent window." \
   --action "Check whether the next change set targets shipping readiness." \
   --evidence ~/Code/AppA/README.md \
-  --exchange-root ~/Obsidian/PKOS/.exchange/product-lens
+  --exchange-root "${EXCHANGE_ROOT}/product-lens"
 ```
 
 Exchange target:
 
 ```text
-~/Obsidian/PKOS/.exchange/product-lens/progress-pulse/
+{exchange_dir}/product-lens/progress-pulse/
 ```
+
+`{exchange_dir}` resolves from `~/.claude/personal-os.yaml` (default `~/Obsidian/PKOS/.exchange`).
 
 ### Step 5: Return Summary
 

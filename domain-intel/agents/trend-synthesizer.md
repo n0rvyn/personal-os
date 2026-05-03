@@ -2,6 +2,10 @@
 name: trend-synthesizer
 maxTurns: 20
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
 description: |
   Cross-insight pattern detection and synthesis agent for domain intelligence.
   Reads multiple insights and produces trend analysis, convergence detection, and collective wisdom.

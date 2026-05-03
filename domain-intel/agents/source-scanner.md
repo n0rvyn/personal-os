@@ -1,6 +1,12 @@
 ---
 name: source-scanner
 maxTurns: 30
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - WebSearch
+  - WebFetch
 description: |
   Parallel web collection agent for domain intelligence.
   Fetches raw items from GitHub trending, RSS feeds, official changelogs,

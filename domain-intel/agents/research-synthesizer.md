@@ -2,6 +2,12 @@
 name: research-synthesizer
 maxTurns: 30
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - WebSearch
+  - WebFetch
 description: |
   Report-oriented synthesis agent for topic research.
   Reads analyzed findings and produces comprehensive research reports with entity extraction,

@@ -2,6 +2,12 @@
 name: focus-evolver
 maxTurns: 15
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - WebSearch
+  - WebFetch
 description: |
   Research focus evolution agent. Extracts user intent from natural language feedback
   and proposes structured updates to FOCUS.md. Processes accumulated evolution signals

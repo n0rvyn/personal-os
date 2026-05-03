@@ -1,6 +1,12 @@
 ---
 name: research-scanner
 maxTurns: 30
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - WebSearch
+  - WebFetch
 description: |
   Multi-source web collection agent for topic-focused deep research.
   Searches across search engines, GitHub, academic sources, YouTube, community forums,

@@ -3,6 +3,11 @@ name: digest
 description: "Use when the user says 'digest', 'generate report', 'weekly summary', or when invoked by cron. Generates a daily or weekly digest from accumulated insights by dispatching trend-synthesizer for pattern detection and synthesis."
 model: sonnet
 user-invocable: true
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

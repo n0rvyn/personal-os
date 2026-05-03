@@ -3,6 +3,11 @@ name: intel
 description: "Use when the user says 'intel', 'briefing', 'what's new', 'intel status', 'intel setup', 'intel config', or asks a question about collected domain insights. Single human-facing entry point for domain intelligence: status, briefings, Q&A, configuration, and exploration."
 model: sonnet
 user-invocable: true
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

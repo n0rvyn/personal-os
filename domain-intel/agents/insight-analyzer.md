@@ -1,6 +1,12 @@
 ---
 name: insight-analyzer
 maxTurns: 20
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - WebSearch
+  - WebFetch
 description: |
   Deep analysis agent for domain intelligence.
   Applies source-specific prompts to extract structured insights from raw collected items.
@@ -53,19 +59,49 @@ You will receive:
 
 ### Stage 1: Quick Screen
 
-For each item, based on title + snippet + metadata only (no web fetching):
+**Inputs to this stage:**
+- `items`: the filtered items from the scan pipeline
+- `keyword_relevance` (optional, default 0): BM25 keyword relevance score (0.0-1.0) from the scan pipeline's BM25 scorer. If not provided, treat as 0.
+- `screen_threshold` (optional, default 0.6): numeric threshold. Read from `~/.claude/personal-os.yaml` `domain_intel.screen_threshold` if present; otherwise use 0.6.
 
-- **Relevant?** Does this connect to any configured domain?
-- **Signal strength:** strong (clearly relevant, novel) / weak (tangentially relevant) / noise (off-topic, marketing, rehash)
-- **Skip reason:** If noise, why? (off-topic, marketing fluff, tutorial, job posting, duplicate concept, too generic)
+**For each item, based on title + snippet + metadata only (no web fetching):**
 
-**LENS-aware screening** (when `lens_context` is provided):
+1. **Assess confidence** (numeric, 0.0-1.0):
+   - Assign a confidence score based on relevance and novelty:
+     - 0.8-1.0: clearly relevant to a configured domain, novel content
+     - 0.5-0.8: relevant, but somewhat tangential or a known/rehashed topic
+     - 0.2-0.5: marginally relevant, mostly noise
+     - 0.0-0.2: off-topic, pure marketing fluff, job posting, duplicate concept, tutorial
+   - **LENS-aware adjustment** (when `lens_context` is provided):
+     - Items connecting to any of the user's **"Current Questions"** → boost confidence by 0.15 (user is actively investigating these)
+     - Items matching the user's **"What I Don't Care About"** → reduce confidence by 0.3 (user opted out)
+     - Items matching **"What I Care About"** with high specificity → boost confidence by 0.1
+   - Clamp final confidence to [0.0, 1.0]
 
-- Items connecting to any of the user's **"Current Questions"** → boost signal strength by one level (weak → strong, noise with partial relevance → weak). These are topics the user is actively investigating.
-- Items matching the user's **"What I Don't Care About"** → classify as noise regardless of domain match. The user has explicitly opted out of these topics.
-- Items matching **"What I Care About"** with high specificity → treat as strong signal even if domain keyword overlap is low. Natural language interests take priority over keyword matching.
+2. **Apply the screening gate**:
+   ```
+   if confidence >= screen_threshold OR keyword_relevance >= 0.7:
+       proceed to Stage 2
+   else:
+       emit dropped[] entry with reason: "low-confidence-screen"
+       (do NOT proceed to Stage 2)
+   ```
 
-Drop items classified as `noise` with strong confidence. Everything else proceeds to Stage 2.
+   This is the **complement gate**: keyword relevance can compensate for lower LLM confidence, and vice versa.
+
+3. **Dropped items** land in the `dropped[]` array of the final YAML output:
+   ```yaml
+   dropped:
+     - url: "https://..."
+       reason: "low-confidence-screen"
+   ```
+
+**Legacy category reference** (for test fixtures and migration):
+- `strong` signal strength → confidence ~0.85
+- `weak` signal strength → confidence ~0.55
+- `noise` signal strength → confidence ~0.15
+
+**Why numeric confidence?** The numeric scale allows the scan pipeline to combine LLM-assessed confidence with the independently-computed BM25 keyword relevance score, producing a more accurate screening decision than either signal alone.
 
 ### Stage 2: Deep Analysis
 

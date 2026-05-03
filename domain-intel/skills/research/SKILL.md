@@ -3,6 +3,13 @@ name: research
 description: "Use when the user says 'research', 'deep research', 'research topic', or wants comprehensive internet-wide investigation of a specific topic. Supports full deep research, incremental updates, and evolving focus profiles. Entry point for targeted topic intelligence."
 model: sonnet
 user-invocable: true
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+  - WebFetch
+  - WebSearch
 ---
 
 ## Overview
@@ -361,7 +368,8 @@ Read FOCUS.md body and **remap section names to LENS.md format** so insight-anal
 Store the remapped text as `focus_context`.
 
 For each non-empty group, dispatch one `insight-analyzer` agent with:
-- **items**: filtered items for that source type
+- **items**: filtered items for that source type (each item may include `keyword_relevance` from the research pipeline's BM25 scorer; omit if not available)
+- **keyword_relevance**: (optional, default 0) the average or representative BM25 keyword relevance score (0.0-1.0) for this group, computed by the research pipeline. If BM25 is not enabled, omit this field.
 - **source_type**: mapped type (github, web, academic, youtube, community)
 - **domains**: `[{name: "{topic}"}]` (research uses topic as the primary domain)
 - **significance_threshold**: from config (default 2)

@@ -7,6 +7,11 @@ description: |
   Syncs alerts to Notion Alerts DB.
 
 tools: [Read, Glob, Bash, Write]
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
+  - Write
 color: blue
 maxTurns: 20
 ---
@@ -50,10 +55,10 @@ output:
 
 ## Notion Integration
 
-Use the `notion-with-api` helper from `indie-toolkit:shared-utils`:
+Use the `notion_api.py` helper from this plugin:
 
 ```bash
-NOTION_API="$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/skills/notion-with-api/scripts/notion_api.py"
+NOTION_API="${CLAUDE_PLUGIN_ROOT}/scripts/notion_api.py"
 ```
 
 Create an alert row:
@@ -88,12 +93,12 @@ All MongoDB reads go through the shared-utils helper (the MongoDB MCP is not use
 MONGO_URI="${MONGO_URI:-$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get('mongo_uri',''))" "${CLAUDE_PLUGIN_ROOT}/config/defaults.yaml")}"
 
 # Read baselines
-python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_query.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_query.py" \
   --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection baselines \
   --filter '{}' --projection '{"_id": 0}' --limit 100
 
 # Read past 14 days of daily averages from metrics
-python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_query.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_query.py" \
   --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection metrics \
   --filter '{"date": {"$gte": "<today-14d>"}}' \
   --projection '{"_id": 0, "date": 1, "metadata.metric": 1, "value": 1}' \
@@ -101,7 +106,7 @@ python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/m
 
 # Insert triggered alerts
 echo '[{"date": "...", "rule_id": "...", "severity": "...", "message": "...", "status": "active"}]' | \
-python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_insert.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_insert.py" \
   --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection alerts --stdin
 ```
 

@@ -6,6 +6,8 @@ description: |
 
 model: sonnet
 tools: Read
+allowed-tools:
+  - Read
 maxTurns: 20
 color: orange
 ---

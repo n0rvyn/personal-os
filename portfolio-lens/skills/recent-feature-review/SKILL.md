@@ -1,6 +1,11 @@
 ---
 name: recent-feature-review
 description: "Use when the system needs to judge recently built features or recent commit slices. Reviews whether recent work strengthens the core loop or creates drift."
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

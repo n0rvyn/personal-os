@@ -3,6 +3,13 @@ name: youtube-scan
 description: "Use when the user says 'youtube-scan', 'youtube scan', 'scan youtube', 'youtube recommendations'. Scrapes YouTube recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions. Exports TOP findings as IEF-compliant insight files for domain-intel consumption."
 model: sonnet
 user-invocable: true
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+  - WebFetch
+  - Write
 ---
 
 ## Overview

@@ -1,6 +1,10 @@
 ---
 name: verdict-refresh
 description: "Use when prior product-lens conclusions need to be checked against new evidence. Produces delta-oriented judgments instead of full re-evaluations."
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
 ---
 
 ## Overview

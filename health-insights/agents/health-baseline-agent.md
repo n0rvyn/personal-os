@@ -6,6 +6,11 @@ description: |
   Syncs baseline updates and drift alerts to Notion Trends DB and Alerts DB.
 
 tools: [Read, Glob, Bash, Write]
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
+  - Write
 color: blue
 maxTurns: 20
 ---
@@ -56,10 +61,10 @@ output:
 
 ## Notion Integration
 
-Use the `notion-with-api` helper from `indie-toolkit:shared-utils`:
+Use the `notion_api.py` helper from this plugin:
 
 ```bash
-NOTION_API="$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/skills/notion-with-api/scripts/notion_api.py"
+NOTION_API="${CLAUDE_PLUGIN_ROOT}/scripts/notion_api.py"
 
 NO_PROXY="*" python3 "$NOTION_API" \
   create-db-item <db_id> "<title>" --props '{...}'
@@ -108,7 +113,7 @@ print(json.dumps(list(client[sys.argv[2]].metrics.aggregate(pipeline)), default=
 " "$MONGO_URI" "${MONGO_DB:-health}" "<metric>" "<iso_date_lower_bound>"
 
 # Insert computed baselines
-python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_insert.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_insert.py" \
   --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection baselines \
   --file ~/.personal-os/scratch/baselines.json
 ```

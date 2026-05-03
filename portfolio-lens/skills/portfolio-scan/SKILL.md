@@ -1,6 +1,11 @@
 ---
 name: portfolio-scan
 description: "Use for periodic scans over a project root such as ~/Code. Builds a root-level picture of active projects, current risks, and PKOS exchange artifacts for downstream ingestion."
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

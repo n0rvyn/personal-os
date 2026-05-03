@@ -180,7 +180,7 @@ Expected: `0` (no LLM references, no checkpoint.py import)
 2. Use `unittest.mock` to mock `pymongo.MongoClient` and `pymongo.collection.Collection`
 
 **Verify:**
-Run: `cd /Users/norvyn/Code/Skills/indie-toolkit/health-insights && python3 -m pytest scripts/test_ingest.py -v`
+Run: `cd <path-to-health-insights-plugin> && python3 -m pytest scripts/test_ingest.py -v`
 Expected: All tests pass
 <!-- /section -->
 
@@ -330,7 +330,7 @@ Expected: MongoDB references found
 **Depends on:** All previous tasks
 
 **Verify:**
-Run: `cd /Users/norvyn/Code/Skills/indie-toolkit/health-insights && python3 -m pytest scripts/ -v`
+Run: `cd <path-to-health-insights-plugin> && python3 -m pytest scripts/ -v`
 Expected: All tests pass with zero failures
 
 Run: `python3 scripts/ingest.py --help`

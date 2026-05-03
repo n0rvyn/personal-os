@@ -6,11 +6,10 @@ Ingests Apple Health data into MongoDB, computes personal baselines, evaluates e
 
 ## Prerequisites
 
-**Requires `indie-toolkit:shared-utils`** to be installed, as agents depend on its `mongo_query.py`, `mongo_insert.py`, and `notion_api.py` helpers.
+**Requires local helpers** (shipped with this plugin): `mongo_query.py`, `mongo_insert.py`, and `notion_api.py`. These are included in the plugin at `scripts/` and do not require a separate install.
 
 ```bash
-/plugin install shared-utils@indie-toolkit
-# Verify the dependency is available:
+# Verify the helpers are available:
 bash scripts/check_shared_utils.sh
 ```
 

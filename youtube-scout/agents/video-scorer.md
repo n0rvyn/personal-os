@@ -18,6 +18,10 @@ description: |
   assistant: "I'll use the video-scorer agent with no-transcript constraints applied."
   </example>
 model: sonnet
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
 color: cyan
 ---
 

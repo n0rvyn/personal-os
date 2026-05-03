@@ -43,7 +43,7 @@ Crystal ref: [D-008], [D-S02]
    # Thin wrapper: save health digest to Get笔记
    # Usage: getnote_digest.sh "<content>" "<tag>"
    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-   GETNOTE_SH="${GETNOTE_SH:-/Users/norvyn/Code/Skills/indie-toolkit/pkos/skills/getnote/scripts/getnote.sh}"
+   GETNOTE_SH="${GETNOTE_SH:-<path-to-getnote-sh>}"
    
    TITLE="健康周报 $(date +%Y-%m-%d)"
    CONTENT="$1"

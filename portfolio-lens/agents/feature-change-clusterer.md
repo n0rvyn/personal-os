@@ -6,6 +6,9 @@ description: |
 
 model: sonnet
 tools: Read, Grep
+allowed-tools:
+  - Read
+  - Grep
 maxTurns: 20
 color: yellow
 ---

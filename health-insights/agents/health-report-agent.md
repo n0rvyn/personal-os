@@ -5,6 +5,11 @@ description: |
   Compares extracted metrics against personal baselines and writes structured records.
 
 tools: [Read, Glob, Bash, Write]
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
+  - Write
 color: blue
 maxTurns: 25
 ---
@@ -50,8 +55,8 @@ Notion database IDs are read from `config/defaults.yaml` at runtime:
 | Lab Results DB | `notion_database_ids.lab_results` |
 
 MongoDB: use the shared-utils helpers (NOT the MongoDB MCP):
-- Reads: `python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_query.py" --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection <coll> --filter '<json>' ...`
-- Writes: `python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_insert.py" --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection <coll> --file <docs.json>`
+- Reads: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_query.py" --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection <coll> --filter '<json>' ...`
+- Writes: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_insert.py" --uri "$MONGO_URI" --db "${MONGO_DB:-health}" --collection <coll> --file <docs.json>`
 - Resolve `MONGO_URI` from `config/defaults.yaml` (key `mongo_uri`) if not set.
 
 ## Behavior
@@ -93,10 +98,10 @@ Insert lab report document into `lab_reports` collection via `mongo_insert.py` (
 
 ### 6. Write to Notion
 
-Use the `notion-with-api` helper from `indie-toolkit:shared-utils`:
+Use the `notion_api.py` helper from this plugin:
 
 ```bash
-NOTION_API="$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/skills/notion-with-api/scripts/notion_api.py"
+NOTION_API="${CLAUDE_PLUGIN_ROOT}/scripts/notion_api.py"
 
 NO_PROXY="*" python3 "$NOTION_API" \
   create-db-item <db_id> "<title>" --props '{...}'

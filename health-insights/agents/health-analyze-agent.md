@@ -7,6 +7,11 @@ description: |
   directly in the host session. No external scripts for text generation.
 
 tools: [Read, Glob, Bash, Write]
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
+  - Write
 color: blue
 maxTurns: 30
 ---
@@ -64,7 +69,7 @@ All MongoDB reads go through the shared-utils helper (the MongoDB MCP is not use
 # Resolve MONGO_URI: caller should set it, else read from plugin config.
 MONGO_URI="${MONGO_URI:-$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1])).get('mongo_uri',''))" "${CLAUDE_PLUGIN_ROOT}/config/defaults.yaml")}"
 
-python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/mongo_query.py" \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mongo_query.py" \
   --uri "$MONGO_URI" \
   --db "${MONGO_DB:-health}" \
   --collection metrics \
@@ -76,7 +81,7 @@ python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/m
 
 - The script prints a JSON array on stdout. Pipe to `jq` or parse inline.
 - Substitute `--collection` with `baselines`, `alerts`, `lab_reports` as needed.
-- Requires `indie-toolkit:shared-utils` installed and `pip3 install pymongo[srv] pyyaml` completed.
+- Requires local `mongo_query.py` helper installed and `pip3 install pymongo[srv] pyyaml` completed.
 
 ## Actions
 
@@ -93,7 +98,7 @@ python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/scripts/m
 4. Compare against baselines, flag deviations
 5. Generate structured daily summary inline
 6. Return inline to user
-7. **Write to Notion Trends DB** via the `notion-with-api` helper (`python3 "$HOME/.claude/plugins/marketplaces/indie-toolkit/shared-utils/skills/notion-with-api/scripts/notion_api.py" ...`):
+7. **Write to Notion Trends DB** via the `notion-with-api` helper (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/notion_api.py" ...`):
    - Create a page in the Trends database with:
      - Date: the analyzed date
      - Metric Type: each metric analyzed

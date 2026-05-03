@@ -7,6 +7,10 @@ description: |
 
 model: sonnet
 tools: Read, Write, Bash
+allowed-tools:
+  - Read
+  - Write
+  - Bash
 maxTurns: 20
 color: teal
 ---

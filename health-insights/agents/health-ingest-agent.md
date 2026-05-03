@@ -6,6 +6,10 @@ description: |
   Invoked by the /health ingest route or Adam watch folder triggers.
 
 tools: [Read, Glob, Bash]
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
 color: blue
 maxTurns: 20
 ---

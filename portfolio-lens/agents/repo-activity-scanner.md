@@ -7,6 +7,10 @@ description: |
 
 model: sonnet
 tools: Glob, Grep, Read
+allowed-tools:
+  - Glob
+  - Grep
+  - Read
 maxTurns: 20
 color: green
 ---

@@ -1,6 +1,11 @@
 ---
 name: project-progress-pulse
 description: "Use when the system needs observable progress facts for one or more projects. Reports acceleration, stalls, and drift without claiming fake completion percentages."
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

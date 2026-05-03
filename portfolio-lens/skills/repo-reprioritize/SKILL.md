@@ -1,6 +1,11 @@
 ---
 name: repo-reprioritize
 description: "Use when the system must decide what to focus on next across multiple projects. Converts recent signals into portfolio decisions with blockers and next actions."
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

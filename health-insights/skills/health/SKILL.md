@@ -2,6 +2,11 @@
 name: health
 description: "Use when the user says 'health', 'health insights', '我的健康', 'analyze my health data', '健康报告', or wants to interact with their personal health intelligence system. Unified entry point for status, ingest, baseline, analyze, predict, and report."
 user-invocable: true
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
+  - Write
 ---
 
 # Health Insights — Unified Entry Point

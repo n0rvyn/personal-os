@@ -6,7 +6,7 @@ This document defines the management-view contract for syncing `product-lens` ou
 
 - Local Markdown notes remain the source of truth.
 - Notion is a summary projection for status tracking, sorting, and dashboards.
-- Notion rows must always link back to the Markdown note path that produced them.
+- Notion rows must always link back to the Markdown note that produced them.
 
 ## Database Scope
 
@@ -29,7 +29,7 @@ These can live in one database with a `row_type` property, or in two separate da
 | `priority` | select | Optional management priority such as `now`, `next`, `later` |
 | `biggest_risk` | rich_text | One-line primary downside |
 | `next_actions` | rich_text | Compact action list or joined string |
-| `source_note_path` | url or rich_text | Absolute or vault-relative Markdown source path |
+| `source_note_path` | url | Obsidian URI for the Markdown source note |
 | `source_note_type` | select | `signal`, `verdict`, `feature-review`, `crystal` |
 | `updated_at` | date | Last time the row was refreshed |
 | `sync_status` | select | `current`, `stale`, `failed`, `pending` |
@@ -113,7 +113,7 @@ Use when `row_type = feature`.
   "confidence": "medium",
   "biggest_risk": "Demand evidence still trails implementation speed.",
   "next_actions": "Run a targeted demand test; avoid side-branch features",
-  "source_note_path": "~/Obsidian/PKOS/30-Projects/AppA/Verdicts/2026-04-12-AppA-verdict.md",
+  "source_note_path": "obsidian://open?vault=PKOS&file=30-Projects%2FAppA%2FVerdicts%2F2026-04-12-AppA-verdict.md",
   "source_note_type": "verdict",
   "updated_at": "2026-04-12",
   "sync_status": "current"

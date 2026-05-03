@@ -1,5 +1,18 @@
 # youtube-scout
 
+> ⚠️ **DEPRECATED** — This plugin has been folded into `domain-intel/youtube-scan`.
+>
+> **Migrate by:**
+> 1. Move your channel list to `~/.claude/personal-os.yaml` under `youtube_channels:` (full schema: `id` + `name` + `priority` + `tags`)
+> 2. Use `/scan` from domain-intel (which now invokes youtube-scan as part of its pipeline) instead of this plugin's `/youtube-scan` command
+> 3. youtube-scan uses RSS + Innertube transcript approach (no browser login needed); simplified pipeline: `discover_videos → harvest_transcripts → score_episode → IEF`
+>
+> **⚠️ Running both `youtube-scout` and `domain-intel/youtube-scan` simultaneously produces duplicate IEFs.** Pick one source per channel.
+>
+> This plugin will be removed after one release cycle (~30 days from 2026-05-02). See `personal-os/.claude-plugin/marketplace.json` for the deprecation flag.
+
+---
+
 YouTube video intelligence plugin for Claude Code. Scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, and exports findings as IEF-compliant insights.
 
 ## Quick Start

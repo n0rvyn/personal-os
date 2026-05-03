@@ -3,6 +3,12 @@ name: scan
 description: "Use when the user says 'scan', 'collect intel', 'run scan', or when invoked by cron. Orchestrates the full domain intelligence pipeline: collect from sources, filter duplicates, analyze insights, detect convergence signals, store results. Primary cron target."
 model: sonnet
 user-invocable: true
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+  - Write
 ---
 
 ## Overview
@@ -45,6 +51,7 @@ Store the result as `WD`. **All file paths in this skill are relative to `WD`** 
    - `scan.max_items_per_source` (default: 20)
    - `scan.significance_threshold` (default: 2)
    - `scan.auto_digest` (default: false)
+   - `scan.auto_intel_sync` (default: false) — when true, invoke `/intel-sync` after Step 8.5. Resolution order: config.yaml `scan.auto_intel_sync` > env `AUTO_INTEL_SYNC` (truthy values: `1`, `true`, `yes`) > default false. Requires `pkos` plugin loaded for the role.
    - `ief_output_dir` (optional; top-level field) — profile override for IEF output; see Step 1.5
 
 3. Read `{WD}/LENS.md` if it exists:
@@ -79,7 +86,21 @@ Store the result as `WD`. **All file paths in this skill are relative to `WD`** 
 
    Store the resolved absolute path as `IEF_DIR`. **All newly produced IEF insight writes in this scan land under `{IEF_DIR}/{YYYY-MM}/`**. The legacy `{WD}/insights/` location remains readable for pre-migration data but is not written to by this step.
 
-6. Read `{WD}/state.yaml` if it exists (for stats tracking).
+6. Resolve `scan.auto_intel_sync` (env var fallback, mirrors auto_digest pattern):
+   ```bash
+   # Read auto_intel_sync from config.yaml or fall back to env var AUTO_INTEL_SYNC
+   AUTO_INTEL_SYNC_CFG=$(yq '.scan.auto_intel_sync // ""' "${WD}/config.yaml" 2>/dev/null || echo "")
+   if [[ -n "${AUTO_INTEL_SYNC_CFG}" ]]; then
+     AUTO_INTEL_SYNC="${AUTO_INTEL_SYNC_CFG}"
+   fi
+   # Normalize: 1 / true / yes (any case) → "true"; everything else → "false"
+   case "${AUTO_INTEL_SYNC,,}" in
+     1|true|yes) AUTO_INTEL_SYNC="true" ;;
+     *) AUTO_INTEL_SYNC="false" ;;
+   esac
+   ```
+
+7. Read `{WD}/state.yaml` if it exists (for stats tracking).
 
 ### Step 1.5: Pre-collect External Sources
 
@@ -126,9 +147,49 @@ If total items == 0 AND `sources.external[]` is empty or not defined → output 
 
 If total items == 0 AND `sources.external[]` is defined → log `[domain-intel] No items from built-in sources. Proceeding to external import.` → skip Steps 3-5 → jump to Step 5.5.
 
-### Step 3: 3-Tier Filter
+Step 2.5: SimHash Near-Dup Detection
+--------------------------------------
 
-Apply filters sequentially. Track counts at each stage.
+After the source-scanner returns the flat `items[]` list, run SimHash near-duplicate detection **before** any source-type grouping (per DP-003: dedup on the flat list to catch cross-source duplicates — e.g., the same release announced via RSS + GitHub + official simultaneously).
+
+Resolve the script path:
+```
+Bash(command="echo ${CLAUDE_PLUGIN_ROOT}/scripts/simhash_dedup.py")
+```
+
+For each item in `items[]`:
+1. Compute weighted fingerprint: `python3 {simhash_script} fingerprint --title "{item.title}" --content "{item.snippet}"`
+2. Check against the persistent seen store: `python3 {simhash_script} check --fp {fp} --state-dir ~/.personal-os`
+   - If `is_seen` returns True (Hamming distance <= 3 to any stored fp): drop the item, add to `simhash_dropped[]` with reason `"near-dup of {existing_id}"`
+   - If `is_seen` returns False: add fingerprint to seen store: `python3 {simhash_script} add --id {item_id} --fp {fp} --state-dir ~/.personal-os`
+3. Track: `after_simhash = N` (count of items remaining after SimHash dedup)
+
+**SimHash dedup rationale:** Computed over the flat fetched-items list before source-type grouping so that cross-source near-dups (same release announced via multiple feeds simultaneously) are collapsed before they enter parallel-dispatch groups. This is the Lumina pattern and prevents redundant analysis of near-identical content from different sources.
+
+Items dropped by SimHash accumulate into the eventual `dropped[]` return with reason `"near-dup of {existing_id}"`.
+
+#### BM25 Corpus Build (pre-dedup)
+
+Before applying filters, build the BM25 corpus from all post-SimHash items so keyword relevance scores are available throughout Step 3 and Step 4:
+
+Resolve the script path:
+```
+Bash(command="echo ${CLAUDE_PLUGIN_ROOT}/scripts/bm25_relevance.py")
+```
+
+1. Write all post-SimHash item text to a temp file for corpus building:
+   ```
+   Bash(command="python3 -c \"import json; items=[{...}]; open('/tmp/bm25_corpus.json','w').write(json.dumps([{'id':i['id'],'text':(i.get('title','')+' '+i.get('snippet','')).strip()} for i in items]))\"")
+   ```
+2. Build corpus and compute per-item keyword relevance scores against `domain_intel.keywords` from config (default: empty list → skip BM25):
+   ```
+   Bash(command="python3 {bm25_script} --corpus /tmp/bm25_corpus.json --keywords \"{keywords joined by space}\" --output /tmp/bm25_scores.json")
+   ```
+3. Load scores into a lookup: `scores[id] = keyword_relevance (0.0-1.0)`
+4. Attach `keyword_relevance` to each item in the pipeline: `item.keyword_relevance = scores.get(item.id, 0.0)`
+5. If no keywords configured or corpus is empty: skip BM25, set `keyword_relevance = 0` for all items
+
+**BM25 rationale:** In-memory per-scan; corpus rebuilt per scan is cheap (DP-A4). Complement gate: items pass Stage 1 if `confidence >= threshold OR keyword_relevance >= 0.7` (DP-A5).
 
 #### Tier 1: URL Deduplication
 
@@ -207,12 +268,34 @@ Hard cap at 30 total items to stay within agent turn budgets.
 
 Track: `after_keyword = N`
 
-### Step 4: Dispatch insight-analyzer
+#### ContentDiff: Official Sources Only
+
+After Tier 3 filtering, apply content-change detection to `official` source items only. This prevents re-analyzing unchanged changelog/blog pages.
+
+Resolve the script path:
+```
+Bash(command="echo ${CLAUDE_PLUGIN_ROOT}/scripts/content_diff_store.py")
+```
+
+For each item with `source == "official"`:
+1. Fetch the page content (or use the snippet if the source-scanner already collected it)
+2. Check for changes: `python3 {diff_script} --check --url "{item.url}" --content "{content}" --state-dir ~/.personal-os`
+   - If `change_type == "unchanged"`: drop the item, add to `diff_dropped[]` with reason `"no-content-change"`
+   - If `change_type == "content_updated"`: replace the item's content/snippet with the `added_lines` only so the analyzer sees just the delta
+   - If `change_type == "new_content"`: proceed unchanged
+3. Track: `after_content_diff = N` (count of official items remaining after ContentDiff; track separately from the main tier counts)
+
+**ContentDiff rationale:** Official sources (changelogs, blogs) are re-scraped on every scan; most return unchanged content. ContentDiff detects unchanged pages and drops them before analysis, saving LLM tokens and eliminating noise from stale content.
+
+Items dropped by ContentDiff accumulate into the eventual `dropped[]` return with reason `"no-content-change"`.
+
+### Step 4: Dispatch insight-analyzer (Two-Stage)
 
 Group filtered items by source type (github, producthunt, rss, official, figure, company).
 
 For each non-empty group, dispatch one `insight-analyzer` agent with:
-- **items**: the filtered items for that source type
+- **items**: the filtered items for that source type (each item includes `keyword_relevance` attached in the BM25 corpus build step above)
+- **keyword_relevance**: (optional, default 0) the average or representative BM25 keyword relevance score (0.0-1.0) for this group, computed by the scan pipeline. If BM25 is not enabled, omit this field.
 - **source_type**: github | producthunt | rss | official | figure | company
 - **domains**: domain definitions from config
 - **significance_threshold**: from config
@@ -221,13 +304,17 @@ For each non-empty group, dispatch one `insight-analyzer` agent with:
 
 Dispatch all groups **in parallel** (multiple Agent tool calls in one message).
 
-Wait for all to complete. If a single analyzer fails, log the failure and continue with the results from the others. Each successful analyzer returns:
+Wait for all to complete. If a single analyzer fails, log the failure and continue with the results from the others.
+
+**Two-stage screening:** The insight-analyzer applies Stage 1 (quick screen) to each item using numeric `confidence` + the passed `keyword_relevance` score via the `screen_gate.py` complement gate. Items below threshold (`confidence < 0.6 AND keyword_relevance < 0.7`) are emitted as `dropped[]` entries with `reason: "low-confidence-screen"`. Only items passing Stage 1 proceed to Stage 2 (deep analysis). This means the `dropped[]` returned by the analyzer may include both Stage 1 screen failures and Stage 2 rejections — both land in the unified `dropped[]` array.
+
+Each successful analyzer returns:
 ```yaml
 insights:
   - id, source, url, title, significance, tags, category, domain,
     problem, technology, insight, difference, selection_reason
 dropped:
-  - url, reason
+  - url, reason   # reason may be "low-confidence-screen" or Stage 2 rejection text
 ```
 
 ### Step 5: Store Insights
@@ -363,9 +450,12 @@ total_insights: {previous_total + stored + imported}
 total_scans: {previous_scans + 1}
 last_scan_stats:
   collected: {raw items from scanner}
+  after_simhash: {N}          # after SimHash near-dup dedup
   after_url_dedup: {N}
   after_title_dedup: {N}
   after_keyword: {N}
+  after_content_diff: {N}      # after ContentDiff (official sources only)
+  screen_dropped: {N}          # dropped by Stage 1 low-confidence-screen gate
   analyzed: {sent to analyzers}
   stored: {above threshold}
   imported: {N}  # external insights imported
@@ -376,11 +466,19 @@ last_scan_stats:
 
 ### Step 8: Report
 
-Output a concise summary:
+Output a `--scan-stats` summary showing counts at each pipeline stage:
 
 ```
 [domain-intel] Scan complete — {YYYY-MM-DD}
-  Collected: {N} → Filtered: {N} → Analyzed: {N} → Stored: {N}
+--scan-stats
+  fetched:         {collected}
+  simhash-dropped: {collected - after_simhash}
+  url-dedup-dropped: {after_simhash - after_url_dedup}
+  title-dedup-dropped: {after_url_dedup - after_title_dedup}
+  unchanged-dropped: {after_keyword - after_content_diff}  (official sources, ContentDiff)
+  screen-dropped:   {screen_dropped}  (Stage 1 low-confidence gate)
+  final IEF:        {stored}
+  Analyzed:         {analyzed}
   Convergence signals: {N}
   By domain: {domain1}: {N}, {domain2}: {N}
   Failed sources: {N}
@@ -408,6 +506,21 @@ Invoke `/digest` for today's date (daily mode).
 - If in `[cron]` mode: append `[cron]` to the invocation
 - If digest succeeds → output: `[domain-intel] Auto-digest generated. See digests/ directory.`
 - If digest fails → log warning: `[domain-intel] Auto-digest failed: {reason}`. Do not fail the scan.
+
+### Step 8.6: Auto Intel-Sync (cross-plugin)
+
+If `$AUTO_INTEL_SYNC != "true"` → skip.
+
+If `stored + imported == 0` → skip (nothing new to sync).
+
+Invoke `/intel-sync` (the pkos plugin skill that imports new IEF insights into the PKOS Obsidian vault).
+- This step requires the executing role to have BOTH `domain-intel` AND `pkos` plugins available.
+  If `/intel-sync` is not found, log warning: `[domain-intel] Auto intel-sync requested but pkos:intel-sync not available. Skipping. Make sure the role has both plugins or use the standalone pkos-intel-sync template.` and proceed without failing.
+- If in `[cron]` mode: append `[cron]` to the invocation
+- If intel-sync succeeds → output: `[domain-intel] Auto intel-sync complete. See PKOS vault.`
+- If intel-sync fails → log warning: `[domain-intel] Auto intel-sync failed: {reason}`. Do not fail the scan.
+
+**Ordering note:** Step 8.6 runs AFTER Step 8.5 — auto-digest first (so the digest sees today's pre-sync state), then intel-sync. This mirrors the ordering established by the existing `pkos-domain-scan` → `pkos-intel-sync` chain (sync runs after scan, not before digest).
 
 ## Error Handling
 

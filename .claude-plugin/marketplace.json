@@ -29,7 +29,7 @@
       "name": "session-reflect",
       "source": "./session-reflect",
       "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "category": "reflection",
       "tags": [
         "session-analysis",
@@ -58,6 +58,8 @@
     {
       "name": "youtube-scout",
       "source": "./youtube-scout",
+      "deprecated": true,
+      "replacedBy": "domain-intel/youtube-scan",
       "description": "YouTube video intelligence: scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, exports IEF-compliant insights",
       "version": "1.0.2",
       "category": "intelligence",

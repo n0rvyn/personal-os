@@ -3,6 +3,11 @@ name: harvest
 description: "Scans ~/Code/Projects/*/docs/ for crystals, lessons, and design docs, imports to PKOS vault with Obsidian Flavored Markdown. Use when the user says 'harvest', 'scan projects', 'import knowledge', or via Adam cron."
 model: sonnet
 user-invocable: false
+allowed-tools:
+  - Read
+  - Write
+  - Glob
+  - Bash
 ---
 
 ## Overview

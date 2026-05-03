@@ -2,6 +2,11 @@
 name: vault
 description: "Obsidian vault operations for PKOS knowledge graph. Use when the user says 'vault', 'search vault', '搜索笔记', or wants direct vault access. Not the primary entry point — use /pkos for most interactions."
 model: haiku
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

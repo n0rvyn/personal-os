@@ -2,6 +2,11 @@
 name: serendipity
 description: "Internal skill — discovers cross-domain connections via topic similarity. Triggered by Adam cron (weekly Sunday 10am)."
 model: sonnet
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

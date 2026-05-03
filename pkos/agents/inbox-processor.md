@@ -6,6 +6,11 @@ description: |
 
 model: sonnet
 tools: [Read, Grep, Glob, WebFetch]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - WebFetch
 color: blue
 maxTurns: 25
 ---

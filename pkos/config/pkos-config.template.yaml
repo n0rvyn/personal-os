@@ -64,3 +64,14 @@ product_lens_notion:
   enabled: false
   # Notion database for product-lens project/feature summary rows
   database_id: ""
+
+# Notion Obsidian link audit and repair
+notion_link_audit:
+  # PKOS Hub page id. The script scans child databases under this page when configured.
+  hub_page_id: "32a1bde4-ddac-808b-bbca-db3641449bdf"
+  # Extra databases to scan. Pipeline DB is included by default.
+  database_ids: []
+  # Property names that should contain Obsidian open URIs.
+  link_properties:
+    - obsidian_link
+    - source_note_path

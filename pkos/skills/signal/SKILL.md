@@ -2,6 +2,12 @@
 name: signal
 description: "Internal skill — collects behavioral signals from Notion pipeline and Obsidian graph. Triggered by Adam cron (daily 10pm)."
 model: sonnet
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

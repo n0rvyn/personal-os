@@ -7,6 +7,10 @@ description: |
 
 model: sonnet
 tools: [Read, Grep, Glob]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
 color: magenta
 maxTurns: 20
 disallowedTools: [Edit, Write, Bash, NotebookEdit]

@@ -1,97 +1,50 @@
 ---
 name: digest
-description: "Internal skill — generates daily/weekly digest. Triggered by Adam cron (daily 7:30am, weekly Sunday 9am)."
+description: "Internal skill — generates daily/weekly digest. Triggered by Adam cron (daily 7:30am, weekly Sunday 9am). This is the canonical entry point — orchestrates digest-collect → digest-render → digest-publish as a single continuous sequence."
 model: sonnet
+allowed-tools:
+  - Skill
+  - Bash
 ---
 
 ## Overview
 
-Generate a daily or weekly digest summarizing PKOS activity. Includes new captures, domain-intel highlights, processing statistics, and actionable items.
+Thin orchestrator for the 3-step digest pipeline. Runs all three sub-skills sequentially in one invocation. Each sub-skill writes its output to `~/.adam/workflow-output/` for the next step to consume; a single failure mid-sequence leaves intermediate artifacts on disk for debugging.
 
 ## Arguments
 
-- `--type TYPE`: daily (default) or weekly
-- `--date DATE`: Generate for specific date (default: today, format: YYYY-MM-DD)
+- `--type TYPE`: daily (default) or weekly — passed through to each sub-skill
+- `--date DATE`: target date (default: today) — passed through
 
 ## Process
 
-### Step 1: Gather Data
+You MUST execute all three sub-skills in sequence. Do NOT stop after step 1 or step 2 — the digest is incomplete until digest-publish has run.
 
-**Recent captures from Notion Pipeline DB:**
-```bash
-NO_PROXY="*" python3 ~/.claude/skills/notion-with-api/scripts/notion_api.py query-db \
-  32a1bde4-ddac-81ff-8f82-f2d8d7a361d7 \
-  --filter '{"property": "Created", "date": {"on_or_after": "{start_date}"}}'
-```
+### Step 1: Collect
 
-**Recent Obsidian notes:**
-```bash
-find ~/Obsidian/PKOS/10-Knowledge ~/Obsidian/PKOS/20-Ideas ~/Obsidian/PKOS/50-References \
-  -name "*.md" -newer ~/Obsidian/PKOS/.signals/{yesterday}-feedback.yaml 2>/dev/null
-```
+Invoke `Skill(skill="pkos:digest-collect", args="--type {type} --date {date}")`.
+Wait for it to complete. If it fails, abort with the error.
 
-**Domain-intel highlights (if available):**
-```bash
-ls ~/Obsidian/PKOS/50-References/domain-intel/{today}* 2>/dev/null
-```
+### Step 2: Render
 
-**Signal data (if available):**
-```bash
-cat ~/Obsidian/PKOS/.signals/{today}-feedback.yaml 2>/dev/null
-```
+Invoke `Skill(skill="pkos:digest-render", args="--type {type} --date {date}")`.
+Wait for it to complete. If it fails, abort with the error (the collected artifact at `~/.adam/workflow-output/digest-collect-{date}.json` is preserved for retry).
 
-### Step 2: Compose Digest (dispatch digest-writer agent)
+### Step 3: Publish
 
-Dispatch `pkos:digest-writer` agent with all gathered data. The agent composes the digest markdown.
+Invoke `Skill(skill="pkos:digest-publish", args="--type {type} --date {date}")`.
+Wait for it to complete. If it fails, log the error but report partial success (the digest markdown at `~/Obsidian/PKOS/60-Digests/{date}.md` is already saved).
 
-### Step 3: Write to Obsidian Daily Note
-
-Write or append to `~/Obsidian/PKOS/60-Digests/{today}.md`:
-
-```markdown
----
-type: daily
-created: {today}
----
-
-# {today}
-
-## PKOS Daily Digest
-
-### New Captures ({count} items)
-{list from digest-writer}
-
-### Intel Highlights
-{from digest-writer}
-
-### Pending ({count} items in inbox/triaged)
-{from digest-writer}
-
-### Quick Stats
-- Processed: {N} | Actioned: {N} | Archived: {N}
-- Knowledge graph: +{N} notes, +{N} links
-```
-
-If the file already exists (manual notes present), append the digest section after existing content.
-
-### Step 4: Create Notion Summary (optional)
-
-If a Weekly Review database exists in Notion, create an entry with the digest summary.
-
-### Step 5: Push Notification
-
-For high-priority items (urgency: high), create a Reminder:
-```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/reminders/scripts/reminders.sh create \
-  "PKOS: {count} high-priority items need attention" --list "PKOS Inbox"
-```
-
-### Step 6: Report
+### Step 4: Report
 
 ```
-📋 PKOS {daily|weekly} Digest — {date}
-  Captures: {N} new items
-  Highlights: {N} intel items
-  Pending: {N} items
+[digest] PKOS {daily|weekly} Digest — {date}
+  Stage 1 (collect): done
+  Stage 2 (render):  done
+  Stage 3 (publish): done | partial — {reason}
   Written to: ~/Obsidian/PKOS/60-Digests/{date}.md
 ```
+
+## Sub-skill autonomy
+
+Each sub-skill (digest-collect, digest-render, digest-publish) can be invoked directly for debugging or partial re-runs. The orchestrator's only job is to run all three in order and consolidate their reports.

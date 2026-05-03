@@ -2,6 +2,16 @@
 name: inbox
 description: "Internal skill — processes captured items from iOS (Reminders, Notes, voice memos). Reads from all PKOS input sources, classifies, routes to Obsidian/Notion, and triggers ripple compilation. Triggered by Adam cron or via /pkos ingest."
 model: sonnet
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - WebFetch
+  - Skill(pkos:inbox-processor)
+  - Skill(pkos:ripple-compiler)
 ---
 
 ## Overview
@@ -22,17 +32,23 @@ Collect pending items from all sources (or filtered by `--source`).
 
 **Reminders:**
 ```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/reminders/scripts/reminders.sh list "PKOS Inbox"
+MACTOOLS_VER=$(ls -1 ~/.claude/plugins/cache/indie-toolkit/mactools/ 2>/dev/null | sort -V | tail -1)
+MACTOOLS_BASE=~/.claude/plugins/cache/indie-toolkit/mactools/${MACTOOLS_VER}
+${MACTOOLS_BASE}/skills/reminders/scripts/reminders.sh list "PKOS Inbox"
 ```
 Parse output lines. Each reminder with title and notes becomes an inbox item with `source: reminder`, `raw_type: text` (or `url` if notes contain a URL).
 
 **Notes:**
 ```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/notes/scripts/notes.sh list "PKOS Inbox"
+MACTOOLS_VER=$(ls -1 ~/.claude/plugins/cache/indie-toolkit/mactools/ 2>/dev/null | sort -V | tail -1)
+MACTOOLS_BASE=~/.claude/plugins/cache/indie-toolkit/mactools/${MACTOOLS_VER}
+${MACTOOLS_BASE}/skills/notes/scripts/notes.sh list "PKOS Inbox"
 ```
 For each note found, read its full content:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/notes/scripts/notes.sh read "Note Title"
+MACTOOLS_VER=$(ls -1 ~/.claude/plugins/cache/indie-toolkit/mactools/ 2>/dev/null | sort -V | tail -1)
+MACTOOLS_BASE=~/.claude/plugins/cache/indie-toolkit/mactools/${MACTOOLS_VER}
+${MACTOOLS_BASE}/skills/notes/scripts/notes.sh read "Note Title"
 ```
 Each note becomes an inbox item with `source: note`, `raw_type: text`.
 
@@ -241,16 +257,17 @@ If Get笔记 credentials are missing or save_note fails, log warning and continu
 3. Create Notion Pipeline DB entry via Python API (token and proxy from env):
 ```bash
 NO_PROXY="*" python3 ~/.claude/skills/notion-with-api/scripts/notion_api.py create-db-item \
-  32a1bde4-ddac-81ff-8f82-f2d8d7a361d7 \
+  $(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get pkos.notion_databases.inbox) \
   "{title}" \
   --props '{"status": "inbox", "source": "{source}", "type": "{classification}", "topics": "{tags_csv}", "priority": "{urgency}"}'
 ```
 
 4. Update Notion status after Obsidian note written:
 ```bash
+OBSIDIAN_LINK=$(OBSIDIAN_PATH="{obsidian_path}" python3 -c 'import os; from urllib.parse import quote; print("obsidian://open?vault={}&file={}".format(quote("PKOS", safe=""), quote(os.environ["OBSIDIAN_PATH"], safe="")))')
 NO_PROXY="*" python3 ~/.claude/skills/notion-with-api/scripts/notion_api.py update-db-item-properties \
   {notion_page_id} \
-  --props '{"status": "processed", "obsidian_link": "obsidian://open?vault=PKOS&file={obsidian_path_encoded}"}'
+  --props "{\"status\": \"processed\", \"obsidian_link\": \"$OBSIDIAN_LINK\"}"
 ```
 
 **B. task → Notion only (no Obsidian note)**
@@ -258,14 +275,16 @@ NO_PROXY="*" python3 ~/.claude/skills/notion-with-api/scripts/notion_api.py upda
 1. Create Notion Pipeline DB entry with Status "actionable":
 ```bash
 NO_PROXY="*" python3 ~/.claude/skills/notion-with-api/scripts/notion_api.py create-db-item \
-  32a1bde4-ddac-81ff-8f82-f2d8d7a361d7 \
+  $(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get pkos.notion_databases.inbox) \
   "{title}" \
   --props '{"Status": "actionable", "Source": "{source}", "Type": "task", "Topics": "{tags_csv}", "Priority": "{urgency}"}'
 ```
 
 2. If urgency is high or a due date is mentioned, create a Reminder:
 ```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/reminders/scripts/reminders.sh create "{title}" --list "Tasks" --due "{due_date}"
+MACTOOLS_VER=$(ls -1 ~/.claude/plugins/cache/indie-toolkit/mactools/ 2>/dev/null | sort -V | tail -1)
+MACTOOLS_BASE=~/.claude/plugins/cache/indie-toolkit/mactools/${MACTOOLS_VER}
+${MACTOOLS_BASE}/skills/reminders/scripts/reminders.sh create "{title}" --list "Tasks" --due "{due_date}"
 ```
 
 **C. feedback → .signals/ only (no Obsidian, no Notion)**
@@ -281,12 +300,16 @@ echo "- source: {source}
 
 **Reminders:**
 ```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/reminders/scripts/reminders.sh complete "{title}" --list "PKOS Inbox"
+MACTOOLS_VER=$(ls -1 ~/.claude/plugins/cache/indie-toolkit/mactools/ 2>/dev/null | sort -V | tail -1)
+MACTOOLS_BASE=~/.claude/plugins/cache/indie-toolkit/mactools/${MACTOOLS_VER}
+${MACTOOLS_BASE}/skills/reminders/scripts/reminders.sh complete "{title}" --list "PKOS Inbox"
 ```
 
 **Notes:**
 ```bash
-${CLAUDE_PLUGIN_ROOT}/../../mactools/1.0.1/skills/notes/scripts/notes.sh delete "{note_title}"
+MACTOOLS_VER=$(ls -1 ~/.claude/plugins/cache/indie-toolkit/mactools/ 2>/dev/null | sort -V | tail -1)
+MACTOOLS_BASE=~/.claude/plugins/cache/indie-toolkit/mactools/${MACTOOLS_VER}
+${MACTOOLS_BASE}/skills/notes/scripts/notes.sh delete "{note_title}"
 ```
 
 **Voice files:**
@@ -361,7 +384,7 @@ Get笔记 sync:
 
 ## Notion Configuration
 
-- Pipeline DB ID: `32a1bde4-ddac-81ff-8f82-f2d8d7a361d7`
+- Pipeline DB ID: `<your-pipeline-db-uuid>` (see `pkos.notion_databases.pipeline` in `~/.claude/personal-os.yaml`)
 - Access method: Python API (`~/.claude/skills/notion-with-api/scripts/notion_api.py`)
 - Token + proxy: provided via Adam template env (`NOTION_TOKEN`, `NO_PROXY`)
 - Topics multi_select: use existing options from DB schema

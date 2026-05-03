@@ -7,6 +7,10 @@ description: |
 
 model: haiku
 tools: [Grep, Glob, Read]
+allowed-tools:
+  - Grep
+  - Glob
+  - Read
 color: cyan
 maxTurns: 10
 disallowedTools: [Edit, Write, Bash, NotebookEdit]

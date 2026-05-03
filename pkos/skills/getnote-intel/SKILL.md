@@ -2,6 +2,9 @@
 name: getnote-intel
 description: "PKOS intelligence feed from Get笔记 — polls blogger/live subscriptions for new content, captures to Notion Pipeline or Obsidian. Triggered via Adam cron or /pkos intel getnote."
 model: sonnet
+allowed-tools:
+  - Read
+  - Bash
 ---
 
 ## Overview
@@ -24,7 +27,7 @@ model: sonnet
 
 ```bash
 GETNOTE_SCRIPT="${CLAUDE_PLUGIN_ROOT}/../../pkos/skills/getnote/scripts/getnote.sh"
-STATE_FILE=~/Obsidian/PKOS/.state/getnote-intel-state.yaml
+CURSOR_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/cursor.py"
 
 # 读取 config
 CONFIG_FILE=~/.claude/pkos/config.yaml
@@ -32,10 +35,15 @@ API_KEY=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG_FILE')).ge
 CLIENT_ID=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG_FILE')).get('getnote_api',{}).get('client_id',''))" 2>/dev/null)
 [[ -z "$API_KEY" ]] && echo "[getnote-intel] ERROR: getnote_api.api_key not set in ~/.claude/pkos/config.yaml" && exit 1
 
-# 读取 state（已发现的 blogger/live ID 列表）
-if [ -f "$STATE_FILE" ]; then
-  LAST_BLOGGER_IDS=$(python3 -c "import yaml; d=yaml.safe_load(open('$STATE_FILE')); print(' '.join(d.get('seen_blogger_posts',[])))" 2>/dev/null)
-  LAST_LIVE_IDS=$(python3 -c "import yaml; d=yaml.safe_load(open('$STATE_FILE')); print(' '.join(d.get('seen_lives',[])))" 2>/dev/null)
+# 读取 cursor state (checkpoint from prior run, if any)
+CURSOR_JSON=$(python3 "$CURSOR_SCRIPT" show 2>/dev/null || echo "{}")
+LAST_BLOGGER_IDS=$(echo "$CURSOR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('seen_blogger_posts',[])))" 2>/dev/null)
+LAST_LIVE_IDS=$(echo "$CURSOR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('seen_lives',[])))" 2>/dev/null)
+RESUME_TOPIC=$(echo "$CURSOR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('last_topic_id','') or '')" 2>/dev/null)
+RESUME_IDX=$(echo "$CURSOR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('last_blogger_idx',-1))" 2>/dev/null)
+
+if [[ -n "$RESUME_TOPIC" && "$RESUME_IDX" -ge 0 ]]; then
+  echo "[getnote-intel] Resuming from topic=${RESUME_TOPIC}, blogger_idx=${RESUME_IDX} (prior run incomplete)"
 fi
 ```
 
@@ -67,9 +75,22 @@ echo "[getnote-intel] Found ${#TOPIC_IDS[@]} topics"
 
 ```bash
 # 对每个 topic 调用 list_bloggers（fix C1: 命令名匹配 getnote.sh）
+SKIP_THIS_TOPIC=0
 for ((i=0; i<${#TOPIC_IDS[@]}; i++)); do
   TOPIC_ID="${TOPIC_IDS[$i]}"
   TOPIC_NAME="${TOPIC_NAMES[$i]}"
+
+  # Skip-to-resume: if RESUME_TOPIC is set, skip all topics until we reach it
+  if [[ -n "$RESUME_TOPIC" && "$TOPIC_ID" != "$RESUME_TOPIC" ]]; then
+    echo "[getnote-intel] Skipping topic ${TOPIC_NAME} (waiting for resume topic ${RESUME_TOPIC})"
+    continue
+  fi
+  # Once we reach the resume topic, clear the flag so subsequent topics process normally
+  if [[ -n "$RESUME_TOPIC" && "$TOPIC_ID" == "$RESUME_TOPIC" ]]; then
+    echo "[getnote-intel] Reached resume topic ${TOPIC_NAME} — clearing RESUME_TOPIC"
+    RESUME_TOPIC=""
+  fi
+
   echo "[getnote-intel] Topic: ${TOPIC_NAME}"
 
   # 3a. list_bloggers 获取博主列表
@@ -87,10 +108,35 @@ for b in data.get('bloggers',[]):
 " 2>/dev/null)
 
   # 3b. 对每个 blogger 获取内容
-  for FOLLOW_ID in "${FOLLOW_IDS[@]}"; do
+  for ((bi=0; bi<${#FOLLOW_IDS[@]}; bi++)); do
+    FOLLOW_ID="${FOLLOW_IDS[$bi]}"
+
+    # Skip bloggers before the resume index within the resumed topic
+    if [[ -n "$RESUME_IDX" && "$bi" -lt "$RESUME_IDX" ]]; then
+      echo "[getnote-intel] Skipping blogger idx ${bi} (before resume index ${RESUME_IDX})"
+      continue
+    fi
+    # Clear RESUME_IDX after the first blogger in the resumed topic is processed
+    if [[ -n "$RESUME_IDX" && "$bi" -eq "$RESUME_IDX" ]]; then
+      RESUME_IDX=""
+    fi
+
     CONTENTS_JSON=$($GETNOTE_SCRIPT list_blogger_contents "$TOPIC_ID" "$FOLLOW_ID" 1 2>/dev/null)
 
     # 3c. 过滤新内容（不在 LAST_BLOGGER_IDS 中）并写入
+    # Collect POST_IDS_CSV for cursor update
+    POST_IDS_CSV=$(echo "$CONTENTS_JSON" | python3 -c "
+import sys,json
+data=json.load(sys.stdin)
+last_ids = set(os.environ.get('LAST_BLOGGER_IDS','').split())
+pids = []
+for item in data.get('contents',[]):
+    pid = item.get('post_id','')
+    if pid not in last_ids:
+        pids.append(pid)
+print(','.join(pids))
+" LAST_BLOGGER_IDS="$LAST_BLOGGER_IDS" 2>/dev/null)
+
     echo "$CONTENTS_JSON" | python3 -c "
 import sys,json,yaml,os,subprocess
 
@@ -141,6 +187,16 @@ related: []
     ], capture_output=True)
     print(f\"Notion: {title}\")
 " LAST_BLOGGER_IDS="$LAST_BLOGGER_IDS" TOPIC_NAME="$TOPIC_NAME" TOPIC_ID="$TOPIC_ID"
+
+    # Persist cursor after each blogger: topic + idx + collected post IDs
+    # POST_IDS_CSV is a comma-separated list of post UIDs collected for this blogger
+    python3 - <<PYEOF
+import sys
+sys.path.insert(0, "${CURSOR_SCRIPT}".rsplit("/", 1)[0])
+import cursor
+post_ids = [p for p in "${POST_IDS_CSV}".split(",") if p]
+cursor.mark_progress("${TOPIC_ID}", ${bi}, post_ids=post_ids)
+PYEOF
   done
 done
 ```
@@ -205,32 +261,20 @@ related: []
     ], capture_output=True)
     print(f\"Notion: {title}\")
 " LAST_LIVE_IDS="$LAST_LIVE_IDS" TOPIC_NAME="$TOPIC_NAME" TOPIC_ID="$TOPIC_ID"
+
+  # Persist live progress: topic + index (no post IDs in live track)
+  python3 "$CURSOR_SCRIPT" mark "$TOPIC_ID" $i 2>/dev/null || true
 done
 ```
 
-### Step 5: 更新 State
+### Step 5: Final State Consolidation
 
 ```bash
-# 更新 getnote-intel-state.yaml
-STATE_FILE=~/Obsidian/PKOS/.state/getnote-intel-state.yaml
-mkdir -p "$(dirname "$STATE_FILE")"
-python3 -c "
-import yaml, datetime
-state = {
-    'seen_blogger_posts': [],
-    'seen_lives': [],
-    'last_sync': datetime.datetime.now().isoformat()
-}
-try:
-    with open('$STATE_FILE') as f:
-        old = yaml.safe_load(f)
-        state['seen_blogger_posts'] = old.get('seen_blogger_posts',[])[:500]
-        state['seen_lives'] = old.get('seen_lives',[])[:500]
-except: pass
-with open('$STATE_FILE','w') as f:
-    yaml.dump(state, f)
-print('State updated')
-"
+# All blogger/live processing is complete. Clear the checkpoint cursor to indicate
+# a clean run — the intermediate per-blogger writes from Step 3 already persisted
+# post IDs into the cursor file; here we reset topic/idx so the next run starts fresh.
+python3 "$CURSOR_SCRIPT" reset
+echo "Checkpoint cursor cleared — clean completion"
 ```
 
 ### Step 6: Report

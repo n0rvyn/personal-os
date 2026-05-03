@@ -2,7 +2,14 @@
 name: lint
 description: "Internal skill — performs wiki health check by dispatching wiki-linter agent. Generates health report, optionally applies auto-fixes for low/medium severity issues. Triggered by weekly cron or via /pkos lint."
 model: sonnet
----
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - Skill(pkos:wiki-linter)
+  - Skill(pkos:ripple-compiler)
 
 ## Overview
 

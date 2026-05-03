@@ -12,6 +12,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync product-lens PKOS note to Notion summary DB")
     parser.add_argument("--note", required=True, help="Canonical PKOS note path")
     parser.add_argument("--vault-root", default="~/Obsidian/PKOS", help="PKOS vault root")
+    parser.add_argument("--obsidian-vault", default=None, help="Obsidian vault name or id for source note links")
     parser.add_argument("--database-id", default=None, help="Override Notion database id")
     parser.add_argument("--config-path", default="~/.claude/pkos/config.yaml", help="PKOS config path")
     parser.add_argument("--state-file", default=None, help="Override sync state file path")
@@ -134,7 +136,14 @@ def state_path_for(args: argparse.Namespace, vault_root: Path) -> Path:
     return vault_root / ".state" / "product-lens-notion-sync.yaml"
 
 
-def build_payload(note_path: Path, vault_root: Path) -> tuple[str, dict[str, Any], dict[str, Any]]:
+def obsidian_open_uri(note_path: Path, vault_root: Path, vault_name: str | None = None) -> str:
+    relative_note_path = note_path.relative_to(vault_root).as_posix()
+    encoded_vault = quote(vault_name or vault_root.name, safe="")
+    encoded_file = quote(relative_note_path, safe="")
+    return f"obsidian://open?vault={encoded_vault}&file={encoded_file}"
+
+
+def build_payload(note_path: Path, vault_root: Path, vault_name: str | None = None) -> tuple[str, dict[str, Any], dict[str, Any]]:
     raw = note_path.read_text(encoding="utf-8")
     meta, body = parse_frontmatter(raw)
     sections = parse_sections(body)
@@ -153,7 +162,7 @@ def build_payload(note_path: Path, vault_root: Path) -> tuple[str, dict[str, Any
         "confidence": meta.get("confidence", ""),
         "biggest_risk": extract_bullet_value(sections.get("Biggest Risk", sections.get("Risks", []))),
         "next_actions": join_items(sections.get("Next Actions", sections.get("Suggested Follow-up", []))),
-        "source_note_path": str(note_path),
+        "source_note_path": obsidian_open_uri(note_path, vault_root, vault_name),
         "source_note_type": source_type,
         "updated_at": datetime.now().date().isoformat(),
         "sync_status": "current",
@@ -271,7 +280,7 @@ def main() -> int:
     if note_path is None or vault_root is None or not note_path.exists():
         raise SyncError("Valid --note and --vault-root are required")
 
-    title, props, state_record = build_payload(note_path, vault_root)
+    title, props, state_record = build_payload(note_path, vault_root, args.obsidian_vault)
     state_path = state_path_for(args, vault_root)
     state = load_yaml(state_path) if state_path.exists() else {"notes": {}, "last_sync": None}
 

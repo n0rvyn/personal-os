@@ -11,6 +11,28 @@ Automated knowledge compilation system for Obsidian vaults. Ingests, links, evol
 /pkos ingest-exchange  # Convert producer exchange artifacts into canonical PKOS notes
 /pkos review           # Today's wiki changes
 /pkos lint             # Latest health report
+/pkos notion-links     # Audit Notion links back to Obsidian notes
+```
+
+## Required Configuration
+
+Copy into `~/.claude/personal-os.yaml`:
+
+```yaml
+# pkos plugin config
+pkos:
+  notion_databases:
+    inbox: "<your-inbox-db-uuid>"    # Notion DB for inbox items
+    pipeline: "<your-pipeline-db-uuid>"  # Notion DB for exchange pipeline entries (optional)
+
+# Standard Personal-OS paths (also used by other plugins)
+exchange_dir: "~/Obsidian/PKOS/.exchange"
+scratch_dir:  "~/.personal-os/scratch"
+```
+
+Keys under `pkos.notion_databases` are looked up at runtime by skill scripts via:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get pkos.notion_databases.inbox
 ```
 
 ## Skills
@@ -25,6 +47,7 @@ Automated knowledge compilation system for Obsidian vaults. Ingests, links, evol
 | `/inbox` | Internal | Process captured items: classify, route, ripple |
 | `/ingest-exchange` | Internal | Convert `.exchange/` artifacts from producer plugins into canonical PKOS notes |
 | `/lint` | Internal (cron, Sundays) | Wiki health check: orphans, broken links, frontmatter |
+| `/pkos notion-links` | Manual or cron | Audit and repair Notion properties that should open Obsidian notes |
 | `/evolve` | Internal | Generate LENS/FOCUS profile updates |
 | `/vault` | Internal | Obsidian vault operations (atomic writes, state management) |
 | `/serendipity` | Internal | Cross-domain connection discovery |
@@ -106,6 +129,13 @@ notion:
   enabled: true
   database_id: your-notion-database-id
 
+notion_link_audit:
+  hub_page_id: 32a1bde4-ddac-808b-bbca-db3641449bdf
+  database_ids: []
+  link_properties:
+    - obsidian_link
+    - source_note_path
+
 harvest:
   projects_path: ~/Code/Projects
   docs_pattern: "**/docs/**/*.md"
@@ -151,6 +181,7 @@ Note: Cron jobs auto-expire after 7 days. Recreate in new sessions.
 | Daily digest | `/digest [cron]` | Daily 09:00 | `~/Obsidian/PKOS/` recent notes | `~/Obsidian/PKOS/10-Knowledge/digests/` |
 | Weekly signals | `/signal [cron]` | Sundays 10:00 | `~/Obsidian/PKOS/` cross-source signals | `~/Obsidian/PKOS/10-Knowledge/signals/` |
 | Wiki lint | `/lint [cron]` | Sundays 11:00 | `~/Obsidian/PKOS/` wikilinks + frontmatter | `~/Obsidian/PKOS/` lint report |
+| Notion link audit | `/pkos notion-links` | Daily 23:00 | Notion PKOS Hub DBs, `~/Obsidian/PKOS/` | report only by default; `--apply` updates repairable Notion fields |
 | Harvest project notes | `/harvest` | Weekly | `~/Code/Projects/*/docs/` | `~/Obsidian/PKOS/` canonical notes |
 
 Users wire these to Adam Templates (cron or event) or to host-level cron per their preference.
@@ -210,7 +241,7 @@ Trigger rule:
 Live commands (using `{scratch_dir}/pkos-test/` from `~/.claude/personal-os.yaml`):
 
 ```bash
-SCRATCH=$(python3 pkos/scripts/personal_os_config.py --get scratch_dir)
+SCRATCH=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get scratch_dir)
 EXCHANGE_ROOT="$SCRATCH/pkos-test/.exchange/product-lens"
 VAULT_ROOT="$SCRATCH/pkos-test"
 
@@ -234,6 +265,34 @@ python3 pkos/skills/ingest-exchange/scripts/ingest_exchange.py \
 Verified result:
 - `AppA Verdict` row exists in the database
 - `AppA Smart Tagging Feature Review` row exists in the database
+
+## Notion Obsidian Link Audit
+
+PKOS keeps Obsidian as the source of truth and Notion as a projection. Run the audit to detect Notion fields that no longer open a local Obsidian note.
+
+Audit only:
+
+```bash
+NOTION_TOKEN=... python3 pkos/skills/pkos/scripts/audit_notion_obsidian_links.py \
+  --hub-page-id 32a1bde4-ddac-808b-bbca-db3641449bdf
+```
+
+Repair unique matches:
+
+```bash
+NOTION_TOKEN=... python3 pkos/skills/pkos/scripts/audit_notion_obsidian_links.py \
+  --hub-page-id 32a1bde4-ddac-808b-bbca-db3641449bdf \
+  --apply
+```
+
+The script updates only `repairable` findings. It reports unresolved, ambiguous, missing-file, and outside-vault findings without changing them.
+
+## Code Organization
+
+Scripts are organized by ownership:
+
+- `pkos/scripts/` — plugin-shared scripts (used across multiple skills or invoked by Adam templates directly). Examples: `personal_os_config.py`, `voice-transcribe.sh`, `collect-inbox.sh`.
+- `pkos/skills/{name}/scripts/` — skill-owned scripts (only invoked from that skill's SKILL.md). Example: `skills/pkos/scripts/audit_notion_obsidian_links.py` (owned by the pkos skill's Notion Links route).
 
 ## MOC (Map of Contents)
 

@@ -19,6 +19,7 @@ These files live inside the PKOS vault because their content references vault no
 | `harvest-state.yaml` | `~/Obsidian/PKOS/.state/` | harvest | Tracks harvested project docs by source path + md5 hash |
 | `exchange-ingest.yaml` | `~/Obsidian/PKOS/.state/` | ingest-exchange | Tracks imported `.exchange/` artifacts by source path, checksum, and canonical note path |
 | `product-lens-notion-sync.yaml` | `~/Obsidian/PKOS/.state/` | sync_product_lens_notion | Tracks canonical note path to Notion summary row/page mapping and sync status |
+| `notion-obsidian-link-audit.yaml` | `~/Obsidian/PKOS/.state/` | audit_notion_obsidian_links | Last Notion Obsidian link audit report written after `--apply` |
 | `ripple-log.yaml` | `~/Obsidian/PKOS/.state/` | ripple-compiler | Append-only changelog of MOC updates, cross-refs added, entities updated |
 | `last-review-marker` | `~/Obsidian/PKOS/.state/` | signal, evolve | Timestamp marker for "since last review" queries |
 

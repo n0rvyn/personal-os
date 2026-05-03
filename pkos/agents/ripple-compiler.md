@@ -9,7 +9,18 @@ description: |
 
 model: sonnet
 tools: [Read, Write, Edit, Grep, Glob, Bash]
-allowed-tools: Write(~/Obsidian/PKOS/*) Edit(~/Obsidian/PKOS/*) Bash(curl:*)
+allowed-tools:
+  - Read
+  - Write(~/Obsidian/PKOS/**)
+  - Edit(~/Obsidian/PKOS/**)
+  - Grep
+  - Glob
+  - Bash(curl:*)
+  - Bash(python3:*)
+  - Bash(mkdir:*)
+  - Bash(find:*)
+  - Skill(pkos:wiki-linter)
+  - Skill(pkos:knowledge-prefetch)
 color: yellow
 maxTurns: 30
 ---

@@ -3,9 +3,18 @@ name: pkos
 description: "Use when the user says 'pkos', 'knowledge base', '知识库', 'what's in my inbox', 'what do I know about', or wants to interact with their personal knowledge system. Unified entry point for status, query, ingest, and review."
 user-invocable: true
 model: sonnet
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+  - Write
+  - WebFetch
+  - Skill(pkos:harvest)
+  - Skill(pkos:ingest-exchange)
+  - Skill(pkos:getnote-intel)
+  - Skill(pkos:lint)
 ---
-
-## Overview
 
 Unified human interface for PKOS. Routes user intent to the appropriate subsystem. This is the ONLY user-facing entry point — all other PKOS skills are internal (cron/event-triggered).
 
@@ -19,6 +28,7 @@ Parse from user input (natural language routing):
 - `ingest-exchange [--producer NAME] [--intent INTENT] [--dry-run]` → Producer Exchange Ingest
 - `review` → Today's Wiki Changes
 - `lint` → Latest Health Report
+- `notion-links [--apply]` → Audit or repair Notion Obsidian links
 - `intel [getnote]` → Get笔记 Intelligence Feed
 
 ## Routes
@@ -148,6 +158,29 @@ Show the latest lint report:
 
 2. If found: read and display the summary + high-severity items.
 3. If not found: report "No lint data. Lint runs automatically every Sunday, or invoke internally."
+
+### Route: Notion Links
+
+Trigger: user says "notion links", "repair notion links", "notion obsidian links", "PKOS Hub links", "修复 Notion Obsidian 链接".
+
+Audit only:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/pkos/scripts/audit_notion_obsidian_links.py \
+  --hub-page-id 32a1bde4-ddac-808b-bbca-db3641449bdf
+```
+
+Repair:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/pkos/scripts/audit_notion_obsidian_links.py \
+  --hub-page-id 32a1bde4-ddac-808b-bbca-db3641449bdf \
+  --apply
+```
+
+Rules:
+- require `NOTION_TOKEN` from the environment; do not write tokens to config
+- default mode reports only
+- `--apply` updates only `repairable` findings with a unique local note match
+- unresolved, missing-file, ambiguous, and outside-vault findings remain report-only
 
 ### Route: Get笔记 Intelligence Feed
 

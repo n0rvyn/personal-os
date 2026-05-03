@@ -7,6 +7,7 @@ templates:
 
   - id: pkos-inbox
     name: "PKOS Inbox Monitor"
+    rolePreference: "达芬奇"
     description: "Process pending items from Reminders, Notes, and voice files"
     trigger:
       type: cron
@@ -16,7 +17,7 @@ templates:
         prompt: "/inbox"
     tags: [pkos, inbox, pipeline]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 2.0
       maxTurns: 50
       fileAccess:
@@ -26,16 +27,17 @@ templates:
 
   - id: pkos-ripple-verify
     name: "PKOS Ripple Verification"
+    rolePreference: "达芬奇"
     description: "Verify ripple compilation completed after inbox processing"
     trigger:
-      type: event
+      type: template_complete
       event: "template_complete:pkos-inbox"
     steps:
       - id: verify
         prompt: "Read ~/Obsidian/PKOS/.state/ripple-log.yaml. Check the latest entry's date matches today. If the entry shows mocs_updated or mocs_created counts > 0, report success. If no entry for today exists, report that ripple may have been skipped (no knowledge/idea/reference items in this inbox run, which is normal)."
     tags: [pkos, ripple, verify]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 0.3
       maxTurns: 10
       fileAccess:
@@ -46,6 +48,7 @@ templates:
 
   - id: pkos-domain-scan
     name: "PKOS Domain Intel Scan"
+    rolePreference: "达芬奇"
     description: "Run domain-intel collection pipeline"
     trigger:
       type: cron
@@ -55,12 +58,47 @@ templates:
         prompt: "/scan"
     tags: [pkos, domain-intel, collection]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/domain-intel"]
+      plugins: ["domain-intel"]
       maxBudgetUsd: 2.0
       maxTurns: 100
 
+  # NOTE: pkos-scan-and-sync is the consolidated scan + intel-sync pipeline.
+  #   - Default disabled. Enable ONLY if you want to replace the standalone
+  #     pkos-domain-scan + pkos-intel-sync pair.
+  #   - When enabled, also disable pkos-domain-scan and pkos-intel-sync
+  #     (or accept double-processing -- both pipelines fire on the same cron).
+  #   - This template declares plugins: ["domain-intel", "pkos"] so the
+  #     auto_intel_sync flag works. The standalone pkos-domain-scan ships
+  #     with only ["domain-intel"]; setting auto_intel_sync=true on it
+  #     would silently skip (the pkos:intel-sync skill is not loaded).
+  - id: pkos-scan-and-sync
+    name: "PKOS Domain Scan + Intel Sync (consolidated)"
+    rolePreference: "达芬奇"
+    description: "Run domain-intel scan; on completion, automatically import new insights into PKOS vault. Single Adam task, no template_complete chain. Replaces the pkos-domain-scan → pkos-intel-sync chain for users who want one-step pipeline. The standalone pkos-domain-scan + pkos-intel-sync templates remain available for users who want decoupled cron timing or scan-only runs."
+    trigger:
+      type: cron
+      cron: "0 8,20 * * *"
+    enabled: false  # default disabled -- user explicitly opts in to replace the chained pair
+    steps:
+      - id: scan-with-sync
+        prompt: "/scan"
+    tags: [pkos, domain-intel, intel-sync, consolidated]
+    config:
+      plugins: ["domain-intel", "pkos"]
+      maxBudgetUsd: 4.0
+      maxTurns: 180
+      env:
+        # AUTO_INTEL_SYNC is read by domain-intel/scan/SKILL.md Step 1 as a fallback
+        # when config.yaml does not set scan.auto_intel_sync. Adam's TemplateExecutor
+        # forwards config.env to the SDK; arbitrary config.scan.* fields are NOT forwarded.
+        AUTO_INTEL_SYNC: "true"
+      fileAccess:
+        allowedPaths:
+          - "~/Obsidian/PKOS"
+
   - id: pkos-youtube-scan
     name: "PKOS YouTube Scan"
+    rolePreference: "达芬奇"
     description: "Run youtube-scout curation pipeline"
     trigger:
       type: cron
@@ -70,22 +108,23 @@ templates:
         prompt: "/youtube-scan"
     tags: [pkos, youtube-scout, collection]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/youtube-scout"]
+      plugins: ["youtube-scout"]
       maxBudgetUsd: 2.0
       maxTurns: 100
 
   - id: pkos-intel-sync
     name: "PKOS Intel Sync"
+    rolePreference: "达芬奇"
     description: "Import new domain-intel insights into PKOS vault with ripple compilation"
     trigger:
-      type: event
+      type: template_complete
       event: "template_complete:pkos-domain-scan"
     steps:
       - id: sync
         prompt: "/intel-sync"
     tags: [pkos, intel-sync, ief]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 2.0
       maxTurns: 80
       fileAccess:
@@ -95,16 +134,17 @@ templates:
 
   - id: pkos-intel-sync-yt
     name: "PKOS Intel Sync (YouTube)"
+    rolePreference: "达芬奇"
     description: "Import new insights after YouTube scan completes"
     trigger:
-      type: event
+      type: template_complete
       event: "template_complete:pkos-youtube-scan"
     steps:
       - id: sync
         prompt: "/intel-sync"
     tags: [pkos, intel-sync, youtube]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 1.5
       maxTurns: 60
       fileAccess:
@@ -116,6 +156,7 @@ templates:
 
   - id: pkos-signal
     name: "PKOS Signal Aggregator"
+    rolePreference: "达芬奇"
     description: "Collect behavioral signals from Notion + Obsidian"
     trigger:
       type: cron
@@ -125,12 +166,34 @@ templates:
         prompt: "/signal --days 1"
     tags: [pkos, signal, feedback]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 0.5
       maxTurns: 30
 
+  - id: pkos-notion-link-audit
+    name: "PKOS Notion Obsidian Link Audit"
+    rolePreference: "达芬奇"
+    description: "Audit Notion PKOS Hub links back to local Obsidian notes"
+    trigger:
+      type: cron
+      cron: "0 23 * * *"
+    steps:
+      - id: audit-links
+        prompt: "/pkos notion-links"
+    tags: [pkos, notion, obsidian, audit]
+    config:
+      plugins: ["pkos"]
+      maxBudgetUsd: 0.3
+      maxTurns: 20
+      fileAccess:
+        allowedPaths:
+          - "~/Obsidian/PKOS"
+    env:
+      NOTION_TOKEN: "{{notion.token}}"
+
   - id: pkos-digest
     name: "PKOS Daily Digest"
+    rolePreference: "达芬奇"
     description: "Generate daily digest for Obsidian"
     trigger:
       type: cron
@@ -140,7 +203,7 @@ templates:
         prompt: "/digest --type daily"
     tags: [pkos, digest, daily]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 0.5
       maxTurns: 30
 
@@ -148,6 +211,7 @@ templates:
 
   - id: pkos-review
     name: "PKOS Weekly Review"
+    rolePreference: "达芬奇"
     description: "Generate weekly digest"
     trigger:
       type: cron
@@ -157,22 +221,23 @@ templates:
         prompt: "/digest --type weekly"
     tags: [pkos, review, weekly]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 1.0
       maxTurns: 50
 
   - id: pkos-lint
     name: "PKOS Wiki Lint"
+    rolePreference: "达芬奇"
     description: "Health check the knowledge wiki — orphans, broken links, stale notes, contradictions"
     trigger:
-      type: event
+      type: template_complete
       event: "template_complete:pkos-review"
     steps:
       - id: lint
         prompt: "/lint --report-only"
     tags: [pkos, lint, health]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 1.0
       maxTurns: 50
       fileAccess:
@@ -181,6 +246,7 @@ templates:
 
   - id: pkos-serendipity
     name: "PKOS Serendipity Discovery"
+    rolePreference: "达芬奇"
     description: "Find unexpected cross-domain connections in knowledge graph"
     trigger:
       type: cron
@@ -190,22 +256,23 @@ templates:
         prompt: "/serendipity --count 5"
     tags: [pkos, serendipity, weekly]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 1.0
       maxTurns: 50
 
   - id: pkos-evolve
     name: "PKOS Profile Evolution"
+    rolePreference: "达芬奇"
     description: "Generate LENS/FOCUS update suggestions from weekly signals"
     trigger:
-      type: event
+      type: template_complete
       event: "template_complete:pkos-lint"
     steps:
       - id: evolve
         prompt: "/evolve --days 7"
     tags: [pkos, evolve, feedback]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 0.5
       maxTurns: 30
 
@@ -213,6 +280,7 @@ templates:
 
   - id: pkos-getnote-inbox
     name: "PKOS Inbox — Get笔记 Source"
+    rolePreference: "达芬奇"
     description: "PKOS inbox — Get笔记 source (双向读写 + 语义召回)"
     trigger:
       type: cron
@@ -222,7 +290,7 @@ templates:
         prompt: "/inbox --source getnote"
     tags: [pkos, inbox, getnote]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 2.0
       maxTurns: 50
       fileAccess:
@@ -235,6 +303,7 @@ templates:
 
   - id: pkos-getnote-intel-blogger
     name: "PKOS Get笔记 Intel — Blogger"
+    rolePreference: "达芬奇"
     description: "Get笔记 博主订阅情报摄取"
     trigger:
       type: cron
@@ -244,7 +313,7 @@ templates:
         prompt: "/intel --source blogger"
     tags: [pkos, getnote, intel, blogger]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 2.0
       maxTurns: 60
       fileAccess:
@@ -256,6 +325,7 @@ templates:
 
   - id: pkos-getnote-intel-live
     name: "PKOS Get笔记 Intel — Live"
+    rolePreference: "达芬奇"
     description: "Get笔记 直播订阅情报摄取"
     trigger:
       type: cron
@@ -265,7 +335,7 @@ templates:
         prompt: "/intel --source live"
     tags: [pkos, getnote, intel, live]
     config:
-      plugins: ["/Users/norvyn/Code/Skills/indie-toolkit/pkos"]
+      plugins: ["pkos"]
       maxBudgetUsd: 2.0
       maxTurns: 60
       fileAccess:
@@ -274,3 +344,62 @@ templates:
     env:
       GETNOTE_API_KEY: "{{getnote_api.api_key}}"
       GETNOTE_CLIENT_ID: "{{getnote_api.client_id}}"
+
+
+  # ═══════ Workflow Templates ═══════
+  # Templates with enabled: true below are ready for manual trigger from Adam UI/API.
+  # Templates with enabled: false default off; enable via Adam UI/API.
+  # manual-triggered templates require user-initiated runs.
+  # Variable binding: downstream steps reference {{stepId.result}} using previous step ids.
+  # The outputAs field is documentation/metadata only — substitution uses step.id.
+
+  - id: pkos-inbox-ripple-workflow
+    name: "PKOS Inbox + Ripple (multi-step workflow)"
+    rolePreference: "达芬奇"
+    description: "End-to-end inbox processing pipeline as a 2-step workflow. Step 1 (/inbox --source all) processes Reminders + Notes + voice files into Obsidian/Notion. Step 2 verifies ripple compilation via ripple-log.yaml. Manual trigger; for cron use the lighter pkos-inbox template instead."
+    trigger:
+      type: manual
+    enabled: true
+    steps:
+      - id: inbox_process
+        prompt: "/inbox --source all"
+      - id: ripple_verify
+        prompt: "Read ~/Obsidian/PKOS/.state/ripple-log.yaml and check the latest entry's date matches today. If mocs_updated or mocs_created counts > 0, report success. If no entry for today exists, report that ripple was skipped (no knowledge/idea/reference items in this inbox run, which is normal). Reference the inbox processing summary at {{inbox_process.result}} for context."
+        dependsOn: [inbox_process]
+    tags: [pkos, inbox, ripple, workflow]
+    config:
+      plugins: ["pkos"]
+      maxBudgetUsd: 3.0
+      maxTurns: 100
+      fileAccess:
+        allowedPaths:
+          - "~/Obsidian/PKOS"
+          - "~/Library/Mobile Documents"
+
+  - id: pkos-news-podcast-workflow
+    name: "PKOS Daily News Podcast Pipeline"
+    rolePreference: "达芬奇"
+    description: "3-step pipeline: scan latest news via domain-intel → render podcast script via /digest --type daily → generate TTS audio and broadcast via send_to_channel. Audio step uses 周杰伦 role (TTS-capable). Manual trigger; enable cron-based scheduling per user preference."
+    trigger:
+      type: manual
+    enabled: true
+    steps:
+      - id: scan
+        prompt: "/scan"
+      - id: digest
+        prompt: "/digest --type daily"
+        dependsOn: [scan]
+      - id: audio
+        prompt: "你是周杰伦。任务：读取上一步生成的播客文字稿（参考: {{digest.result}}），用 TTS 工具生成音频文件 ~/.adam/workflow-output/daily-podcast-$(date +%Y%m%d).mp3，然后用 send_to_channel 工具将音频发送到所有已配置的播报渠道（iPhone 微信、邮箱等）。如果 TTS 工具不可用，输出文字稿摘要并标注 ⚠️ 需手动 TTS。"
+        rolePreference: "周杰伦"
+        dependsOn: [digest]
+    tags: [pkos, podcast, news, workflow, multi-role]
+    config:
+      plugins: ["domain-intel", "pkos"]
+      maxBudgetUsd: 6.0
+      maxTurns: 200
+      fileAccess:
+        allowedPaths:
+          - "~/Obsidian/PKOS"
+          - "~/.adam/roles"
+

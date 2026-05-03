@@ -7,6 +7,11 @@ description: |
 
 model: sonnet
 tools: [Read, Grep, Glob, Bash]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash(find:*) Bash(grep:*) Bash(cat:*) Bash(wc:*)
 color: yellow
 maxTurns: 20
 ---

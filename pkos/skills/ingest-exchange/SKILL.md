@@ -2,6 +2,12 @@
 name: ingest-exchange
 description: "Internal skill — ingests producer-owned exchange artifacts from PKOS .exchange directories, converts them into canonical vault notes, and prepares summary projections for downstream systems."
 model: sonnet
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview
@@ -34,7 +40,7 @@ pkos/skills/ingest-exchange/scripts/ingest_exchange.py
 Recommended dry-run:
 
 ```bash
-SCRATCH=$(python3 pkos/scripts/personal_os_config.py --get scratch_dir)
+SCRATCH=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get scratch_dir)
 python3 pkos/skills/ingest-exchange/scripts/ingest_exchange.py \
   --source pkos/examples/exchange/product-lens/reprioritize/2026-04-12-repo-reprioritize-appa.md \
   --vault-root "$SCRATCH/pkos-test" \
@@ -44,7 +50,7 @@ python3 pkos/skills/ingest-exchange/scripts/ingest_exchange.py \
 Recommended sandbox write test (using `{scratch_dir}/pkos-test/` from `~/.claude/personal-os.yaml`):
 
 ```bash
-SCRATCH=$(python3 pkos/scripts/personal_os_config.py --get scratch_dir)
+SCRATCH=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get scratch_dir)
 python3 pkos/skills/ingest-exchange/scripts/ingest_exchange.py \
   --source pkos/examples/exchange/product-lens/reprioritize/2026-04-12-repo-reprioritize-appa.md \
   --vault-root "$SCRATCH/pkos-test"
@@ -53,7 +59,7 @@ python3 pkos/skills/ingest-exchange/scripts/ingest_exchange.py \
 Recommended Notion payload dry-run:
 
 ```bash
-SCRATCH=$(python3 pkos/scripts/personal_os_config.py --get scratch_dir)
+SCRATCH=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get scratch_dir)
 python3 pkos/skills/ingest-exchange/scripts/ingest_exchange.py \
   --source pkos/examples/exchange/product-lens/reprioritize/2026-04-12-repo-reprioritize-appa.md \
   --vault-root "$SCRATCH/pkos-test" \
@@ -70,6 +76,7 @@ Parse from user input:
 - `--sync-notion`: after note write, call the product-lens Notion sync script
 - `--notion-dry-run`: after note write, print the Notion payload without calling the API
 - `--notion-database-id`: override the configured Notion summary database id
+- `--obsidian-vault`: override the Obsidian vault name or id used in generated Notion links
 
 ## State
 

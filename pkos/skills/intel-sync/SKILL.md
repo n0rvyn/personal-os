@@ -2,6 +2,12 @@
 name: intel-sync
 description: "Internal skill — imports new insights from domain-intel into PKOS vault. Tracks imported IDs to avoid duplicates. Triggered by Adam event after domain-intel scan completes."
 model: sonnet
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
 ---
 
 ## Overview

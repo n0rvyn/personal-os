@@ -25,7 +25,7 @@ import yaml
 
 # Resolve exchange_dir from personal-os shared config
 # Script path: pkos/skills/ingest-exchange/scripts/ingest_exchange.py
-# Config lives at pkos/scripts/personal_os_config.py → parents[3] / "scripts"
+# Config lives at <plugin_root>/scripts/personal_os_config.py → resolves via parents[3] (plugin root) / "scripts"
 try:
     _cfg_path = Path(__file__).resolve().parents[3] / "scripts" / "personal_os_config.py"
     if _cfg_path.exists():
@@ -76,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sync-notion", action="store_true", help="Run product-lens Notion sync after note write")
     parser.add_argument("--notion-dry-run", action="store_true", help="Print the Notion payload after note write")
     parser.add_argument("--notion-database-id", default=None, help="Override product-lens Notion database id")
+    parser.add_argument("--obsidian-vault", default=None, help="Obsidian vault name or id for Notion source note links")
     parser.add_argument(
         "--exchange-root",
         default=None,
@@ -467,6 +468,8 @@ def run_notion_sync(
     ]
     if args.notion_database_id:
         cmd.extend(["--database-id", args.notion_database_id])
+    if args.obsidian_vault:
+        cmd.extend(["--obsidian-vault", args.obsidian_vault])
     if args.notion_dry_run:
         cmd.append("--dry-run")
     elif args.sync_notion:

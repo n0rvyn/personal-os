@@ -2,6 +2,11 @@
 name: evolve
 description: "Internal skill — generates LENS/FOCUS profile update suggestions from accumulated signals. Triggered by Adam event after weekly review."
 model: sonnet
+allowed-tools:
+  - Read
+  - Write
+  - Glob
+  - Bash
 ---
 
 ## Overview

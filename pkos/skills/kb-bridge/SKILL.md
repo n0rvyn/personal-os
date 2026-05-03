@@ -2,6 +2,12 @@
 name: kb-bridge
 description: "Internal skill — exports PKOS vault notes to ~/.claude/knowledge/ for cross-project availability. Triggered manually via /pkos bridge or after intel-sync."
 model: sonnet
+allowed-tools:
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - Bash
 ---
 
 ## Overview

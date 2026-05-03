@@ -39,9 +39,41 @@ Analyze recent sessions and get coaching feedback.
 - Analyzed sessions: `~/.claude/session-reflect/analyzed_sessions.json`
 - IEF export: `{exchange_dir}/session-reflect/{YYYY-MM}/` (see shared config below)
 
+## Skills
+
+- **`reflect`** — Coaching analysis on recent sessions. Optional `--session-report-json PATH` enriches output with structured data from session-report.
+- **`full-session-review`** — Single-command orchestrator: runs `claude-plugins-official/session-report` then `reflect --session-report-json`. Hard dependency on session-report being installed.
+
+## Recommended Chain
+
+For daily reviews, invoke `session-reflect:full-session-review` — it handles the session-report HTML render + enriched coaching markdown in one chain. To run only the coaching analysis (without the HTML report), invoke `session-reflect:reflect` directly.
+
 ## Configuration
 
 Copy `references/session-reflect.local.md.example` to `~/.claude/session-reflect.local.md` and customize.
+
+### session-reflect shared config keys
+
+`session-reflect` reads two optional keys from `~/.claude/personal-os.yaml` (the shared personal-os config, loaded via `scripts/personal_os_config.py`):
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `session_reflect.output_dir` | `~/.claude/session-reflect/reflections/` | Directory for coaching feedback markdown files |
+| `session_reflect.session_report_json_path` | `/tmp/session-report.json` | Path to session-report's JSON output (consumed by `--session-report-json`) |
+
+Example `~/.claude/personal-os.yaml` snippet:
+
+```yaml
+session_reflect:
+  output_dir: ~/my-custom/reflections
+  session_report_json_path: /tmp/my-session-report.json
+```
+
+These keys are optional — omit them to use defaults. The `--get` CLI also supports dotted access:
+
+```bash
+python3 scripts/personal_os_config.py --get session_reflect.output_dir
+```
 
 ## Architecture
 

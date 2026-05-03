@@ -6,6 +6,9 @@ description: |
   and writes IEF-compliant Markdown files for PKOS intel-sync consumption.
 model: sonnet
 tools: []
+allowed-tools:
+  - Read
+  - Write
 color: yellow
 maxTurns: 20
 disallowedTools: [Edit, Write, Bash, NotebookEdit]

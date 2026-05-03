@@ -1,4 +1,7 @@
 # session-reflect configuration
+# session_reflect.output_dir + session_report_json_path are loaded from
+# ~/.claude/personal-os.yaml via scripts/personal_os_config.py.
+# Defaults: ~/.claude/session-reflect/reflections/ and /tmp/session-report.json
 
 # Storage
 storage_dir: ~/.claude/session-reflect/

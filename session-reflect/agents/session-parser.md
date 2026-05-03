@@ -7,6 +7,9 @@ description: |
 
 model: sonnet
 tools: []
+allowed-tools:
+  - Read
+  - Write
 color: green
 maxTurns: 15
 disallowedTools: [Edit, Write, Bash, NotebookEdit]

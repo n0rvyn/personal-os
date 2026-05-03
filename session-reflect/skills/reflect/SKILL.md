@@ -3,6 +3,11 @@ name: reflect
 description: "Use when the user says 'reflect', 'reflection', '反思', '复盘', 'coaching', 'coach me', or wants to review and improve their AI collaboration patterns. Analyzes recent sessions and produces coaching feedback with specific improvement suggestions."
 user_invocable: true
 model: haiku
+allowed-tools:
+  - Read
+  - Glob
+  - Bash
+  - Write
 ---
 
 ## Overview
@@ -27,6 +32,7 @@ Parse from user input:
 - `--window SPEC`: When combined with `--rebaseline`, choose the baseline window (`30d`, `60d`, `all`; default `60d`).
 - `--enrich`: Finish LLM-based enrichment on sessions marked `enrichment_pending=1` by backfill/parse. Dispatches the `session-reflect:session-parser` agent in the host session (no CLI subprocess). Skip coaching output.
 - `--enrich-limit N`: When combined with `--enrich`, cap the number of sessions enriched this invocation (default 20). Keeps per-run cost bounded.
+- `--session-report-json PATH`: Path to session-report's JSON output. If not specified, auto-detect at the path returned by `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get session_reflect.session_report_json_path` (default `/tmp/session-report.json`). When the JSON exists and is fresh (mtime within last 60 minutes), its structured analysis (per-project tokens, top prompts, cache stats, subagent breakdown) is injected into the coach agent prompt as supplementary context. When absent or stale, falls back to JSONL-only analysis and notes "session-report not available — JSONL-only analysis" in the output footer.
 
 Also check `~/.claude/session-reflect.local.md` for configuration overrides (YAML frontmatter with `default_days`, `include_codex`, `projects` fields). If file doesn't exist, use defaults.
 
@@ -131,8 +137,6 @@ Steps:
 
 Do not spawn `claude -p` or any CLI; all LLM work happens in the current Claude Code session via the agent dispatch mechanism.
 
-## Process
-
 ### Step 1: Discover Sessions
 
 ```bash
@@ -202,15 +206,33 @@ continue. Empty arrays/defaults are acceptable for:
 - `prompt_assessments`
 - `process_gaps`
 
+### Step 4.5: Detect session-report JSON (Default Mode Only)
+
+Resolve the session-report JSON path (CLI arg overrides config, config overrides default `/tmp/session-report.json`):
+```bash
+SR_JSON_PATH="${ARG_SESSION_REPORT_JSON:-$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get session_reflect.session_report_json_path)}"
+```
+
+Decision:
+- If `SR_JSON_PATH` exists AND its mtime is within the last 60 minutes (`find "$SR_JSON_PATH" -mmin -60 -print -quit | grep -q .`):
+  - Read and parse it as JSON (use `Read` tool then `json.loads` mental model)
+  - Set `SR_AVAILABLE=true`
+  - Pass to coach agent in dispatch payload under `session_report_summary` key (extract: `overall.input_tokens.total`, `overall.output_tokens`, `overall.cache_hit_pct`, `by_project` top 5, `top_prompts` top 5, `cache_breaks` count)
+- Else (file missing OR stale):
+  - Set `SR_AVAILABLE=false`
+  - Skip injection; proceed with JSONL-only analysis (current behavior)
+
 ### Step 5: Route by Mode
 
 #### Default mode (coaching feedback):
 
 1. Dispatch `session-reflect:coach` agent with all enriched sessions
 2. Agent returns coaching feedback as Markdown
-3. Save feedback to `~/.claude/session-reflect/reflections/{YYYY-MM-DD}.md`:
-   - Create directory if it doesn't exist: `mkdir -p ~/.claude/session-reflect/reflections`
+3. Save feedback to `${OUTPUT_DIR}/{YYYY-MM-DD}.md` where `OUTPUT_DIR=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get session_reflect.output_dir)`:
+   - Create directory if it doesn't exist: `mkdir -p "$OUTPUT_DIR"`
    - If file already exists for today, append with `---` separator
+   - When `SR_AVAILABLE=false`, prepend a one-line note: `> session-report not available — JSONL-only analysis`
+   - When `SR_AVAILABLE=true`, prepend: `> Enriched with session-report data: {input_tokens_total} input + {output_tokens} output, {cache_hit_pct}% cache hit`
 4. Upsert all analyzed sessions into sessions.db:
    ```bash
    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parse_claude_session.py --input {file_path} --sqlite-db ~/.claude/session-reflect/sessions.db --enrich
@@ -230,14 +252,14 @@ continue. Empty arrays/defaults are acceptable for:
 2. Dispatch `session-reflect:profiler` agent with all enriched sessions + existing profile
 3. Agent returns updated profile as YAML
 4. Write to `~/.claude/session-reflect/profile.yaml`:
-   - Create directory if needed: `mkdir -p ~/.claude/session-reflect`
+   - Create directory if needed: `mkdir -p "$(dirname "$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get session_reflect.output_dir)")"`
 5. Present profile summary to user
 
 ### Step 6: Growth Check
 
 After Step 5 (default mode only), check if growth tracking is possible:
 
-1. List reflection files: `ls ~/.claude/session-reflect/reflections/*.md 2>/dev/null | sort | tail -4`
+1. List reflection files: `ls "${OUTPUT_DIR}"/*.md 2>/dev/null | sort | tail -4` where `OUTPUT_DIR=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get session_reflect.output_dir)`
 2. If 3+ files exist (including today's):
    - Read the 2-3 most recent previous reflections (not today's)
    - Read profile if exists: `cat ~/.claude/session-reflect/profile.yaml 2>/dev/null`
@@ -310,5 +332,9 @@ When query flags are present (bypass Steps 1-7):
 ## Completion Criteria
 
 - Coaching feedback (or profile) generated and displayed
-- Reflection saved to `~/.claude/session-reflect/reflections/{date}.md` (default mode)
+- Reflection saved to `${OUTPUT_DIR}/{YYYY-MM-DD}.md` where `OUTPUT_DIR=$(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get session_reflect.output_dir)` (default mode)
 - sessions.db updated with newly analyzed sessions via parse script upsert (default mode)
+
+## Recommended Chain
+
+For the richest reflection, run `session-report:session-report` first, then this skill — or invoke the orchestrator skill `session-reflect:full-session-review` which chains both automatically. The orchestrator handles `session-report` invocation, captures the JSON path, and passes it via `--session-report-json` to this skill.

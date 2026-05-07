@@ -1,6 +1,6 @@
 ---
 name: getnote
-description: This skill should be used when the user asks to "save a note", "search my notes", "list notes", "create a knowledge base", "add tags to a note", "delete a note", "update a note", "sync notes", "upload an image to getnote", "share a note", "getnote quota", "create a topic", "list topics", "get note detail", "recall notes", "semantic search getnote", "getnote bloggers", "getnote lives", "get live detail", "add notes to topic", or any explicit Get笔记 API call. Provides direct access to all 27 Get笔记 API endpoints via getnote.sh and getnote.py.
+description: Use this skill when the user wants to save text, link, or image notes; search all GetNote notes; search within a knowledge base; list notes and get original content or transcription; manage tags; create knowledge bases and add or remove notes; read subscribed blogger or live content; share notes; or asks in Chinese for GetNote actions such as "记一下", "搜一下", "加标签", "加到知识库", "保存链接", "保存图片笔记", "读取直播内容", or "分享笔记".
 model: sonnet
 allowed-tools:
   - Read
@@ -9,273 +9,280 @@ allowed-tools:
 
 ## Overview
 
-This skill provides low-level access to all Get笔记 API endpoints via `getnote.sh` and `getnote.py`, including note CRUD, semantic search, knowledge base management, blogger/live subscriptions, and image upload.
+This skill routes user language to the GetNote OpenAPI client in `scripts/getnote.sh` and the response parsers in `scripts/getnote.py`.
 
-## Environment Setup
+The shared API contract, endpoints, request bodies, and response examples live in `references/api-contract.md`.
 
-Set credentials before use:
+## Concept Glossary
+
+- `GetNote App`: the product the user sees.
+- `Note`: one saved item; API fields `note_id` and legacy `id`.
+- `Tag`: note-level label; API field `tags[]`; not a knowledge base.
+- `Knowledge base`: product term for `topic`; API field `topic_id`.
+- `Subscribed knowledge base`: read-only shared topic.
+- `Blogger content`: subscribed external creator content inside a topic.
+- `Live content`: GetNote-processed live replay or transcript inside a topic.
+- `Gag`: not an official GetNote/OpenAPI concept in the checked docs. If a user says it, ask whether they mean `Tag/标签` or another product feature.
+
+## Environment
+
 ```bash
-export GETNOTE_API_KEY="gk_live_xxx"      # From https://www.biji.com/openapi
+export GETNOTE_API_KEY="gk_live_xxx"
 export GETNOTE_CLIENT_ID="cli_xxx"
 ```
 
-Or via `~/.claude/pkos/config.yaml`:
+Config shape:
+
 ```yaml
 getnote_api:
   api_key: "gk_live_xxx"
   client_id: "cli_xxx"
+  base_url: "https://openapi.biji.com/open/api/v1"
 ```
 
-Read from config:
+## Routing Table
+
+| User wording | Command flow |
+| --- | --- |
+| URL, "保存链接", "save this link" | `getnote.sh save_link <link_url> [title] [tags_csv] [topic_id]` |
+| Image file, "保存图片笔记" | `getnote.sh upload_image <file_path> [mime_type]`, then `getnote.sh save_image_note <image_url> [title] [content] [tags_csv] [topic_id]` |
+| "记一下", "save a note" | `getnote.sh save_note <title> <content> [tags_csv] [topic_id]` |
+| "搜一下", "search my notes" | `getnote.sh recall <query> [top_k]`, then `getnote.py filter-recall` |
+| "在 X 知识库搜" | `getnote.sh list_topics`, choose `topic_id`, then `getnote.sh recall_knowledge <topic_id> <query> [top_k]` |
+| "加标签" | `getnote.sh add_tags <note_id> <tags_csv>` |
+| "加到知识库" | `getnote.sh list_topics`, choose `topic_id`, then `getnote.sh batch_add_to_topic <topic_id> <note_ids_csv>` |
+| "分享笔记" | `getnote.sh share_note <note_id> [share_exclude_audio]` |
+| "读取直播内容" | `getnote.sh list_lives <topic_id>`, then `getnote.sh live_detail <topic_id> <live_id>` |
+
+## Common Commands
+
 ```bash
-CONFIG_FILE=~/.claude/pkos/config.yaml
-API_KEY=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG_FILE')).get('getnote_api',{}).get('api_key',''))")
-CLIENT_ID=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG_FILE')).get('getnote_api',{}).get('client_id',''))")
-```
-
-## Script Reference
-
-**`getnote.sh`** — API client wrapping all 27 Get笔记 endpoints.
-
-**`getnote.py`** — JSON parsing utilities for `getnote.sh` output.
-
-## Common Operations
-
-### List Notes
-
-```bash
-# All notes (cursor-based pagination)
+# List notes. 0 is a first-page compatibility call; cursor is the official continuation token.
 getnote.sh list_notes 0
+getnote.sh list_notes <cursor>
 
-# Since a specific note ID (incremental sync)
-getnote.sh list_notes <since_id>
-```
+# Get detail, including original content and transcription fields when returned.
+getnote.sh get_note <note_id> [image_quality]
 
-Pipe through Python for filtering:
-```bash
-getnote.sh list_notes 0 | getnote.py filter-untagged pkos-synced
-getnote.sh list_notes 0 | getnote.py summarize-notes
-```
-
-### Get Note Detail
-
-```bash
-getnote.sh get_note <note_id> [image_quality]   # image_quality: low|medium|high
-```
-
-### Save Note
-
-```bash
-getnote.sh save_note <title> <content> [tags_csv]
-# Example:
+# Save notes.
 getnote.sh save_note "Meeting notes" "Discussed Q2 goals" "work,meeting"
-```
+getnote.sh save_link "https://example.com/post" "Post title" "web,reading"
+getnote.sh upload_image ./diagram.png image/png
+getnote.sh save_image_note "https://cdn.biji.com/images/diagram.png" "Diagram" "context" "image,work"
 
-Note types (default: `plain_text`):
-- `plain_text` — plain text content
-- `link` — URL link (triggers async processing, poll with `get_note_task_progress`)
-- `img_text` — image note (requires `image_urls` field, use `upload_image` first)
-
-### Update Note
-
-```bash
-getnote.sh update_note <note_id> [title] [content] [tags_csv]
-# Partial update — omit args to leave unchanged
-getnote.sh update_note <note_id> "" "new content"
-```
-
-### Delete Note
-
-```bash
-getnote.sh delete_note <note_id>
-```
-
-### Share Note
-
-```bash
-getnote.sh share_note <note_id>
-```
-
-## Tags
-
-```bash
-# Add tags
-getnote.sh add_tags <note_id> <tags_csv>
-
-# Remove a tag
-getnote.sh delete_tag <note_id> <tag_id>
-```
-
-## Semantic Search
-
-```bash
-# Global search across all notes
-getnote.sh recall <query> [top_k]   # default top_k=3
-
-# Search within a knowledge base
-getnote.sh recall_knowledge <topic_id> <query> [top_k]
-
-# Keyword search (exact match)
-getnote.sh search_notes <keyword> [page]
-```
-
-Filter recall results:
-```bash
+# Search.
 getnote.sh recall "design patterns" | getnote.py filter-recall
-# Include external/linked types:
 getnote.sh recall "design patterns" | getnote.py filter-recall --include-external
-```
+getnote.sh recall_knowledge <topic_id> "design patterns" 5
 
-## Knowledge Bases (Topics)
-
-```bash
-# List all knowledge bases
-getnote.sh list_topics [page]
-
-# Get topic detail
-getnote.sh get_topic_detail <topic_id>
-
-# Create a knowledge base
-getnote.sh create_topic <name> [description]
-
-# List notes in a topic
-getnote.sh list_topic_notes <topic_id> [page]
-
-# Batch add notes to a topic
+# Knowledge bases.
+getnote.sh list_topics | getnote.py parse-topics
+getnote.sh list_topic_notes <topic_id> 1 | getnote.py parse-topic-notes
+getnote.sh create_topic "Architecture Patterns" "Architecture notes"
 getnote.sh batch_add_to_topic <topic_id> <note_ids_csv>
-
-# Remove notes from a topic
 getnote.sh remove_note_from_topic <topic_id> <note_ids_csv>
 
-# List subscribed topics
-getnote.sh list_subscribe_topics [page]
+# Blogger and live content.
+getnote.sh list_bloggers <topic_id> 1 | getnote.py parse-bloggers
+getnote.sh list_blogger_contents <topic_id> <follow_id> 1 | getnote.py parse-contents
+getnote.sh list_lives <topic_id> 1 | getnote.py parse-lives
+getnote.sh live_detail <topic_id> <live_id> | getnote.py parse-lives
+getnote.sh follow_topic_live <topic_id> <dedao_live_link>
+
+# Async processing.
+getnote.sh get_note_task_progress <task_id> | getnote.py parse-note-tasks
+getnote.sh poll_task <task_id> | getnote.py parse-note-tasks
 ```
 
-Parse topic list:
+## Response Shape Examples
+
+Use `getnote.py` parser commands instead of repeating inline JSON parsing.
+
+`save_note` and `save_link` return `data.note_id`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "note_id": "note-save-001"
+  }
+}
+```
+
+`get_note_task_progress` returns `data.tasks[]`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "tasks": [
+      {
+        "task_id": "task-001",
+        "note_id": "note-save-001",
+        "status": "processing"
+      }
+    ]
+  }
+}
+```
+
+`list_notes` returns `data.notes[]` plus `data.cursor`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "cursor": "cursor-next-001",
+    "notes": [
+      {
+        "note_id": "note-001",
+        "title": "Parser contract note",
+        "tags": [
+          {
+            "name": "pkos"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`list_topics` returns `data.topics[]`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "topics": [
+      {
+        "topic_id": "topic-001",
+        "name": "PKOS Knowledge",
+        "stats": {
+          "note_count": 42
+        }
+      }
+    ]
+  }
+}
+```
+
+`recall` returns `data.results[]`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "note_id": "note-recall-001",
+        "note_type": "NOTE",
+        "title": "Stored note result"
+      }
+    ]
+  }
+}
+```
+
+Blogger contents use `post_id_alias`, `post_title`, `post_summary`, `post_media_text`, and `post_create_time`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "contents": [
+      {
+        "post_id_alias": "post-alias-001",
+        "post_title": "Official blogger post",
+        "post_summary": "Short blogger summary.",
+        "post_media_text": "Full blogger media text.",
+        "post_create_time": "2026-05-06T20:00:00+08:00"
+      }
+    ]
+  }
+}
+```
+
+Live details keep list metadata and processed content separate:
+
+```json
+{
+  "success": true,
+  "data": {
+    "live_id": "live-001",
+    "name": "Product Strategy Replay",
+    "post_title": "Live replay title",
+    "post_summary": "Processed live summary.",
+    "post_media_text": "Full live transcript text."
+  }
+}
+```
+
+## Do Not Confuse
+
+- Do not treat a tag name as `topic_id`.
+- Do not add notes to a knowledge base unless the user asked for it or config `topic_map` maps the tag.
+- Do not use `share_note` when an internal link `https://biji.com/note/{note_id}` is enough.
+- Do not assume subscribed knowledge bases are writable.
+
+## Verification
+
+Run local unit tests after parser, shell client, or downstream documentation changes:
+
 ```bash
-getnote.sh list_topics | getnote.py parse-topics
+python3 pkos/skills/getnote/tests/test_getnote_parser.py
+python3 pkos/skills/getnote/tests/test_getnote_shell.py
+python3 pkos/skills/getnote/tests/test_downstream_docs.py
 ```
 
-## Bloggers
+Run the credential-gated real API smoke test only when live GetNote writes are intended:
 
 ```bash
-# List bloggers in a topic
-getnote.sh list_bloggers <topic_id> [page]
-
-# List blogger's posts
-getnote.sh list_blogger_contents <topic_id> <follow_id> [page]
-
-# Get full post content
-getnote.sh blogger_content_detail <topic_id> <post_id>
+bash pkos/skills/getnote/tests/smoke_getnote_api.sh
+RUN_GETNOTE_SMOKE=1 GETNOTE_API_KEY="gk_live_xxx" GETNOTE_CLIENT_ID="cli_xxx" bash pkos/skills/getnote/tests/smoke_getnote_api.sh
 ```
 
-Parse outputs:
-```bash
-getnote.sh list_bloggers <topic_id> | getnote.py parse-bloggers
-getnote.sh list_blogger_contents <topic_id> <follow_id> | getnote.py parse-contents
-```
+Without `RUN_GETNOTE_SMOKE=1`, the smoke script prints a `SKIP` line and exits 0. With credentials, it creates a plain text smoke note, lists notes, adds `pkos-smoke`, verifies `share_url`, and deletes the smoke note during cleanup.
 
-## Lives
+Manual link smoke, because link processing creates async load and depends on external content:
 
 ```bash
-# List AI-processed lives in a topic
-getnote.sh list_lives <topic_id> [page]
-
-# Get live detail with AI summary
-getnote.sh live_detail <topic_id> <live_id>
-
-# Subscribe to live updates
-getnote.sh follow_topic_live <topic_id> <live_id>
+NOTE_ID="$(
+  bash pkos/skills/getnote/scripts/getnote.sh save_link "https://example.com/" "PKOS smoke link" "pkos-smoke" |
+    python3 pkos/skills/getnote/scripts/getnote.py parse-save-response
+)"
+bash pkos/skills/getnote/scripts/getnote.sh get_note_tasks "$NOTE_ID" || true
+bash pkos/skills/getnote/scripts/getnote.sh delete_note "$NOTE_ID"
 ```
 
-Parse lives:
-```bash
-getnote.sh list_lives <topic_id> | getnote.py parse-lives
-```
-
-## Image Upload
-
-Complete flow for `img_text` notes:
+Manual image smoke, because upload plus image-note processing depends on an actual local image and OSS upload availability:
 
 ```bash
-# Step 1: Get upload token
-UPLOAD_RESP=$(getnote.sh get_upload_token)
-UPLOAD_TOKEN=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
-
-# Step 2: Upload image (returns URL)
-IMG_RESP=$(getnote.sh upload_image <file_path> "$UPLOAD_TOKEN")
-IMAGE_URL=$(echo "$IMG_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))")
-
-# Step 3: Create img_text note with the URL
-getnote.sh save_note <title> <content> <tags_csv>
-# With img_text type, the API expects image_urls field — use update_note or pass via body
+IMAGE_JSON="$(bash pkos/skills/getnote/scripts/getnote.sh upload_image ./smoke.png image/png)"
+IMAGE_URL="$(printf "%s" "$IMAGE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["image_url"])')"
+NOTE_ID="$(
+  bash pkos/skills/getnote/scripts/getnote.sh save_image_note "$IMAGE_URL" "PKOS smoke image" "manual image smoke" "pkos-smoke" |
+    python3 pkos/skills/getnote/scripts/getnote.py parse-save-response
+)"
+bash pkos/skills/getnote/scripts/getnote.sh get_note_tasks "$NOTE_ID" || true
+bash pkos/skills/getnote/scripts/getnote.sh delete_note "$NOTE_ID"
 ```
 
-Check upload config first:
-```bash
-getnote.sh get_upload_config
-```
+## Parser Commands
 
-## Tasks & Async Processing
-
-Link notes (`note_type=link`) are processed asynchronously. Poll for completion:
+All parser commands accept wrapped official API responses with `success` plus `data`, and preserve top-level legacy responses for internal callers.
 
 ```bash
-# Poll task status
-getnote.sh poll_task <task_id>
-getnote.sh get_note_task_progress <task_id>
-
-# Get tasks associated with a note
-getnote.sh get_note_tasks <note_id>
-```
-
-## Rate Limits
-
-```bash
-getnote.sh quota
-```
-
-Daily limit: 50 knowledge bases per account (resets at Beijing time 00:00).
-
-## Python Helper Commands
-
-```bash
-# Filter notes by tag (exclude notes with tag)
-echo "$notes_json" | getnote.py filter-untagged [exclude_tag]
-
-# Summarize notes as JSON
-echo "$notes_json" | getnote.py summarize-notes
-
-# Filter recall results
-echo "$recall_json" | getnote.py filter-recall [--include-external]
-
-# Parse various list types
-echo "$json" | getnote.py parse-topics
-echo "$json" | getnote.py parse-bloggers
-echo "$json" | getnote.py parse-contents
-echo "$json" | getnote.py parse-lives
-echo "$json" | getnote.py parse-quota
-
-# Batch write notes to Obsidian vault
-echo "$notes_json" | getnote.py write-obsidian <vault_path> [note_type] [source]
-```
-
-## Error Handling
-
-| HTTP Code | Meaning | Action |
-|-----------|---------|--------|
-| 401/403 | Auth failure | Check API key and client ID |
-| 429 | Rate limited | Wait and retry; check `quota` |
-| 5xx | Server error | Retry once after 5s |
-
-## Config
-
-For PKOS integration, credentials are stored in `~/.claude/pkos/config.yaml` under `getnote_api`:
-```yaml
-getnote_api:
-  api_key: "gk_live_xxx"
-  client_id: "cli_xxx"
-  topic_map:               # optional: tag → topic_id mapping
-    work: "topic_xxx"
-    personal: "topic_yyy"
+getnote.py summarize-notes
+getnote.py filter-untagged [exclude_tag]
+getnote.py filter-recall [--include-external]
+getnote.py parse-topics
+getnote.py parse-bloggers
+getnote.py parse-contents
+getnote.py parse-lives
+getnote.py parse-save-response
+getnote.py parse-note-tasks
+getnote.py parse-note-detail
+getnote.py parse-upload-token
+getnote.py parse-topic-notes
 ```

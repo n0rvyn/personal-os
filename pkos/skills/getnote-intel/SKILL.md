@@ -27,6 +27,7 @@ allowed-tools:
 
 ```bash
 GETNOTE_SCRIPT="${CLAUDE_PLUGIN_ROOT}/../../pkos/skills/getnote/scripts/getnote.sh"
+GETNOTE_PARSER="${CLAUDE_PLUGIN_ROOT}/../../pkos/skills/getnote/scripts/getnote.py"
 CURSOR_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/cursor.py"
 
 # 读取 config
@@ -51,22 +52,13 @@ fi
 
 ```bash
 TOPICS_JSON=$($GETNOTE_SCRIPT list_topics 1 2>/dev/null)
-# 解析 topics[]，提取 topic_id 和 topic_name 到数组
-# getnote.sh list_topics 返回: { topics: [{ id, name, description, note_count }] }
+# 解析 data.topics[]，提取 topic_id 和 topic_name 到数组
 TOPIC_IDS=()
 TOPIC_NAMES=()
 while IFS= read -r line; do
-  IFS='|' read -r tid tname <<< "$line"
+  IFS=$'\t' read -r tid tname _count _desc <<< "$line"
   [[ -n "$tid" ]] && TOPIC_IDS+=("$tid") && TOPIC_NAMES+=("$tname")
-done < <(echo "$TOPICS_JSON" | python3 -c "
-import sys,json
-data=json.load(sys.stdin)
-for t in data.get('topics',[]):
-    tid=t.get('id','')
-    tname=t.get('name','')
-    if tid:
-        print(f'{tid}|{tname}')
-" 2>/dev/null)
+done < <(echo "$TOPICS_JSON" | "$GETNOTE_PARSER" parse-topics 2>/dev/null)
 echo "[getnote-intel] Found ${#TOPIC_IDS[@]} topics"
 [[ "${#TOPIC_IDS[@]}" -eq 0 ]] && echo "[getnote-intel] No topics found. Exiting." && exit 0
 ```
@@ -96,16 +88,12 @@ for ((i=0; i<${#TOPIC_IDS[@]}; i++)); do
   # 3a. list_bloggers 获取博主列表
   BLOGGERS_JSON=$($GETNOTE_SCRIPT list_bloggers "$TOPIC_ID" 1 2>/dev/null)
 
-  # 解析每个 blogger 的 follow_id
+  # 解析每个 blogger 的 follow_id、account_name、notes_count
   FOLLOW_IDS=()
-  while IFS= read -r fid; do
+  while IFS= read -r line; do
+    IFS=$'\t' read -r fid account_name notes_count <<< "$line"
     [[ -n "$fid" ]] && FOLLOW_IDS+=("$fid")
-  done < <(echo "$BLOGGERS_JSON" | python3 -c "
-import sys,json
-data=json.load(sys.stdin)
-for b in data.get('bloggers',[]):
-    print(b.get('follow_id',''))
-" 2>/dev/null)
+  done < <(echo "$BLOGGERS_JSON" | "$GETNOTE_PARSER" parse-bloggers 2>/dev/null)
 
   # 3b. 对每个 blogger 获取内容
   for ((bi=0; bi<${#FOLLOW_IDS[@]}; bi++)); do
@@ -122,32 +110,39 @@ for b in data.get('bloggers',[]):
     fi
 
     CONTENTS_JSON=$($GETNOTE_SCRIPT list_blogger_contents "$TOPIC_ID" "$FOLLOW_ID" 1 2>/dev/null)
+    CONTENTS_TSV=$(echo "$CONTENTS_JSON" | "$GETNOTE_PARSER" parse-contents 2>/dev/null)
 
     # 3c. 过滤新内容（不在 LAST_BLOGGER_IDS 中）并写入
     # Collect POST_IDS_CSV for cursor update
-    POST_IDS_CSV=$(echo "$CONTENTS_JSON" | python3 -c "
-import sys,json
-data=json.load(sys.stdin)
-last_ids = set(os.environ.get('LAST_BLOGGER_IDS','').split())
+    POST_IDS_CSV=$(printf "%s\n" "$CONTENTS_TSV" | LAST_BLOGGER_IDS="$LAST_BLOGGER_IDS" python3 -c "
+import os
+import sys
+
+last_ids = set(os.environ.get('LAST_BLOGGER_IDS', '').split())
 pids = []
-for item in data.get('contents',[]):
-    pid = item.get('post_id','')
-    if pid not in last_ids:
-        pids.append(pid)
+for line in sys.stdin:
+    parts = line.rstrip('\n').split('\t')
+    post_id_alias = parts[0] if parts else ''
+    if post_id_alias not in last_ids:
+        pids.append(post_id_alias)
 print(','.join(pids))
-" LAST_BLOGGER_IDS="$LAST_BLOGGER_IDS" 2>/dev/null)
+" 2>/dev/null)
 
-    echo "$CONTENTS_JSON" | python3 -c "
-import sys,json,yaml,os,subprocess
+    printf "%s\n" "$CONTENTS_TSV" | LAST_BLOGGER_IDS="$LAST_BLOGGER_IDS" TOPIC_NAME="$TOPIC_NAME" TOPIC_ID="$TOPIC_ID" python3 -c "
+import os
+import subprocess
+import sys
 
-data=json.load(sys.stdin)
 last_ids = os.environ.get('LAST_BLOGGER_IDS','').split()
-for item in data.get('contents',[]):
-    pid = item.get('post_id','')
-    if pid in last_ids:
+for line in sys.stdin:
+    parts = line.rstrip('\n').split('\t')
+    if len(parts) < 5:
         continue
-    title = item.get('title', f'Blogger post {pid}')
-    content = item.get('content','')[:200]
+    post_id_alias, post_title, post_summary, post_media_text, post_create_time = parts[:5]
+    if post_id_alias in last_ids:
+        continue
+    title = post_title or f'Blogger post {post_id_alias}'
+    content = (post_summary or post_media_text)[:200]
     slug = title.lower().replace(' ','-')[:40]
     topic_name = os.environ.get('TOPIC_NAME','')
     topic_id = os.environ.get('TOPIC_ID','')
@@ -160,7 +155,7 @@ for item in data.get('contents',[]):
         f.write(f\"\"\"---
 type: reference
 source: getnote-blogger
-created: {item.get('created_at','unknown')}
+created: {post_create_time or 'unknown'}
 tags: [getnote, blogger, {topic_name}]
 quality: 0
 citations: 1
@@ -170,8 +165,8 @@ related: []
 # {title}
 
 > [!abstract] Source
-> via Get笔记 — [{topic_name}](getnotes://topic/{topic_id})
-> Date: {item.get('created_at','unknown')}
+> via Get笔记 [{topic_name}](getnotes://topic/{topic_id})
+> Date: {post_create_time or 'unknown'}
 
 {content}...
 
@@ -186,7 +181,7 @@ related: []
         f\"import subprocess; subprocess.run(['NO_PROXY=*','python3',os.path.expanduser('~/.claude/skills/notion-with-api/scripts/notion_api.py'),'create-db-item','32a1bde4-ddac-81ff-8f82-f2d8d7a361d7',f'{title}','--props','{{\\\"Status\\\":\\\"intel\\\",\\\"Source\\\":\\\"getnote-blogger\\\",\\\"Topics\\\":\\\"{topic_name}\\\",\\\"Priority\\\":\\\"low\\\"}}'])\"
     ], capture_output=True)
     print(f\"Notion: {title}\")
-" LAST_BLOGGER_IDS="$LAST_BLOGGER_IDS" TOPIC_NAME="$TOPIC_NAME" TOPIC_ID="$TOPIC_ID"
+"
 
     # Persist cursor after each blogger: topic + idx + collected post IDs
     # POST_IDS_CSV is a comma-separated list of post UIDs collected for this blogger
@@ -211,19 +206,24 @@ for ((i=0; i<${#TOPIC_IDS[@]}; i++)); do
 
   # 4a. list_lives 获取已完成的 AI 处理直播列表
   LIVES_JSON=$($GETNOTE_SCRIPT list_lives "$TOPIC_ID" 1 2>/dev/null)
+  LIVES_TSV=$(echo "$LIVES_JSON" | "$GETNOTE_PARSER" parse-lives 2>/dev/null)
 
   # 解析并过滤新直播（不在 LAST_LIVE_IDS 中）
-  echo "$LIVES_JSON" | python3 -c "
-import sys,json,os,subprocess
+  printf "%s\n" "$LIVES_TSV" | LAST_LIVE_IDS="$LAST_LIVE_IDS" TOPIC_NAME="$TOPIC_NAME" TOPIC_ID="$TOPIC_ID" python3 -c "
+import os
+import subprocess
+import sys
 
-data=json.load(sys.stdin)
 last_ids = os.environ.get('LAST_LIVE_IDS','').split()
-for item in data.get('lives',[]):
-    lid = item.get('live_id','')
+for line in sys.stdin:
+    parts = line.rstrip('\n').split('\t')
+    if len(parts) < 7:
+        continue
+    lid, name, status, follow_time, post_title, post_summary, post_media_text = parts[:7]
     if lid in last_ids:
         continue
-    title = item.get('title', f'Live {lid}')
-    ai_summary = item.get('ai_summary', item.get('title',''))
+    title = post_title or name or f'Live {lid}'
+    ai_summary = post_summary or post_media_text or title
     slug = title.lower().replace(' ','-')[:40]
     topic_name = os.environ.get('TOPIC_NAME','')
     topic_id = os.environ.get('TOPIC_ID','')
@@ -236,7 +236,7 @@ for item in data.get('lives',[]):
         f.write(f\"\"\"---
 type: reference
 source: getnote-live
-created: {item.get('created_at','unknown')}
+created: {follow_time or 'unknown'}
 tags: [getnote, live, {topic_name}]
 quality: 0
 citations: 1
@@ -247,7 +247,7 @@ related: []
 
 > [!abstract] Get笔记 AI Summary
 > {ai_summary}
-> 来源：[完整直播转写](getnotes://live/{lid}) via Get笔记 — [{topic_name}](getnotes://topic/{topic_id})
+> 来源：[完整直播转写](getnotes://live/{lid}) via Get笔记 [{topic_name}](getnotes://topic/{topic_id})
 
 ## Connections
 - [[MOC-{topic_name}]]
@@ -260,7 +260,7 @@ related: []
         f\"import subprocess; subprocess.run(['NO_PROXY=*','python3',os.path.expanduser('~/.claude/skills/notion-with-api/scripts/notion_api.py'),'create-db-item','32a1bde4-ddac-81ff-8f82-f2d8d7a361d7',f'{title}','--props','{{\\\"Status\\\":\\\"intel\\\",\\\"Source\\\":\\\"getnote-live\\\",\\\"Topics\\\":\\\"{topic_name}\\\",\\\"Priority\\\":\\\"low\\\"}}'])\"
     ], capture_output=True)
     print(f\"Notion: {title}\")
-" LAST_LIVE_IDS="$LAST_LIVE_IDS" TOPIC_NAME="$TOPIC_NAME" TOPIC_ID="$TOPIC_ID"
+"
 
   # Persist live progress: topic + index (no post IDs in live track)
   python3 "$CURSOR_SCRIPT" mark "$TOPIC_ID" $i 2>/dev/null || true

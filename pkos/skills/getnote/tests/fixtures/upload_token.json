@@ -1,0 +1,18 @@
+{
+  "success": true,
+  "request_id": "req-upload-token",
+  "data": {
+    "tokens": [
+      {
+        "host": "https://oss-upload.example.com",
+        "key": "images/demo.png",
+        "OSSAccessKeyId": "oss-access-key",
+        "policy": "oss-policy",
+        "signature": "oss-signature",
+        "callback": "oss-callback",
+        "Content-Type": "image/png",
+        "access_url": "https://cdn.biji.com/images/demo.png"
+      }
+    ]
+  }
+}

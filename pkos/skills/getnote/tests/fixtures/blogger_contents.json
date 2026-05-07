@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "request_id": "req-blogger-contents",
+  "data": {
+    "contents": [
+      {
+        "post_id_alias": "post-alias-001",
+        "post_title": "Official blogger post",
+        "post_summary": "Short blogger summary.",
+        "post_media_text": "Full blogger media text.",
+        "post_create_time": "2026-05-06T20:00:00+08:00"
+      }
+    ],
+    "page": 1
+  }
+}

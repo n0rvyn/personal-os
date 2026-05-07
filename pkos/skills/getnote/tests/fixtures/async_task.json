@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "request_id": "req-async-task",
+  "data": {
+    "tasks": [
+      {
+        "task_id": "task-001",
+        "note_id": "note-save-001",
+        "status": "processing",
+        "progress": 45
+      }
+    ]
+  }
+}

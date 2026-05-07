@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "request_id": "req-save-note",
+  "data": {
+    "note_id": "note-save-001"
+  }
+}

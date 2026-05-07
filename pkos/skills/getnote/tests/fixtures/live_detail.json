@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "request_id": "req-live-detail",
+  "data": {
+    "live_id": "live-001",
+    "name": "Product Strategy Replay",
+    "status": "completed",
+    "follow_time": "2026-05-05T18:00:00+08:00",
+    "post_title": "Live replay title",
+    "post_summary": "Processed live summary.",
+    "post_media_text": "Full live transcript text."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "request_id": "req-list-topics",
+  "data": {
+    "topics": [
+      {
+        "topic_id": "topic-001",
+        "name": "PKOS Knowledge",
+        "description": "Writable knowledge base for PKOS notes.",
+        "stats": {
+          "note_count": 42
+        }
+      }
+    ],
+    "page": 1
+  }
+}

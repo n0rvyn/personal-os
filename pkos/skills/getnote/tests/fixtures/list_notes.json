@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "request_id": "req-list-notes",
+  "data": {
+    "cursor": "cursor-next-001",
+    "notes": [
+      {
+        "note_id": "note-001",
+        "title": "Parser contract note",
+        "note_type": "plain_text",
+        "content": "A wrapped official response note.",
+        "tags": [
+          {
+            "name": "pkos"
+          }
+        ],
+        "updated_at": "2026-05-07T09:00:00+08:00"
+      },
+      {
+        "note_id": "note-002",
+        "id": "legacy-note-002",
+        "title": "Already synced note",
+        "note_type": "link",
+        "tags": [
+          {
+            "name": "pkos-synced"
+          }
+        ],
+        "updated_at": "2026-05-07T09:10:00+08:00"
+      }
+    ]
+  }
+}

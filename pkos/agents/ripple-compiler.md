@@ -79,7 +79,7 @@ Build the recall query from: first 200 chars of note content + title + top 3 tag
 ```
 POST https://openapi.biji.com/open/api/v1/resource/recall
 Headers:
-  Authorization: Bearer {api_key}
+  Authorization: {api_key}
   X-Client-ID: {client_id}
   Content-Type: application/json
 Body:
@@ -89,7 +89,7 @@ Body:
 }
 ```
 
-On success (200): parse `results` array.
+On success (200): parse `data.results` when calling the API directly.
 On 429 (rate limit): log warning, skip 2b entirely this run.
 On 5xx or network error: log error, skip 2b entirely this run.
 

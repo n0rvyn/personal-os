@@ -41,7 +41,7 @@ getnote_api:
   max_recall_results: 10
   # Include non-NOTE types in recall results (BLOGGER, LIVE, URL, DEDAO)
   include_external_types: false
-  # Default: use tag-based sync (#pkos-synced marker)
+  # Default: use tag-based sync (#pkos-synced marker). cursor mode stores GetNote cursor, not note ID.
   sync_mode: "tag"   # "tag" | "cursor"
   # Intelligence feed settings
   intel:
@@ -51,7 +51,7 @@ getnote_api:
     content_depth: summary
     # 目标 Obsidian 目录
     obsidian_path: "50-References"
-  # Topic map: tag → topic_id for batch_add_to_topic
+  # Topic map: tag name -> writable knowledge base topic_id for batch_add_to_topic
   topic_map: {}
 
 # Lint settings

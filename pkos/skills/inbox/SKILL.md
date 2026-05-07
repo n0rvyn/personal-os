@@ -66,21 +66,21 @@ GETNOTE_SCRIPT="${CLAUDE_PLUGIN_ROOT}/../../pkos/skills/getnote/scripts/getnote.
 SYNC_FILE=~/Obsidian/PKOS/.state/getnote-sync.yaml
 if [ -f "$SYNC_FILE" ]; then
   SYNC_MODE=$(python3 -c "import yaml; d=yaml.safe_load(open('$SYNC_FILE')); print(d.get('sync_mode','tag'))" 2>/dev/null || echo "tag")
-  LAST_SINCE_ID=$(python3 -c "import yaml; d=yaml.safe_load(open('$SYNC_FILE')); print(d.get('since_id','0'))" 2>/dev/null || echo "0")
+  LAST_CURSOR=$(python3 -c "import yaml; d=yaml.safe_load(open('$SYNC_FILE')); print(d.get('cursor','0'))" 2>/dev/null || echo "0")
 else
   SYNC_MODE="tag"
-  LAST_SINCE_ID="0"
+  LAST_CURSOR="0"
 fi
 
 if [ "$SYNC_MODE" = "tag" ]; then
   # Tag 模式：列出所有笔记，由 add_tags 标记已处理
   NOTES_JSON=$($GETNOTE_SCRIPT list_notes 0 2>/dev/null)
 else
-  # Cursor 模式：用 since_id 增量拉取
-  NOTES_JSON=$($GETNOTE_SCRIPT list_notes "$LAST_SINCE_ID" 2>/dev/null)
+  # Cursor 模式：用 GetNote cursor 增量拉取
+  NOTES_JSON=$($GETNOTE_SCRIPT list_notes "$LAST_CURSOR" 2>/dev/null)
 fi
 
-# 解析 notes[]，过滤 #pkos-synced，并填充 PROCESSED_GETNOTE_IDS 数组
+# 解析 data.notes[]，过滤 #pkos-synced，并填充 PROCESSED_GETNOTE_IDS 数组
 PROCESSED_GETNOTE_IDS=()
 GETNOTE_TEMP_FILE=~/Obsidian/PKOS/.state/getnote-collect-temp.txt
 : > "$GETNOTE_TEMP_FILE"  # 截断 temp 文件
@@ -96,13 +96,16 @@ while IFS= read -r line; do
 done < <(echo "$NOTES_JSON" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-for note in data.get('notes', []):
+payload = data.get('data', data) if isinstance(data, dict) else {}
+for note in payload.get('notes', []):
     tag_names = [t.get('name','') for t in note.get('tags', [])]
     if 'pkos-synced' not in tag_names:
-        print(f\"{note['id']}\t{note.get('title','Untitled')}\t{note.get('note_type','plain_text')}\")
+        note_id = note.get('note_id') or note.get('id') or ''
+        if note_id:
+            print(f\"{note_id}\t{note.get('title','Untitled')}\t{note.get('note_type','plain_text')}\")
 " 2>/dev/null || true)
 ```
-Each untagged note becomes an inbox item with `source: getnote`, `raw_type: text`. Link/img types: extract task_id, poll_task until completed (max 30 retries, 2s interval).
+Each untagged note becomes an inbox item with `source: getnote`, `raw_type: text`. Link/img types: extract task_id with `getnote.py parse-note-tasks`, then `poll_task` until completed (max 30 retries, 2s interval).
 
 Present a summary to the user:
 ```
@@ -222,7 +225,7 @@ if [ -n "$TOPIC_MAP" ] && [ -n "$GETNOTE_SCRIPT" ]; then
   TAGS_ARG=""
   [[ -n "{tags_csv}" ]] && TAGS_ARG="{tags_csv}"
   SAVE_RESULT=$($GETNOTE_SCRIPT save_note "{title}" "{raw_content}" "$TAGS_ARG" 2>/dev/null)
-  GETNOTE_NOTE_ID=$(echo "$SAVE_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('note',{}).get('id',''))" 2>/dev/null || echo "")
+  GETNOTE_NOTE_ID=$(echo "$SAVE_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); p=d.get('data', d) if isinstance(d, dict) else {}; note=p.get('note', {}) if isinstance(p.get('note'), dict) else {}; print(p.get('note_id') or p.get('id') or note.get('note_id') or note.get('id') or '')" 2>/dev/null || echo "")
   if [ -n "$GETNOTE_NOTE_ID" ] && [ -n "$TOPIC_MAP" ]; then
     python3 -c "
 import yaml, sys, subprocess, os
@@ -377,7 +380,7 @@ Get笔记 sync:
 - If Notion API fails, log error but keep the Obsidian note (data is not lost)
 - If voice transcription fails, skip that file and log warning
 - If Get笔记 API returns 401/403 → log `[inbox] Get笔记 auth failed` → skip Get笔记 source
-- If Get笔记 API returns 429 (quota exceeded) → log `[inbox] Get笔记 quota exceeded` → skip source, do not update since_id
+- If Get笔记 API returns 429 (quota exceeded) → log `[inbox] Get笔记 quota exceeded` → skip source, do not update cursor
 - If Get笔记 API returns 5xx → log `[inbox] Get笔记 API error {code}` → wait 5s retry once; if still fails, skip
 - If add_tags fails → log warning, note still captured to Obsidian (graceful degradation)
 - Never block the entire pipeline for Get笔记 failure

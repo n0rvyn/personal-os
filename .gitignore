@@ -4,6 +4,7 @@ docs/06-plans/
 
 .claude
 __pycache__/
+.DS_Store
 
 # temp files
 /*.txt

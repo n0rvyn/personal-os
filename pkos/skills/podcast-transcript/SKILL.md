@@ -1,6 +1,6 @@
 ---
 name: podcast-transcript
-description: "User-invocable PKOS skill — creates a TTS-ready daily podcast transcript from preselected Personal-OS artifacts while owning podcast dedup state."
+description: This skill should be used when the user invokes "/podcast-transcript", asks to "create a daily podcast", "generate a podcast transcript", "make a TTS-ready podcast", or "produce a spoken daily briefing". Produces a deduped, TTS-ready daily podcast transcript from Personal-OS artifacts with deterministic source selection, dedup state, and history writes.
 model: sonnet
 allowed-tools:
   - Read
@@ -52,8 +52,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/podcast-transcript/scripts/podcast_sources.
   plan --date {date} --type daily --max-topics {max_topics} \
   --source-window-days {source_window_days} \
   --topic-window-days {topic_window_days} \
-  {--source-file source_file when provided} \
-  {--keep-scratch when provided} \
+  {--source-file source_file} \
+  {--keep-scratch} \
   --output {scratch_dir}/topic-plan.json
 ```
 
@@ -128,8 +128,8 @@ Report:
 
 ## Boundaries
 
-- The skill does not run audio creation.
-- The skill does not send results to messaging targets.
-- The skill does not alter daily digest behavior.
-- Downstream polish and audio steps consume the final transcript only; they do
-  not make source selection or dedup decisions.
+- Do not run audio creation (TTS, encoding, or playback).
+- Do not send results to messaging targets (email, Slack, push).
+- Do not alter daily digest behavior or output paths.
+- Ensure downstream polish and audio steps consume the final transcript only;
+  do not make source selection or dedup decisions in downstream steps.

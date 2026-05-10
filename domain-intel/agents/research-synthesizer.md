@@ -1,6 +1,7 @@
 ---
 name: research-synthesizer
 maxTurns: 30
+tools: [Read, Grep, Glob, WebSearch, WebFetch]
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
 allowed-tools:
   - Read

@@ -1,6 +1,7 @@
 ---
 name: source-scanner
 maxTurns: 30
+tools: [Read, Grep, Glob, WebSearch, WebFetch]
 allowed-tools:
   - Read
   - Grep

@@ -1,6 +1,7 @@
 ---
 name: trend-synthesizer
 maxTurns: 20
+tools: [Read, Grep, Glob]
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
 allowed-tools:
   - Read

@@ -1,6 +1,7 @@
 ---
 name: focus-evolver
 maxTurns: 15
+tools: [Read, Grep, Glob, WebSearch, WebFetch]
 disallowedTools: [Edit, Write, Bash, NotebookEdit]
 allowed-tools:
   - Read

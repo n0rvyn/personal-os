@@ -1,6 +1,7 @@
 ---
 name: insight-analyzer
 maxTurns: 20
+tools: [Read, Grep, Glob, WebSearch, WebFetch]
 allowed-tools:
   - Read
   - Grep

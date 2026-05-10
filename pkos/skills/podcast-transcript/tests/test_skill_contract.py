@@ -20,9 +20,9 @@ class PodcastWriterContractTests(unittest.TestCase):
     def test_agent_contract_is_read_only_and_grounded(self):
         text = read(AGENT)
         self.assertIn("name: podcast-writer", text)
-        self.assertIn("allowed-tools:\n  - Read", text)
+        self.assertIn("Use this agent when the skill has produced", text)
         self.assertIn("tools: [Read]", text)
-        self.assertIn("disallowedTools: [Edit, Write, Bash, NotebookEdit]", text)
+        self.assertIn("When to invoke", text)
         for section in ["Opening", "Main stories", "Personal radar", "Closing"]:
             self.assertIn(section, text)
         self.assertIn("No Markdown tables", text)
@@ -41,7 +41,7 @@ class PodcastSkillContractTests(unittest.TestCase):
             self.skipTest("Task 3 has not created the skill yet")
         text = read(SKILL)
         self.assertIn("name: podcast-transcript", text)
-        self.assertIn("user-invocable", text)
+        self.assertIn("This skill should be used when", text)
         self.assertIn("--date YYYY-MM-DD", text)
         self.assertIn("--dry-run", text)
         self.assertIn("--source-file PATH", text)

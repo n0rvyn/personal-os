@@ -902,9 +902,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan":
             plan = build_topic_plan(args)
             print(json.dumps(plan, indent=2, sort_keys=True))
-            generated_scratch_dir = getattr(args, "_generated_scratch_dir", None)
-            if generated_scratch_dir and not getattr(args, "keep_scratch", False):
-                shutil.rmtree(generated_scratch_dir, ignore_errors=True)
         elif args.command == "commit":
             result = commit_manifest(expand_path(args.manifest))
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -912,6 +909,10 @@ def main(argv: list[str] | None = None) -> int:
     except PodcastSourceError as exc:
         print(f"[podcast_sources] {exc}", file=sys.stderr)
         return 2
+    finally:
+        generated_scratch_dir = getattr(args, "_generated_scratch_dir", None)
+        if generated_scratch_dir and not getattr(args, "keep_scratch", False):
+            shutil.rmtree(generated_scratch_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

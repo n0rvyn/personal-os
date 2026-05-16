@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "plugins": [
     {
@@ -29,7 +29,7 @@
       "name": "session-reflect",
       "source": "./session-reflect",
       "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "category": "reflection",
       "tags": [
         "session-analysis",

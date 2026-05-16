@@ -23,6 +23,7 @@ REQUIRED_TOP_KEYS = {
     "assistant_turns", "plugin_events", "ai_behavior_audit", "analyzer_version",
     "session_dna", "user_prompts", "task_summary", "corrections",
     "prompt_assessments", "process_gaps",
+    "effort_level",  # Phase 5: session effort level from user prompt metadata
 }
 
 REQUIRED_TIME_KEYS = {"start", "end", "duration_min"}

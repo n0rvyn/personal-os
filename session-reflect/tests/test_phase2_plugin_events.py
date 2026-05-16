@@ -128,5 +128,48 @@ class TestCodexPhase2Defaults(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+CLAUDE_PLUGIN_SAMPLE_2_1_X = os.path.join(TEST_DATA_DIR, "claude-plugin-sample-2.1.x.jsonl")
+
+
+class TestClaudePluginEventsCurrentFields(unittest.TestCase):
+    """Tests for Claude Code 2.1.x field names: 'skill' and 'subagent_type'."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = parse_claude_session(CLAUDE_PLUGIN_SAMPLE_2_1_X)
+
+    def test_current_field_names_extracted(self):
+        """Parser correctly extracts plugin/component from 2.1.x 'skill'/'subagent_type' fields."""
+        events = self.result["plugin_events"]
+        self.assertEqual(len(events), 2, f"Expected 2 plugin events, got {len(events)}: {events}")
+
+        skill_event = events[0]
+        self.assertEqual(skill_event["component_type"], "skill")
+        self.assertEqual(skill_event["plugin"], "dev-workflow",
+                         f"Expected plugin='dev-workflow', got '{skill_event['plugin']}'")
+        self.assertEqual(skill_event["component"], "verify-plan",
+                         f"Expected component='verify-plan', got '{skill_event['component']}'")
+
+        agent_event = events[1]
+        self.assertEqual(agent_event["component_type"], "agent")
+        self.assertEqual(agent_event["plugin"], "dev-workflow",
+                         f"Expected plugin='dev-workflow', got '{agent_event['plugin']}'")
+        self.assertIn(agent_event["component"], {"plan-verifier"},
+                      f"Expected component='plan-verifier', got '{agent_event['component']}'")
+
+    def test_input_text_preserves_field_keys(self):
+        """input_text JSON preserves the original 'skill' and 'subagent_type' field keys."""
+        events = self.result["plugin_events"]
+        self.assertEqual(len(events), 2)
+
+        skill_input = events[0]["input_text"]
+        self.assertIn("skill", skill_input,
+                      f"Expected 'skill' key in input_text, got: {skill_input}")
+
+        agent_input = events[1]["input_text"]
+        self.assertIn("subagent_type", agent_input,
+                      f"Expected 'subagent_type' key in input_text, got: {agent_input}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -139,6 +139,8 @@ def parse_codex_session(filepath):
         "corrections": [],
         "prompt_assessments": [],
         "process_gaps": [],
+        # Phase 5: Codex sessions don't emit effort metadata; field kept for schema parity
+        "effort_level": None,
     }
 
 

@@ -31,11 +31,86 @@ import sessions_db  # noqa: E402
 from analyzer_version import ANALYZER_VERSION  # noqa: E402
 from compute_baselines import compute_baselines  # noqa: E402
 from link_sessions import recompute_session_links  # noqa: E402
+from parse_claude_session import parse_claude_session  # noqa: E402
 
 # Backfill runs rule-based audit only (no LLM calls, no network). Cost is the
 # local CPU work of parsing JSONL + running regex-based audit. LLM enrichment
 # cost is incurred later by /reflect --enrich on a per-session basis.
 DEFAULT_BASELINE_WINDOW = "60d"
+
+
+def _locate_jsonl(session_id: str, project_path: str):
+    """Locate the JSONL file for a session under ~/.claude/projects/.
+
+    Sanitize rule (matches Claude Code's own convention — empirically verified):
+        sanitized = project_path.replace("/", "-").replace(".", "-").lstrip("-")
+        dir name  = "-" + sanitized
+
+    Example: /Users/norvyn/.claude → "-Users-norvyn--claude" (dot replaced too)
+    Returns a Path if the file exists, None otherwise (caller skips gracefully).
+    """
+    if not project_path:
+        return None
+    # Both "/" and "." get replaced with "-" (Claude Code naming convention)
+    sanitized = project_path.replace("/", "-").replace(".", "-").lstrip("-")
+    dir_name = f"-{sanitized}"
+    jsonl_path = (
+        Path("~/.claude/projects").expanduser() / dir_name / f"{session_id}.jsonl"
+    )
+    if jsonl_path.exists():
+        return jsonl_path
+    return None
+
+
+def reparse_broken_component(dry_run: bool = False) -> dict:
+    """Find plugin_events whose component is the literal 'skill' or 'agent' (parser bug
+    from pre-2.1.x field names) and reparse their source JSONL to fix them.
+
+    Args:
+        dry_run: When True, return candidate count without doing any work.
+
+    Returns:
+        dict with keys 'sessions' (candidate count) and 'rows_updated' (0 in dry_run).
+    """
+    # Route through sessions_db._get_conn() to ensure PRAGMA foreign_keys=ON on write paths
+    # (otherwise skill_proactive_triggers ON DELETE CASCADE silently no-ops, leaking
+    # orphan rows when upsert_plugin_event does DELETE+INSERT on reparse).
+    conn = sessions_db._get_conn()
+    try:
+        broken = conn.execute("""
+            SELECT DISTINCT pe.session_id, s.project_path
+            FROM plugin_events pe
+            JOIN sessions s ON pe.session_id = s.session_id
+            WHERE pe.component IN ('skill', 'agent')
+        """).fetchall()
+    finally:
+        conn.close()
+
+    result = {"sessions": len(broken), "rows_updated": 0, "parse_failures": 0}
+    if dry_run:
+        return result
+
+    for session_id, project_path in broken:
+        jsonl = _locate_jsonl(session_id, project_path)
+        if not jsonl:
+            continue
+        # Wrap parse in try/except so one malformed JSONL doesn't terminate the entire loop
+        try:
+            parsed = parse_claude_session(str(jsonl))
+        except Exception as e:
+            print(f"[backfill] parse failed for {jsonl.name}: {e}", file=sys.stderr)
+            result["parse_failures"] += 1
+            continue
+        conn2 = sessions_db._get_conn()
+        try:
+            for event in parsed.get("plugin_events", []):
+                sessions_db.upsert_plugin_event(event, conn=conn2)
+                result["rows_updated"] += 1
+            conn2.commit()
+        finally:
+            conn2.close()
+
+    return result
 
 
 def _load_config():
@@ -228,10 +303,18 @@ def main():
                         help="Process at most N sessions this run (useful for batch chunks)")
     parser.add_argument("--bump-version", action="store_true",
                         help="Mark all checkpoints as re_analyze_pending=1 (use after analyzer changes)")
+    parser.add_argument("--reparse-broken-component", action="store_true",
+                        help="Reparse plugin_events whose component is literal 'skill'/'agent' (parser bug fix)")
     args = parser.parse_args()
 
     # Ensure DB ready
     sessions_db.init_db()
+
+    if args.reparse_broken_component:
+        result = reparse_broken_component(dry_run=False)
+        print(f"[backfill] reparse_broken_component: {result['sessions']} sessions found, "
+              f"{result['rows_updated']} rows updated")
+        return
 
     if args.bump_version:
         n = sessions_db.mark_re_analyze_pending(ANALYZER_VERSION)

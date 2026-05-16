@@ -327,3 +327,26 @@ CREATE INDEX IF NOT EXISTS idx_ai_behavior_audit_session ON ai_behavior_audit(se
 CREATE INDEX IF NOT EXISTS idx_ai_behavior_audit_rule ON ai_behavior_audit(rule_id);
 CREATE INDEX IF NOT EXISTS idx_pre_brief_hints_plugin ON pre_brief_hints(plugin, component);
 CREATE INDEX IF NOT EXISTS idx_analysis_checkpoints_pending ON analysis_checkpoints(re_analyze_pending);
+
+-- ===== Phase 5 schema extensions =====
+
+-- skill_proactive_triggers: records AI-proactive skill invocations for description-quality tuning
+-- ON DELETE CASCADE ensures rows are removed when parent plugin_events row is reparsed (DELETE+INSERT)
+CREATE TABLE IF NOT EXISTS skill_proactive_triggers (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    plugin_event_id             INTEGER NOT NULL,
+    user_prompt_excerpt         TEXT,               -- raw user text (≤500 chars); stored as-is (local SQLite only)
+    skill_description_snapshot  TEXT,               -- NULL until reader joins with plugin description at query time
+    triggered_correctly         INTEGER,            -- 1 if user accepted outcome; 0 if correction cue within 3 turns
+    FOREIGN KEY (plugin_event_id) REFERENCES plugin_events(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_proactive_triggers_event
+    ON skill_proactive_triggers(plugin_event_id);
+
+-- Phase 5 additive columns (applied via migrate_schema() in sessions_db.py, not ALTER here):
+-- plugin_events.invocation_trigger TEXT   -- 'user-slash' | 'claude-proactive' | 'nested-skill'
+-- plugin_events.duration_ms        INTEGER -- (tool_result.ts - tool_use.ts) * 1000, rounded
+-- plugin_events.parent_tool_use_id TEXT   -- outer Agent tool_use_id for nested skills; NULL otherwise
+-- plugin_events.cwd                TEXT   -- record-level cwd at tool_use time (reflects worktree switches)
+-- sessions.effort_level            TEXT   -- effort.level from user prompt entry metadata (NULL if not emitted)

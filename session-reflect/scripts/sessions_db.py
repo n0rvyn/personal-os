@@ -21,8 +21,11 @@ def set_db_path(path):
 
 def migrate_schema():
     """Apply additive schema migrations (idempotent). Run after init_db()."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     try:
+        # Phase 5: enable FK enforcement (required for ON DELETE CASCADE on skill_proactive_triggers)
+        conn.execute("PRAGMA foreign_keys = ON")
+
         # Phase 1: Add analyzer_version column to sessions table
         cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
         if "analyzer_version" not in cols:
@@ -39,6 +42,42 @@ def migrate_schema():
             conn.execute("ALTER TABLE sessions ADD COLUMN enrichment_pending INTEGER DEFAULT 1")
         if "enriched_at" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN enriched_at TEXT")
+
+        # Phase 5: plugin_events 4 new columns (guard: table may not exist in minimal test DBs)
+        pe_cols = {row[1] for row in conn.execute("PRAGMA table_info(plugin_events)").fetchall()}
+        if pe_cols:  # table exists
+            if "invocation_trigger" not in pe_cols:
+                conn.execute("ALTER TABLE plugin_events ADD COLUMN invocation_trigger TEXT")
+            if "duration_ms" not in pe_cols:
+                conn.execute("ALTER TABLE plugin_events ADD COLUMN duration_ms INTEGER")
+            if "parent_tool_use_id" not in pe_cols:
+                conn.execute("ALTER TABLE plugin_events ADD COLUMN parent_tool_use_id TEXT")
+            if "cwd" not in pe_cols:
+                conn.execute("ALTER TABLE plugin_events ADD COLUMN cwd TEXT")
+
+        # Phase 5: sessions effort_level
+        session_cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "effort_level" not in session_cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN effort_level TEXT")
+
+        # Phase 5: skill_proactive_triggers table (ON DELETE CASCADE ensures no orphan rows after reparse)
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "skill_proactive_triggers" not in tables:
+            conn.execute("""
+                CREATE TABLE skill_proactive_triggers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    plugin_event_id INTEGER NOT NULL,
+                    user_prompt_excerpt TEXT,
+                    skill_description_snapshot TEXT,
+                    triggered_correctly INTEGER,
+                    FOREIGN KEY (plugin_event_id) REFERENCES plugin_events(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX idx_skill_proactive_triggers_event"
+                " ON skill_proactive_triggers(plugin_event_id)")
+
         conn.commit()
     finally:
         conn.close()
@@ -48,7 +87,7 @@ def init_db():
     """Create all tables if not exist. Run on first use."""
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     schema_path = Path(__file__).parent / "sessions-schema.sql"
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     with open(schema_path) as f:
         conn.executescript(f.read())
     conn.close()
@@ -57,10 +96,21 @@ def init_db():
 
 def _get_conn(read_only=False):
     """Get a database connection. For read-only access during active sessions,
-    use file:{path}?mode=ro URI to prevent locking. For writes use regular connect."""
+    use file:{path}?mode=ro URI to prevent locking. For writes use regular connect.
+
+    Phase 5: write connections always enable PRAGMA foreign_keys=ON so that
+    ON DELETE CASCADE (e.g. skill_proactive_triggers → plugin_events) fires
+    correctly. FK enforcement is connection-scoped — setting it once in
+    migrate_schema() is not sufficient for production write paths.
+    """
+    # Local alias to keep replace-all-safe: replacing `_get_conn()`
+    # elsewhere with `_get_conn()` must not turn this helper into infinite recursion.
+    from sqlite3 import connect as _sqlite_connect
     if read_only:
-        return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-    return sqlite3.connect(DB_PATH)
+        return _sqlite_connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    conn = _sqlite_connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def upsert_session(session_id: str, session_data: dict):
@@ -71,14 +121,15 @@ def upsert_session(session_id: str, session_data: dict):
     or analyzer-version bump) must not wipe the enrichment state and silently
     re-queue LLM work.
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     conn.execute("""
         INSERT INTO sessions (
             session_id, source, project, project_path, branch, model,
             time_start, time_end, duration_min, turns_user, turns_asst,
             tokens_in, tokens_out, cache_read, cache_create, cache_hit_rate,
-            analyzer_version, session_dna, task_summary, analyzed_at, outcome
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            analyzer_version, session_dna, task_summary, analyzed_at, outcome,
+            effort_level
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             source          = excluded.source,
             project         = excluded.project,
@@ -99,7 +150,8 @@ def upsert_session(session_id: str, session_data: dict):
             session_dna     = excluded.session_dna,
             task_summary    = excluded.task_summary,
             analyzed_at     = excluded.analyzed_at,
-            outcome         = excluded.outcome
+            outcome         = excluded.outcome,
+            effort_level    = excluded.effort_level
             -- enrichment_pending and enriched_at deliberately NOT updated
     """, (
         session_id,
@@ -123,6 +175,7 @@ def upsert_session(session_id: str, session_data: dict):
         session_data.get("task_summary"),
         session_data.get("analyzed_at") or datetime.now().isoformat(),
         session_data.get("outcome"),
+        session_data.get("effort_level"),
     ))
     conn.commit()
     conn.close()
@@ -130,7 +183,7 @@ def upsert_session(session_id: str, session_data: dict):
 
 def update_session_dna(session_id: str, session_dna: str):
     """Update session_dna for an existing session after enrichment."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     try:
         conn.execute(
             "UPDATE sessions SET session_dna = ? WHERE session_id = ?",
@@ -143,7 +196,7 @@ def update_session_dna(session_id: str, session_dna: str):
 
 def upsert_tool_calls(session_id: str, tool_calls: list):
     """Insert tool call sequence into tool_calls table."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     # Delete existing tool calls for this session (upsert behavior)
     conn.execute("DELETE FROM tool_calls WHERE session_id = ?", (session_id,))
     for idx, tc in enumerate(tool_calls):
@@ -363,7 +416,7 @@ def replace_session_links(source_session_ids, links, conn=None):
     """Replace all session_links rows for the provided source sessions."""
     if not source_session_ids:
         return
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         placeholders = ",".join("?" for _ in source_session_ids)
@@ -712,7 +765,7 @@ def query_baselines(window_spec=None, plugin=None, component=None, metric_name=N
 
 def delete_baselines(plugin=None, component=None, window_spec=None, conn=None):
     """Delete baseline rows matching the provided filters."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         query = "DELETE FROM baselines WHERE 1=1"
@@ -846,7 +899,7 @@ def get_session_ids(exclude_analyzed=False):
 
 def mark_analyzed(session_ids: list):
     """Mark sessions as analyzed (idempotent)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     for sid in session_ids:
         conn.execute("""
             INSERT OR IGNORE INTO sessions (session_id, analyzed_at)
@@ -906,7 +959,7 @@ def migrate_from_analyzed_sessions():
         return 0, "empty"
     count = 0
     for session_id, date_str in data.items():
-        conn = sqlite3.connect(DB_PATH)
+        conn = _get_conn()
         conn.execute("""
             INSERT OR IGNORE INTO sessions (session_id, analyzed_at)
             VALUES (?, ?)
@@ -919,7 +972,7 @@ def migrate_from_analyzed_sessions():
 
 def upsert_session_features(session_id: str, data: dict, conn=None):
     """Upsert per-session feature snapshot. significance stored in analysis_meta."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -954,7 +1007,7 @@ def upsert_context_gaps(session_id: str, gaps: list, conn=None):
     """Delete existing then insert new context gaps for a session."""
     if not gaps:
         return
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("DELETE FROM context_gaps WHERE session_id = ?", (session_id,))
@@ -972,7 +1025,7 @@ def upsert_context_gaps(session_id: str, gaps: list, conn=None):
 
 def upsert_token_audit(session_id: str, data: dict, conn=None):
     """Upsert token efficiency audit for a session."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -994,7 +1047,7 @@ def upsert_token_audit(session_id: str, data: dict, conn=None):
 
 def upsert_session_outcomes(session_id: str, data: dict, conn=None):
     """Upsert session outcome record."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -1018,7 +1071,7 @@ def upsert_skill_invocations(session_id: str, invocations: list, conn=None):
     """Delete existing then insert skill invocation records."""
     if not invocations:
         return
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("DELETE FROM skill_invocations WHERE session_id = ?", (session_id,))
@@ -1036,7 +1089,7 @@ def upsert_skill_invocations(session_id: str, invocations: list, conn=None):
 
 def upsert_error_patterns(data: dict, conn=None):
     """Upsert a global error pattern entry. Called once per unique pattern."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -1062,7 +1115,7 @@ def upsert_file_graph(entries: list, conn=None):
     """Upsert file graph entries. Uses ON CONFLICT DO UPDATE for incremental counts."""
     if not entries:
         return
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         for e in entries:
@@ -1093,7 +1146,7 @@ def upsert_file_graph(entries: list, conn=None):
 
 def upsert_rhythm_stats(session_id: str, data: dict, conn=None):
     """Upsert session rhythm statistics."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -1114,7 +1167,7 @@ def upsert_rhythm_stats(session_id: str, data: dict, conn=None):
 
 def enrich_session(session_id: str, enrichment: dict):
     """Bulk upsert all dimension data for a session in a single transaction. Call after upsert_session."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     try:
         if "session_features" in enrichment:
             _d = dict(enrichment["session_features"])
@@ -1144,21 +1197,33 @@ def enrich_session(session_id: str, enrichment: dict):
 # ===== Phase 1 dual-loop helpers =====
 
 def upsert_plugin_event(event: dict, conn=None):
-    """Insert a plugin_events row. Idempotent on (session_id, tool_use_id) — replaces if exists."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    """Insert a plugin_events row. Idempotent on (session_id, tool_use_id) — replaces if exists.
+
+    Phase 5: adds invocation_trigger, duration_ms, parent_tool_use_id, cwd columns.
+    If event carries '_proactive_trigger', also writes a skill_proactive_triggers row.
+    FK CASCADE (ON DELETE CASCADE) handles cleanup of old trigger rows when plugin_events
+    row is deleted before re-insert (requires PRAGMA foreign_keys=ON on the connection).
+    """
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
+    # Pop internal fields before INSERT
+    proactive_trigger = event.pop("_proactive_trigger", None)
+    event.pop("_agent_stack_snapshot", None)
+    event.pop("_result_at", None)
     try:
         # Idempotent: delete existing row for same (session_id, tool_use_id) before insert
+        # FK ON DELETE CASCADE will remove linked skill_proactive_triggers rows (if FK enforced)
         _conn.execute(
             "DELETE FROM plugin_events WHERE session_id = ? AND tool_use_id = ?",
             (event.get("session_id"), event.get("tool_use_id")),
         )
-        _conn.execute("""
+        cursor = _conn.execute("""
             INSERT INTO plugin_events (
                 session_id, tool_use_id, component_type, plugin, component,
                 invoked_at, input_text, result_text, result_ok,
-                agent_turns_used, agent_max_turns, model_override, post_dispatch_signals
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                agent_turns_used, agent_max_turns, model_override, post_dispatch_signals,
+                invocation_trigger, duration_ms, parent_tool_use_id, cwd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.get("session_id"),
             event.get("tool_use_id"),
@@ -1173,7 +1238,14 @@ def upsert_plugin_event(event: dict, conn=None):
             event.get("agent_max_turns"),
             event.get("model_override"),
             json.dumps(event.get("post_dispatch_signals")) if event.get("post_dispatch_signals") else None,
+            event.get("invocation_trigger"),
+            event.get("duration_ms"),
+            event.get("parent_tool_use_id"),
+            event.get("cwd"),
         ))
+        plugin_event_id = cursor.lastrowid
+        if proactive_trigger is not None:
+            upsert_skill_proactive_trigger(proactive_trigger, plugin_event_id, _conn)
         if _close:
             _conn.commit()
     finally:
@@ -1181,9 +1253,30 @@ def upsert_plugin_event(event: dict, conn=None):
             _conn.close()
 
 
+def upsert_skill_proactive_trigger(trigger: dict, plugin_event_id: int, conn):
+    """Insert one skill_proactive_triggers row linked to a plugin_events row.
+
+    Called immediately after upsert_plugin_event INSERT to associate the trigger record.
+    Old trigger rows are handled by FK CASCADE on the DELETE-before-INSERT in
+    upsert_plugin_event (requires PRAGMA foreign_keys=ON on the connection).
+    No dedup needed: the DELETE+INSERT pattern in upsert_plugin_event produces a new
+    plugin_event_id each reparse, so this always inserts fresh.
+    """
+    conn.execute("""
+        INSERT INTO skill_proactive_triggers
+            (plugin_event_id, user_prompt_excerpt, skill_description_snapshot, triggered_correctly)
+        VALUES (?, ?, ?, ?)
+    """, (
+        plugin_event_id,
+        trigger.get("user_prompt_excerpt"),
+        trigger.get("skill_description_snapshot"),
+        trigger.get("triggered_correctly"),
+    ))
+
+
 def upsert_plugin_change(change: dict, conn=None):
     """Insert a plugin_changes row. Idempotent on commit_hash + component."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute(
@@ -1210,7 +1303,7 @@ def upsert_plugin_change(change: dict, conn=None):
 
 def upsert_checkpoint(session_id: str, analyzer_version: str, conn=None):
     """Record successful analysis of a session. Clears re_analyze_pending."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -1227,7 +1320,7 @@ def upsert_checkpoint(session_id: str, analyzer_version: str, conn=None):
 def mark_re_analyze_pending(current_version: str):
     """Mark all checkpoints whose analyzer_version != current_version as re_analyze_pending=1.
     Called after analyzer version bump."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     try:
         cursor = conn.execute(
             "UPDATE analysis_checkpoints SET re_analyze_pending = 1 WHERE analyzer_version != ?",
@@ -1260,7 +1353,7 @@ def get_pending_session_ids(limit=None):
 
 def set_enrichment_pending(session_id: str, pending: int = 1, conn=None):
     """Set the LLM-enrichment pending flag for a session row."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute(
@@ -1316,7 +1409,7 @@ def mark_enriched(session_id: str, dimensions: dict = None, audit_rows: list = N
     receives structured JSON back. Writes dimension tables, audit rows, and
     sets enriched_at.
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = _get_conn()
     try:
         if session_dna is not None:
             conn.execute(
@@ -1344,7 +1437,7 @@ def mark_enriched(session_id: str, dimensions: dict = None, audit_rows: list = N
 
 def upsert_baseline(baseline: dict, conn=None):
     """Append a baselines row (history kept; query latest by computed_at DESC)."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("""
@@ -1374,7 +1467,7 @@ def upsert_baseline(baseline: dict, conn=None):
 
 def upsert_knowledge_distilled(entry: dict, conn=None):
     """Idempotent on content_hash. Merges session_ids array if duplicate hash found."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         existing = _conn.execute(
@@ -1414,7 +1507,7 @@ def upsert_knowledge_distilled(entry: dict, conn=None):
 
 def upsert_session_link(link: dict, conn=None):
     """Insert a session link edge. Idempotent on (source, target, link_type)."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute(
@@ -1441,7 +1534,7 @@ def upsert_session_link(link: dict, conn=None):
 
 def upsert_pre_brief_hint(hint: dict, conn=None):
     """Insert or update a pre_brief_hint. Identity = (plugin, component, pattern_text)."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         existing = _conn.execute(
@@ -1490,7 +1583,7 @@ def upsert_pre_brief_hint(hint: dict, conn=None):
 
 def upsert_ai_behavior_audit(session_id: str, audits: list, conn=None):
     """Replace all audit rows for a session. audits = list of {turn, rule_category, rule_id, hit, evidence}."""
-    _conn = conn if conn else sqlite3.connect(DB_PATH)
+    _conn = conn if conn else _get_conn()
     _close = not bool(conn)
     try:
         _conn.execute("DELETE FROM ai_behavior_audit WHERE session_id = ?", (session_id,))

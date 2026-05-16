@@ -39,6 +39,7 @@ ADOPT_CUES = re.compile(
 )
 TURNS_USED_PATTERN = re.compile(r"turns?\s*used[:=]?\s*(\d+)", re.IGNORECASE)
 TURN_RATIO_PATTERN = re.compile(r"(\d+)\s*/\s*(\d+)")
+COMMAND_NAME_PATTERN = re.compile(r"<command-name>(/[^<]+)</command-name>")
 
 
 def parse_claude_session(filepath):
@@ -70,6 +71,13 @@ def parse_claude_session(filepath):
     assistant_turns_by_id = {}
     tool_uses = {}
     plugin_event_order = []
+    # Phase 5: per-tool-use record context (cwd, isSidechain)
+    tool_use_record_cwd = {}   # tool_use_id -> cwd at time of tool_use
+    tool_use_is_sidechain = {}  # tool_use_id -> bool
+    # Phase 5: stack of active outer Agent tool_use_ids for nested-skill detection
+    agent_stack = []
+    # Phase 5: session effort_level (from user prompt entry metadata)
+    effort_level = None
 
     with open(filepath, "r") as f:
         for line in f:
@@ -93,6 +101,11 @@ def parse_claude_session(filepath):
             if not branch and record.get("gitBranch"):
                 branch = record["gitBranch"]
 
+            # Phase 5: capture record-level isSidechain flag
+            record_is_sidechain = bool(record.get("isSidechain", False))
+            # Phase 5: capture record-level cwd (may differ from session cwd in worktree switches)
+            record_cwd = record.get("cwd")
+
             if rtype == "user":
                 user_turns += 1
                 msg = record.get("message", {})
@@ -109,6 +122,13 @@ def parse_claude_session(filepath):
                         }
                     )
 
+                # Phase 5: capture effort.level from user message metadata
+                # effort field lives at message["effort"]["level"] per fixture structure
+                if effort_level is None:
+                    msg_effort = msg.get("effort")
+                    if isinstance(msg_effort, dict) and msg_effort.get("level"):
+                        effort_level = msg_effort["level"]
+
                 if isinstance(content, list):
                     for block in content:
                         if not isinstance(block, dict) or block.get("type") != "tool_result":
@@ -121,6 +141,7 @@ def parse_claude_session(filepath):
                                 tool_uses[tool_use_id],
                                 result_text=result_text,
                                 is_error=is_error,
+                                result_at=ts,
                             )
                             _attach_turn_tool_result(
                                 assistant_turns_by_id[tool_uses[tool_use_id]["assistant_message_id"]],
@@ -134,6 +155,11 @@ def parse_claude_session(filepath):
                                 is_error,
                                 current_errors=(bash_errors, build_attempts, build_failures),
                             )
+                            # Phase 5: when tool_result for an Agent arrives, pop from stack
+                            if (tool_use_id in tool_uses
+                                    and tool_uses[tool_use_id].get("tool_name") == "Agent"
+                                    and agent_stack and agent_stack[-1] == tool_use_id):
+                                agent_stack.pop()
 
             elif rtype == "assistant":
                 msg = record.get("message", {})
@@ -197,9 +223,17 @@ def parse_claude_session(filepath):
                             tool_id=tool_id,
                             tool_input=inp,
                         )
+                        # Phase 5: store record-level context for finalization
+                        tool_use_record_cwd[tool_id] = record_cwd
+                        tool_use_is_sidechain[tool_id] = record_is_sidechain
+                        # Phase 5: capture current agent stack snapshot for nested detection
+                        event["_agent_stack_snapshot"] = list(agent_stack)
                         tool_uses[tool_id] = event
                         if tool_name in {"Skill", "Agent"}:
                             plugin_event_order.append(tool_id)
+                            # Phase 5: push Agent tool_use_id onto stack AFTER recording snapshot
+                            if tool_name == "Agent":
+                                agent_stack.append(tool_id)
 
     time_start = timestamps[0] if timestamps else None
     time_end = timestamps[-1] if timestamps else None
@@ -221,6 +255,79 @@ def parse_claude_session(filepath):
             event.get("invoked_at"),
             next_invoked_at,
         )
+
+        # Phase 5: populate 4 new columns
+        event_tool_id = event.get("tool_use_id", tool_use_id)
+        ev_cwd = tool_use_record_cwd.get(event_tool_id)
+        ev_is_sidechain = tool_use_is_sidechain.get(event_tool_id, False)
+        ev_stack = event.pop("_agent_stack_snapshot", [])
+
+        # cwd: per-event record cwd (may differ from session cwd in worktree switches)
+        event["cwd"] = ev_cwd
+
+        # duration_ms: tool_result.timestamp - tool_use.timestamp in milliseconds
+        invoked_at = event.get("invoked_at")
+        result_at = event.get("_result_at")
+        event.pop("_result_at", None)
+        if invoked_at and result_at:
+            try:
+                t_start = datetime.fromisoformat(invoked_at.replace("Z", "+00:00"))
+                t_end = datetime.fromisoformat(result_at.replace("Z", "+00:00"))
+                event["duration_ms"] = int((t_end - t_start).total_seconds() * 1000)
+            except (ValueError, TypeError):
+                event["duration_ms"] = None
+
+        # invocation_trigger and parent_tool_use_id
+        # Scan user_prompt_events in window (prev_event_invoked_at, current_invoked_at] for a
+        # slash command. Use ANY-match semantics — defends against Claude Code's same-timestamp
+        # preamble injection ("Base directory for this skill: ...") which would otherwise
+        # overshadow the actual slash text under a "last-match-wins" loop and silently
+        # mislabel every user-slash invocation as claude-proactive.
+        invoked_ts = event.get("invoked_at")
+        prev_invoked_ts = None
+        if idx > 0:
+            prev_invoked_ts = tool_uses[plugin_event_order[idx - 1]].get("invoked_at")
+
+        window_user_texts = []
+        for upe in user_prompt_events:
+            ts = upe.get("timestamp")
+            if not ts or not invoked_ts:
+                continue
+            if ts > invoked_ts:
+                break
+            if prev_invoked_ts is None or ts > prev_invoked_ts:
+                window_user_texts.append(upe.get("text", ""))
+
+        # preceding_user_text: LAST non-empty message in window (for proactive_trigger excerpt)
+        preceding_user_text = ""
+        for text in reversed(window_user_texts):
+            if text:
+                preceding_user_text = text
+                break
+
+        any_slash_in_window = any(COMMAND_NAME_PATTERN.search(t) for t in window_user_texts)
+
+        if any_slash_in_window:
+            event["invocation_trigger"] = "user-slash"
+            event["parent_tool_use_id"] = None
+        elif ev_is_sidechain or ev_stack:
+            event["invocation_trigger"] = "nested-skill"
+            event["parent_tool_use_id"] = ev_stack[-1] if ev_stack else None
+        else:
+            event["invocation_trigger"] = "claude-proactive"
+            event["parent_tool_use_id"] = None
+
+        # Phase 5: proactive trigger row for claude-proactive skill events
+        if (event.get("invocation_trigger") == "claude-proactive"
+                and event.get("component_type") == "skill"):
+            has_correction = _has_correction_within_3_turns(event, user_prompt_events, invoked_ts)
+            trigger = {
+                "user_prompt_excerpt": preceding_user_text[:500],
+                "skill_description_snapshot": None,  # filled by reader join in Phase 2
+                "triggered_correctly": 0 if has_correction else 1,
+            }
+            event["_proactive_trigger"] = trigger
+
         plugin_events.append(event)
 
     return {
@@ -272,6 +379,11 @@ def parse_claude_session(filepath):
         "corrections": [],
         "prompt_assessments": [],
         "process_gaps": [],
+        # Phase 5: session-level effort_level (from user prompt entry metadata)
+        # AWAITING future Claude Code version emit effort.level in JSONL;
+        # design doc §5b E4 mentions hook-level emission but JSONL not yet observed
+        # in 2.1.143. Parser keeps schema column ready, writes NULL until field appears.
+        "effort_level": effort_level,
     }
 
 
@@ -352,7 +464,8 @@ def _compact_tool_input(tool_name, tool_input):
     elif tool_name == "Bash":
         keys = ("command",)
     elif tool_name in {"Skill", "Agent"}:
-        keys = ("command", "skill_name", "agent_type", "task", "args", "model", "max_turns")
+        keys = ("command", "skill", "skill_name", "subagent_type", "agent_type",
+                "task", "prompt", "args", "model", "max_turns")
     else:
         keys = tuple(tool_input.keys())
     compact = {}
@@ -373,6 +486,11 @@ def _build_tool_use_event(session_id, message_id, timestamp, tool_name, tool_id,
         "input_text": json.dumps(tool_input, ensure_ascii=False, sort_keys=True) if isinstance(tool_input, dict) else str(tool_input),
         "result_text": "",
         "result_ok": 1,
+        # Phase 5 new fields (populated during finalization)
+        "invocation_trigger": None,
+        "duration_ms": None,
+        "parent_tool_use_id": None,
+        "cwd": None,
     }
     if tool_name in {"Skill", "Agent"}:
         plugin, component = _extract_plugin_component(tool_name, tool_input)
@@ -396,8 +514,10 @@ def _extract_plugin_component(tool_name, tool_input):
     if isinstance(tool_input, dict):
         candidates = (
             tool_input.get("command"),
-            tool_input.get("skill_name"),
-            tool_input.get("agent_type"),
+            tool_input.get("skill"),         # current Claude Code 2.1.x Skill input field
+            tool_input.get("skill_name"),    # legacy backwards compat
+            tool_input.get("subagent_type"), # current Claude Code 2.1.x Agent input field
+            tool_input.get("agent_type"),    # legacy backwards compat
             tool_input.get("name"),
         )
         for candidate in candidates:
@@ -432,18 +552,41 @@ def _extract_agent_turn_counts(result_text, tool_input):
     return used_turns, max_turns
 
 
-def _attach_tool_result(event, result_text, is_error):
+def _attach_tool_result(event, result_text, is_error, result_at=None):
     """Update a normalized tool-use event with tool_result content."""
     if result_text:
         event["result_text"] = f"{event['result_text']}\n{result_text}".strip() if event["result_text"] else result_text
     if is_error:
         event["result_ok"] = 0
+    # Phase 5: store tool_result timestamp for duration_ms calculation
+    if result_at and "_result_at" not in event:
+        event["_result_at"] = result_at
     if event.get("component_type") == "agent":
         used_turns, max_turns = _extract_agent_turn_counts(event.get("result_text", ""), {"max_turns": event.get("agent_max_turns")})
         if used_turns is not None:
             event["agent_turns_used"] = used_turns
         if max_turns is not None:
             event["agent_max_turns"] = max_turns
+
+
+def _has_correction_within_3_turns(event, all_user_turns, invoked_ts=None):
+    """Return True if a CORRECTION_CUES match appears in the 3 user turns after this event.
+
+    Signature accepts (event, all_user_turns) — when invoked_ts is None (e.g. unit tests
+    passing an empty event {}), the list is treated directly as the following turns.
+    When invoked_ts is provided, turns are filtered to those after invoked_ts.
+    """
+    if invoked_ts is None:
+        # Unit test mode: treat all_user_turns directly as the following turns
+        following = all_user_turns[:3]
+    else:
+        following = []
+        for upe in all_user_turns:
+            if upe.get("timestamp") and upe["timestamp"] > invoked_ts:
+                following.append(upe)
+                if len(following) >= 3:
+                    break
+    return any(CORRECTION_CUES.search(upe.get("text", "")) for upe in following)
 
 
 def _attach_turn_tool_result(assistant_turn, tool_use_id, result_text, is_error):

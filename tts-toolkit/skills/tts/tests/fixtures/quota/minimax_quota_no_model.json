@@ -1,0 +1,9 @@
+{
+  "model_remains": [
+    {
+      "model_name": "speech-turbo",
+      "current_interval_usage_count": 500,
+      "current_interval_total_count": 10000
+    }
+  ]
+}

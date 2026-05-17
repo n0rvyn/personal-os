@@ -15,6 +15,7 @@ on:
           - youtube-scout
           - pkos
           - portfolio-lens
+          - tts-toolkit
           - all
       bump:
         description: "Semver bump type"
@@ -79,7 +80,7 @@ jobs:
           }
 
           if [[ "$TARGET" == "all" ]]; then
-            PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens")
+            PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens" "tts-toolkit")
           else
             PLUGINS=("$TARGET")
           fi

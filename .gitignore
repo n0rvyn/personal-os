@@ -24,3 +24,6 @@ __pycache__/
 # User secrets: never commit .env files (only .env.example)
 **/.env
 !**/.env.example
+
+# Worktrees
+.worktrees/

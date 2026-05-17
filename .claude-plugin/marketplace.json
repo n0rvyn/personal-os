@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "plugins": [
     {
@@ -76,7 +76,7 @@
       "name": "pkos",
       "source": "./pkos",
       "description": "Personal Knowledge Operating System: automated knowledge compilation for Obsidian vaults, IEF ingestion, digest generation, and cross-source signal aggregation",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "category": "knowledge",
       "tags": [
         "knowledge-management",
@@ -105,7 +105,7 @@
       "name": "tts-toolkit",
       "source": "./tts-toolkit",
       "description": "Unified TTS skill across Volcengine (Doubao) and MiniMax with cross-vendor voice catalog, provider-quirk references, and chunk/merge scripts for long-form audio.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "audio",
       "tags": [
         "tts",

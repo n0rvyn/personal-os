@@ -5,6 +5,8 @@
 #   - Audio payload returned in `.data` is base64 (NOT hex like MiniMax)
 #   - Voice must be ¥0-authorized in the console first or returns 3001
 #   - Per-call text limit ~1024 UTF-8 bytes (~280 chars Chinese); caller must pre-chunk
+#   - X-Api-Resource-Id (required by doc): seed-tts-1.0 / seed-tts-1.0-concurr / seed-tts-2.0 / seed-icl-2.0.
+#     Voice ID and Resource-Id must be paired correctly — see references/voice-catalog.md.
 #
 # Args (positional):
 #   $1 text       — raw text (≤ ~280 chars)
@@ -15,7 +17,8 @@
 #
 # Env:
 #   VOLC_TTS_APPID, VOLC_TTS_TOKEN (required)
-#   VOLC_TTS_CLUSTER (default volcano_tts)
+#   VOLC_TTS_CLUSTER    (default volcano_tts)
+#   VOLC_TTS_RESOURCE_ID (default seed-tts-1.0)
 #
 # Exit codes: 0 success / 2 missing env / 3 API error
 
@@ -36,6 +39,7 @@ if [[ -z "${VOLC_TTS_TOKEN:-}" ]]; then
     exit 2
 fi
 cluster="${VOLC_TTS_CLUSTER:-volcano_tts}"
+resource_id="${VOLC_TTS_RESOURCE_ID:-seed-tts-1.0}"
 
 endpoint="https://openspeech.bytedance.com/api/v1/tts"
 reqid="$(uuidgen 2>/dev/null || python3 -c 'import uuid;print(uuid.uuid4())')"
@@ -54,6 +58,7 @@ print(json.dumps({
 response="$(curl -sS \
   -H "Authorization: Bearer;${VOLC_TTS_TOKEN}" \
   -H "Content-Type: application/json" \
+  -H "X-Api-Resource-Id: ${resource_id}" \
   --data-binary "$body" \
   --max-time 60 \
   "$endpoint")" || {

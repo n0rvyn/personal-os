@@ -12,6 +12,7 @@ Multi-plugin marketplace for Personal OS data plugins: health intelligence, sess
 | youtube-scout | intelligence | YouTube video intelligence: scrape, transcript extraction, IEF-compliant export |
 | pkos | productivity | Personal Knowledge Operating System: inbox, signal, digest, vault operations |
 | portfolio-lens | product | Indie project portfolio management: scan, progress pulse, verdict refresh |
+| tts-toolkit | audio | Unified TTS across Volcengine (Doubao) and MiniMax: voice-prefix routing, cross-vendor catalog, chunk+concat for long-form audio |
 
 See [personal-os-spec.md](./docs/personal-os-spec.md) for the shared config contract and IEF exchange conventions.
 
@@ -32,6 +33,7 @@ Install plugins:
 /plugin install youtube-scout@personal-os
 /plugin install pkos@personal-os
 /plugin install portfolio-lens@personal-os
+/plugin install tts-toolkit@personal-os
 ```
 
 ## Repository Layout
@@ -44,6 +46,7 @@ Install plugins:
 ├── youtube-scout/
 ├── pkos/
 ├── portfolio-lens/
+├── tts-toolkit/
 ├── docs/
 │   ├── personal-os-spec.md
 │   └── ief-format.md

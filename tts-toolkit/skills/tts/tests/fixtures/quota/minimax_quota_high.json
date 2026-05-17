@@ -1,0 +1,9 @@
+{
+  "model_remains": [
+    {
+      "model_name": "speech-hd",
+      "current_interval_usage_count": 15000,
+      "current_interval_total_count": 19000
+    }
+  ]
+}

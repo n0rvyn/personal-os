@@ -2,40 +2,74 @@
 # tts-toolkit entry point. Routes to a provider script by voice-id prefix.
 #
 # Modes:
-#   Single:  --text <s> --voice <id> --output <path> [--speed --rate]
-#   Batch:   --input <md> --voice <id> --output <mp3> [--speed --rate --max-chars]
+#   Single:   --text <s>       --voice <id> --output <path> [--speed --rate]
+#   Batch:    --input <md>     --voice <id> --output <path> [--speed --rate --max-chars --concurrency]
+#   Segments: --segments <json> --voice <id> --output <path> [--speed --rate --concurrency]
 #
 # Voice prefix routing:
 #   volc-* → providers/volcengine.sh
-#   mm-*   → providers/minimax.sh   (skeleton; returns 2 until implemented)
+#   mm-*   → providers/minimax.sh
+#
+# Env overrides (for tests / CI):
+#   TTS_PROVIDER_OVERRIDE  — path to a stub provider script (bypasses prefix routing)
+#   TTS_CHUNKER_PATH       — override path to chunker.py (bypasses auto-detection)
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# Repo-root resolution: synth.sh lives at tts-toolkit/skills/tts/scripts/
+# pkos sibling is 4 levels up from HERE.
+REPO_ROOT="$(cd "$HERE/../../../.." && pwd)"
+TTS_CHUNKER="${TTS_CHUNKER_PATH:-$REPO_ROOT/pkos/skills/text-to-segments/scripts/chunker.py}"
+if [[ ! -f "$TTS_CHUNKER" ]]; then
+    echo "synth: text-to-segments chunker not found at $TTS_CHUNKER (set TTS_CHUNKER_PATH)" >&2
+    exit 1
+fi
+
 text=""
 input=""
+segments=""
 voice=""
 output=""
 speed="1.0"
 rate="24000"
 max_chars="280"
+concurrency=3
+model=""
+provider_override="${TTS_PROVIDER_OVERRIDE:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --text) text="$2"; shift 2;;
-        --input) input="$2"; shift 2;;
-        --voice) voice="$2"; shift 2;;
-        --output) output="$2"; shift 2;;
-        --speed) speed="$2"; shift 2;;
-        --rate) rate="$2"; shift 2;;
-        --max-chars) max_chars="$2"; shift 2;;
+        --text)              text="$2";              shift 2;;
+        --input)             input="$2";             shift 2;;
+        --segments)          segments="$2";          shift 2;;
+        --voice)             voice="$2";             shift 2;;
+        --output)            output="$2";            shift 2;;
+        --speed)             speed="$2";             shift 2;;
+        --rate)              rate="$2";              shift 2;;
+        --max-chars)         max_chars="$2";         shift 2;;
+        --concurrency)       concurrency="$2";       shift 2;;
+        --model)             model="$2";             shift 2;;
+        --provider-override) provider_override="$2"; shift 2;;
         -h|--help)
             cat <<'EOF'
 Usage:
-  synth.sh --text <s>   --voice <id> --output <path> [--speed 1.0 --rate 24000]
-  synth.sh --input <md> --voice <id> --output <path> [--speed 1.0 --rate 24000 --max-chars 280]
+  synth.sh --text <s>        --voice <id> --output <path> [--speed 1.0] [--rate 24000]
+  synth.sh --input <md>      --voice <id> --output <path> [--speed 1.0] [--rate 24000] [--max-chars 280] [--concurrency 3]
+  synth.sh --segments <json> --voice <id> --output <path> [--speed 1.0] [--rate 24000] [--concurrency 3]
 
-Voice prefix: volc-* (Volcengine), mm-* (MiniMax — skeleton)
+Voice prefix routing:
+  volc-*  Volcengine (Doubao) TTS
+  mm-*    MiniMax TTS
+
+Flags:
+  --model <name>       MiniMax model name (default: speech-2.8-hd); env MINIMAX_MODEL also works
+  --concurrency <N>    Max parallel provider calls for batch/segments mode (default: 3)
+  --max-chars <N>      Max chars per chunk when using --input mode (default: 280)
+
+Env:
+  TTS_PROVIDER_OVERRIDE  Override provider script path (for tests)
+  TTS_CHUNKER_PATH       Override path to text-to-segments chunker.py
 EOF
             exit 0;;
         *) echo "unknown arg: $1" >&2; exit 1;;
@@ -45,14 +79,21 @@ done
 if [[ -z "$voice" || -z "$output" ]]; then
     echo "missing --voice or --output" >&2; exit 1
 fi
-if [[ -z "$text" && -z "$input" ]]; then
-    echo "must pass either --text or --input" >&2; exit 1
+
+# Exactly one input mode required
+mode_count=0
+[[ -n "$text" ]]     && mode_count=$(( mode_count + 1 ))
+[[ -n "$input" ]]    && mode_count=$(( mode_count + 1 ))
+[[ -n "$segments" ]] && mode_count=$(( mode_count + 1 ))
+if [[ "$mode_count" -eq 0 ]]; then
+    echo "must pass exactly one of --text, --input, or --segments" >&2; exit 1
 fi
-if [[ -n "$text" && -n "$input" ]]; then
-    echo "--text and --input are mutually exclusive" >&2; exit 1
+if [[ "$mode_count" -gt 1 ]]; then
+    echo "--text, --input, and --segments are mutually exclusive" >&2; exit 1
 fi
 
-# Voice-prefix → provider routing
+# Voice-prefix routing: always validate prefix; provider_override only replaces the
+# binary, not the validation. voice_inner strips the known prefix for the provider call.
 case "$voice" in
     volc-*) provider="$HERE/providers/volcengine.sh"; voice_inner="${voice#volc-}";;
     mm-*)   provider="$HERE/providers/minimax.sh";    voice_inner="${voice#mm-}";;
@@ -61,86 +102,116 @@ case "$voice" in
         echo "supported: volc-* (Volcengine), mm-* (MiniMax)" >&2
         exit 1;;
 esac
+# Provider override: replace binary but keep voice_inner from prefix strip above.
+if [[ -n "$provider_override" ]]; then
+    provider="$provider_override"
+    voice_inner="$voice"
+fi
+
+# Helper: invoke the provider for one chunk.
+# Routes MiniMax model via env injection; Volcengine ABI unchanged (positional only).
+call_provider() {
+    local chunk_text="$1" chunk_out="$2"
+    if [[ -z "$provider_override" && "$voice" == mm-* ]]; then
+        MINIMAX_MODEL="${model:-${MINIMAX_MODEL:-speech-2.8-hd}}" \
+            bash "$provider" "$chunk_text" "$voice_inner" "$chunk_out" "$speed" "$rate"
+    else
+        bash "$provider" "$chunk_text" "$voice_inner" "$chunk_out" "$speed" "$rate"
+    fi
+}
+
+# Bash ≥ 4.3 check for wait -n (parallel concurrency)
+bash_supports_wait_n() {
+    [[ "${BASH_VERSINFO[0]:-0}" -gt 4 ]] && return 0
+    [[ "${BASH_VERSINFO[0]:-0}" -eq 4 && "${BASH_VERSINFO[1]:-0}" -ge 3 ]] && return 0
+    return 1
+}
+if ! bash_supports_wait_n; then
+    if [[ "$concurrency" -gt 1 ]]; then
+        echo "synth.sh: bash ${BASH_VERSION} lacks 'wait -n'; falling back to --concurrency 1. For parallel synthesis, brew install bash and prepend its bin to PATH." >&2
+    fi
+    concurrency=1
+fi
 
 # --- Single mode ----------------------------------------------------------
 if [[ -n "$text" ]]; then
-    bash "$provider" "$text" "$voice_inner" "$output" "$speed" "$rate"
+    call_provider "$text" "$output"
     exit 0
 fi
 
-# --- Batch mode -----------------------------------------------------------
-[[ -f "$input" ]] || { echo "input not found: $input" >&2; exit 1; }
-
-# Inline markdown strip + chunker. Mirrors /tmp/doubao_tts_podcast.py logic so the
-# 2026-05-17 proven path stays reproducible. When personal-os/text-to-segments
-# (#238) ships, swap this block out for a shell-out to that skill.
+# --- Batch/Segments mode --------------------------------------------------
 staging="$(mktemp -d -t tts-batch-XXXXXX)"
 chunks_dir="$staging/chunks"
 mkdir -p "$chunks_dir"
 
-python3 - "$input" "$chunks_dir" "$max_chars" <<'PYEOF'
-import os, re, sys
-src, chunks_dir, max_chars = sys.argv[1], sys.argv[2], int(sys.argv[3])
+if [[ -n "$input" ]]; then
+    # --input mode: call external chunker, produce segments.json, then treat as --segments
+    [[ -f "$input" ]] || { echo "input not found: $input" >&2; rm -rf "$staging"; exit 1; }
+    python3 "$TTS_CHUNKER" \
+        --input "$input" \
+        --output "$staging/segments.json" \
+        --max-chars "$max_chars" \
+        --vendor-format generic
+    chunk_count="$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['segments']))" "$staging/segments.json")"
+    echo "chunks=$chunk_count" >&2
+    segments="$staging/segments.json"
+fi
 
-with open(src) as f:
-    s = f.read()
+# --segments mode (also reached from --input after chunker runs):
+# Read .segments[].text — segment .id is informational; synth.sh assigns its own
+# chunk_NNN ordering for staging. This is intentional: decouples synth ordering
+# from the chunker's ID scheme, preventing future drift.
+[[ -f "$segments" ]] || { echo "segments file not found: $segments" >&2; rm -rf "$staging"; exit 1; }
 
-# Strip markdown to natural speech
-s = re.sub(r"```[\s\S]*?```", "", s)
-s = re.sub(r"`([^`]+)`", r"\1", s)
-s = re.sub(r"^#{1,6}\s+", "", s, flags=re.MULTILINE)
-s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
-s = re.sub(r"\*(.+?)\*", r"\1", s)
-s = re.sub(r"__(.+?)__", r"\1", s)
-s = re.sub(r"^[-—]{2,}\s*$", "", s, flags=re.MULTILINE)
-s = re.sub(r"<!--[\s\S]*?-->", "", s)
-s = re.sub(r"^[\s]*[-*•]\s+", "", s, flags=re.MULTILINE)
-s = re.sub(r"^[\s]*\d+\.\s+", "", s, flags=re.MULTILINE)
-s = re.sub(r"\n{3,}", "\n\n", s)
-s = s.strip()
-
-# Chunk on paragraph/sentence boundary
-paragraphs = [p.strip() for p in s.split("\n") if p.strip()]
-chunks, cur = [], ""
-for p in paragraphs:
-    if len(cur) + len(p) + 1 <= max_chars:
-        cur = (cur + "\n" + p) if cur else p
-    else:
-        if cur: chunks.append(cur)
-        if len(p) > max_chars:
-            sentences = re.split(r"(?<=[。！？!?])\s*", p)
-            buf = ""
-            for sent in sentences:
-                if not sent: continue
-                if len(buf) + len(sent) <= max_chars:
-                    buf += sent
-                else:
-                    if buf: chunks.append(buf)
-                    buf = sent
-            if buf: chunks.append(buf)
-            cur = ""
-        else:
-            cur = p
-if cur: chunks.append(cur)
-
-for i, c in enumerate(chunks, 1):
-    with open(os.path.join(chunks_dir, f"chunk_{i:03d}.txt"), "w") as f:
-        f.write(c)
-print(f"chunks={len(chunks)}")
+python3 - "$segments" "$chunks_dir" <<'PYEOF'
+import json, sys, os
+seg_file, chunks_dir = sys.argv[1], sys.argv[2]
+with open(seg_file) as f:
+    data = json.load(f)
+# Accept both {"segments":[...]} and a bare [...] array
+segs = data if isinstance(data, list) else data.get("segments", [])
+for i, seg in enumerate(segs, 1):
+    text = seg["text"]
+    with open(os.path.join(chunks_dir, f"chunk_{i:03d}.txt"), "w") as out:
+        out.write(text)
 PYEOF
 
 list_file="$staging/concat.txt"
 : > "$list_file"
 
+# Worker pool with optional parallelism (bash 4.3+ wait -n)
+running=0
 idx=0
 for chunk_file in "$chunks_dir"/chunk_*.txt; do
-    idx=$((idx + 1))
+    idx=$(( idx + 1 ))
     chunk_text="$(cat "$chunk_file")"
     chunk_mp3="$chunks_dir/chunk_$(printf "%03d" "$idx").mp3"
-    bash "$provider" "$chunk_text" "$voice_inner" "$chunk_mp3" "$speed" "$rate"
     echo "file '$chunk_mp3'" >> "$list_file"
-    sleep 0.5
+
+    if [[ "$concurrency" -gt 1 ]]; then
+        call_provider "$chunk_text" "$chunk_mp3" &
+        running=$(( running + 1 ))
+        if [[ "$running" -ge "$concurrency" ]]; then
+            wait -n
+            running=$(( running - 1 ))
+            # 0.5 s inter-batch sleep to stay under MiniMax RPM
+            # (per 周杰伦 Role's learned rule)
+            sleep 0.5
+        fi
+    else
+        call_provider "$chunk_text" "$chunk_mp3"
+        sleep 0.5
+    fi
 done
 
+# Wait for remaining parallel workers
+if [[ "$concurrency" -gt 1 && "$running" -gt 0 ]]; then
+    wait
+fi
+
 bash "$HERE/merge.sh" "$list_file" "$output"
+
+# Intentional: no EXIT/ERR trap. Threat model guarantees staging dir is kept on
+# error/SIGINT for forensic inspection. Adding a defensive trap would silently
+# break that contract. If you must add cleanup, gate it behind a successful merge.
 rm -rf "$staging"

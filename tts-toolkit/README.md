@@ -2,19 +2,23 @@
 
 Unified TTS skill for personal-os. Wraps Volcengine (Doubao) and MiniMax behind a single voice-id-prefix routing convention so Role scripts no longer hand-write per-vendor curl pipelines.
 
-## Status (0.1.0 — initial scaffold)
+## Status (0.1.0 — ship candidate)
 
 | Component | Status |
 | --- | --- |
 | Plugin manifest | done |
 | `skills/tts/SKILL.md` API surface | done |
-| Volcengine provider (`volc-*`) | done — proven on 2026-05-17 podcast (26 chunks, 5324 chars) |
-| MiniMax provider (`mm-*`) | skeleton with TODO; not wired |
-| Voice catalog | seeded with 2026-05-17 verified voices |
-| Provider quirks doc | done (6 known pitfalls) |
-| Quota check | not started |
-| Multi-voice segments | not started — depends on personal-os/text-to-segments (#238) |
-| Role integration (周杰伦 generate_voice.sh) | not started |
+| Volcengine provider (`volc-*`) | done — V1 sync, `seed-tts-1.0` resource, base64 decode, semicolon bearer quirk |
+| MiniMax provider (`mm-*`) | done — `t2a_v2`, HEX decode with magic-byte validation chain |
+| Voice catalog | done — 1 Volcengine + 5 MiniMax verified + cross-vendor equivalents |
+| Provider quirks doc | done — credential separation, version pinning, AppID requirement, info-leak warnings |
+| Chunker (provider-aware char limits) | done — 26-chunk podcast verified |
+| Quota check (`quota_check.sh`) | done — MiniMax via `token_plan/remains`, Volcengine via `UsageMonitoring` |
+| End-to-end smoke test (`run_e2e.sh`) | done — small fixture by default, vendor auto-detected from voice prefix |
+| Cleanup (`cleanup.sh`) | done — staging-dir + bak-file pruning with mp3 safety filter |
+| BATS test coverage | 10/10 passing (test_quota_check + test_synth + test_providers + test_cleanup) |
+| Multi-voice segments | out of scope for 0.1; depends on personal-os/text-to-segments (#238) |
+| Role integration (周杰伦 generate_voice.sh) | done — Role workspace script delegates to this toolkit's `synth.sh` |
 
 ## Routing convention
 

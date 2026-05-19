@@ -13,6 +13,7 @@ Multi-plugin marketplace for Personal OS data plugins: health intelligence, sess
 | pkos | productivity | Personal Knowledge Operating System: inbox, signal, digest, vault operations |
 | portfolio-lens | product | Indie project portfolio management: scan, progress pulse, verdict refresh |
 | tts-toolkit | audio | Unified TTS across Volcengine (Doubao) and MiniMax: voice-prefix routing, cross-vendor catalog, chunk+concat for long-form audio |
+| podcast-prep | intelligence | Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker |
 
 See [personal-os-spec.md](./docs/personal-os-spec.md) for the shared config contract and IEF exchange conventions.
 

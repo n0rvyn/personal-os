@@ -11,6 +11,7 @@ on:
       - "pkos/**"
       - "portfolio-lens/**"
       - "tts-toolkit/**"
+      - "podcast-prep/**"
 
 permissions:
   contents: write
@@ -38,7 +39,7 @@ jobs:
           set -euo pipefail
 
           MARKET_FILE=".claude-plugin/marketplace.json"
-          ALL_PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens" "tts-toolkit")
+          ALL_PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens" "tts-toolkit" "podcast-prep")
 
           bump_semver() {
             local version="$1"

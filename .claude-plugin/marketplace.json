@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.6.0"
+    "version": "0.7.0"
   },
   "plugins": [
     {
@@ -115,6 +115,15 @@
         "volcengine",
         "minimax"
       ],
+      "strict": true
+    },
+    {
+      "name": "podcast-prep",
+      "source": "./podcast-prep",
+      "description": "Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker",
+      "version": "0.1.0",
+      "category": "intelligence",
+      "tags": ["podcast", "dedup", "minhash", "orchestrator", "pkos"],
       "strict": true
     }
   ]

@@ -166,6 +166,30 @@ class CrossDomainCandidatesTests(unittest.TestCase):
         b = cross_domain_candidates(["ai"], vault_root=None, n=1, notes=notes, seed=7)
         self.assertEqual(a[0]["path"], b[0]["path"])
 
+    def test_force_domain_returns_only_that_bucket(self):
+        # parallel-N perturbation: force_domain pins recall to ONE bucket.
+        notes = self._make_notes()
+        picked = cross_domain_candidates(
+            ["ai", "swift"], vault_root=None, n=5, notes=notes, force_domain="philosophy")
+        self.assertGreater(len(picked), 0)
+        self.assertTrue(all(nt["domain"] == "philosophy" for nt in picked))
+        # _make_notes has 2 philosophy notes → forced bucket returns up to n of them
+        self.assertEqual(len(picked), 2)
+
+    def test_force_domain_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            cross_domain_candidates(["ai"], vault_root=None, notes=[], force_domain="tech")
+
+    def test_force_domain_respects_n_limit(self):
+        notes = [
+            {"path": f"10-Knowledge/p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
+             "created": f"2026-05-{10+i:02d}", "domain": "philosophy", "excerpt": ""}
+            for i in range(8)
+        ]
+        picked = cross_domain_candidates(
+            ["ai"], vault_root=None, n=3, notes=notes, force_domain="philosophy")
+        self.assertEqual(len(picked), 3)
+
 
 class SameTopicPastNotesTests(unittest.TestCase):
     # KL-4: self_past reads only 20-Ideas/观点心得/ + 90-Podcasts/ per the contract.

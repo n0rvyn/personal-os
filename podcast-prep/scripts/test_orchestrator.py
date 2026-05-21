@@ -186,5 +186,48 @@ class OrchestratorFinalizeTests(unittest.TestCase):
         self.assertEqual(result["action"], "accept")
         self.assertNotIn("archived", result)
 
+
+class BriefPerturbationTests(unittest.TestCase):
+    """parallel-N perturbation: force_domain + force_contrarian echoed in brief_perturbation."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.topic_log_path = os.path.join(self.tmp_dir.name, "topic_log.yaml")
+        from topic_log import save_topic_log
+        save_topic_log(self.topic_log_path, {"episodes": []})
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def _check(self, **kw):
+        return run_check(
+            candidates=["new-topic"],
+            topic_log_path=self.topic_log_path,
+            today="2026-05-21",
+            pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+            vault_root=os.path.join(self.tmp_dir.name, "nonexistent_vault"),
+            **kw,
+        )
+
+    def test_brief_perturbation_records_forced_domain_and_contrarian(self):
+        brief = self._check(force_domain="philosophy", force_contrarian="lesswrong")
+        self.assertEqual(brief["brief_perturbation"]["cross_domain_bucket"], "philosophy")
+        self.assertEqual(brief["brief_perturbation"]["contrarian_source"], "lesswrong")
+        self.assertEqual(brief["contrarian_source"]["source"], "lesswrong")
+
+    def test_brief_perturbation_bucket_is_none_when_unperturbed(self):
+        # Normal daily run — no force_domain → bucket None, contrarian still recorded.
+        brief = self._check()
+        self.assertIsNone(brief["brief_perturbation"]["cross_domain_bucket"])
+        self.assertIsNotNone(brief["brief_perturbation"]["contrarian_source"])
+
+    def test_error_brief_carries_brief_perturbation_key(self):
+        # Schema consistency: error brief (missing pkos_note) still has the key.
+        brief = run_check(
+            candidates=["new-topic"], topic_log_path=self.topic_log_path,
+            today="2026-05-21", pkos_note=None)
+        self.assertIn("error", brief)
+        self.assertIsNone(brief["brief_perturbation"])
+
 if __name__ == "__main__":
     unittest.main()

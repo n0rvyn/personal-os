@@ -29,8 +29,9 @@ NAMED_CONCEPT_PROMPT = (
 )
 
 # Indirection point for test mocking (contrarian-source random pick)
-def _contrarian_pull(seed=None, exclude_categories=None):
-    return pick_contrarian_source(seed=seed, exclude_categories=exclude_categories)
+def _contrarian_pull(seed=None, exclude_categories=None, force_source=None):
+    return pick_contrarian_source(seed=seed, exclude_categories=exclude_categories,
+                                  force_source=force_source)
 
 
 def _resolve_vault_root(explicit=None):
@@ -99,7 +100,8 @@ def used_angles_for_topic(topic_tag: str, topic_log_path: str, today: str, windo
 
 def run_check(candidates: list, topic_log_path: str, today: str,
               pkos_note: dict = None, seed: int = None,
-              vault_root: str = None) -> dict:
+              vault_root: str = None, force_domain: str = None,
+              force_contrarian: str = None) -> dict:
     """Build the structured brief consumed by the writer agent.
 
     DP-001 A: pkos_note is supplied by the caller (达芬奇 via pkos:serendipity SKILL).
@@ -109,6 +111,11 @@ def run_check(candidates: list, topic_log_path: str, today: str,
     The brief also carries cross_domain_candidates + self_past_candidates (pulled from the
     PKOS vault) and a named_concept_prompt directive. vault_root is resolved from
     personal-os.yaml when not given explicitly.
+
+    `force_domain` / `force_contrarian`: parallel-N brief perturbation — pin this brief
+    to a specific cross-domain bucket and reverse source so each of the N paths diverges
+    at the brief layer. The applied perturbation is echoed in the `brief_perturbation`
+    field, which the review-editor copies verbatim into editor_scores.brief_diff.
     """
     if not pkos_note or not isinstance(pkos_note, dict) or not pkos_note.get("id"):
         return {
@@ -119,6 +126,7 @@ def run_check(candidates: list, topic_log_path: str, today: str,
             "cross_domain_candidates": [],
             "self_past_candidates": [],
             "named_concept_prompt": NAMED_CONCEPT_PROMPT,
+            "brief_perturbation": None,
             "generated_at": f"{today}T00:00:00Z",
         }
     approved = []
@@ -140,15 +148,23 @@ def run_check(candidates: list, topic_log_path: str, today: str,
     resolved_root = _resolve_vault_root(vault_root)
     today_tags = _expand_topic_tags(approved)
     notes = load_pkos_notes(resolved_root) if today_tags else []
+    contrarian = _contrarian_pull(seed=seed, force_source=force_contrarian)
     brief = {
         "approved_topics": approved,
         "pkos_note": pkos_note,  # caller-provided, propagated verbatim
-        "contrarian_source": _contrarian_pull(seed=seed),
+        "contrarian_source": contrarian,
         "cross_domain_candidates": cross_domain_candidates(
-            today_tags, resolved_root, n=5, notes=notes, seed=seed),
+            today_tags, resolved_root, n=5, notes=notes, seed=seed,
+            force_domain=force_domain),
         "self_past_candidates": same_topic_past_notes(
             today_tags, resolved_root, today=today, n=5, notes=notes),
         "named_concept_prompt": NAMED_CONCEPT_PROMPT,
+        # parallel-N perturbation record — copied into editor_scores.brief_diff.
+        # cross_domain_bucket is None on unperturbed (normal daily) runs.
+        "brief_perturbation": {
+            "cross_domain_bucket": force_domain,
+            "contrarian_source": contrarian["source"] if contrarian else None,
+        },
         "generated_at": f"{today}T00:00:00Z",
     }
     return brief
@@ -231,6 +247,12 @@ def main():
     chk.add_argument("--seed", type=int, default=None)
     chk.add_argument("--vault-root", default=None,
                      help="PKOS vault root. Defaults to personal-os.yaml (pkos_root or exchange_dir parent).")
+    chk.add_argument("--force-domain", default=None,
+                     help="parallel-N perturbation: pin cross-domain recall to ONE bucket "
+                          "(philosophy/management/cognition/history/literature/natural-science).")
+    chk.add_argument("--force-contrarian", default=None,
+                     help="parallel-N perturbation: pin the reverse source by name "
+                          "(stratechery/matt-levine/marginal-revolution/quanta-magazine/lesswrong/pkos-vault).")
     fin = sub.add_parser("finalize")
     fin.add_argument("--script", required=True)
     fin.add_argument("--topic-log", required=True)
@@ -247,7 +269,9 @@ def main():
         pkos_note = json.loads(args.pkos_note) if args.pkos_note else None
         brief = run_check(candidates, args.topic_log, args.date,
                           pkos_note=pkos_note, seed=args.seed,
-                          vault_root=args.vault_root)
+                          vault_root=args.vault_root,
+                          force_domain=args.force_domain,
+                          force_contrarian=args.force_contrarian)
         print(json.dumps(brief, ensure_ascii=False, indent=2))
     elif args.cmd == "finalize":
         approved = json.loads(args.approved_topics)

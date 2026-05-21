@@ -265,15 +265,27 @@ def _tag_overlap(a, b):
     return len(sa & sb)
 
 
-def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
-                            recent_pool=8, seed=None):
-    """Return up to n notes from NON-tech domains, one per domain bucket.
+# Non-tech domain buckets, in cross-domain recall priority order.
+CROSS_DOMAIN_PRIORITY = [
+    "philosophy", "management", "cognition",
+    "history", "literature", "natural-science",
+]
 
-    Selection: for each non-tech domain, prefer notes matching ≥1 today_tag; from that
+
+def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
+                            recent_pool=8, seed=None, force_domain=None):
+    """Return up to n notes from NON-tech domains.
+
+    Default: one note per domain bucket, in domain priority order — a spread across
+    domains. For each non-tech domain, prefer notes matching ≥1 today_tag; from that
     set (or the whole domain if no overlap), take the `recent_pool` most-recent notes and
     pick one at random. Random (not always-newest) so consecutive episodes on similar
     topics do not keep surfacing the identical note — a cooldown against mechanical repeat.
     Pass `seed` for reproducibility; seed=None → fresh pick each run.
+
+    `force_domain`: when set, return up to n notes from ONLY that one bucket — used by
+    parallel-N brief perturbation to pin each path to a distinct domain so the candidates
+    genuinely diverge. Raises ValueError on an unknown domain.
 
     Returns notes ordered by domain priority (philosophy → management → cognition →
     history → literature → natural-science). Pass `notes` to skip filesystem walk.
@@ -282,10 +294,13 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
         notes = load_pkos_notes(vault_root)
     # KL-4: cross_domain reads only the contract's cross-domain directories.
     notes = [nt for nt in notes if nt["path"].startswith(CROSS_DOMAIN_DIRS)]
-    domains_priority = [
-        "philosophy", "management", "cognition",
-        "history", "literature", "natural-science",
-    ]
+    domains_priority = CROSS_DOMAIN_PRIORITY
+    if force_domain is not None:
+        if force_domain not in CROSS_DOMAIN_PRIORITY:
+            raise ValueError(
+                f"unknown cross-domain bucket {force_domain!r}; "
+                f"valid: {CROSS_DOMAIN_PRIORITY}")
+        domains_priority = [force_domain]
     rng = random.Random(seed)
     picked = []
     for dom in domains_priority:
@@ -298,10 +313,15 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
         ]
         pool = with_overlap if with_overlap else domain_notes
         pool.sort(key=lambda nt: nt["created"], reverse=True)
-        picked.append(rng.choice(pool[:recent_pool]))
+        head = pool[:recent_pool]
+        if force_domain is not None:
+            # Forced single bucket → return up to n distinct notes from it.
+            picked.extend(rng.sample(head, min(n, len(head))))
+        else:
+            picked.append(rng.choice(head))
         if len(picked) >= n:
             break
-    return picked
+    return picked[:n]
 
 
 def _title_signature(title):

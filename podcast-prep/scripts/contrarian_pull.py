@@ -10,10 +10,20 @@ CONTRARIAN_POOL = [
     {"source": "pkos-vault", "category": "personal-knowledge", "url": "local://obsidian/PKOS"},
 ]
 
-def pick_contrarian_source(seed: int = None, exclude_categories: list = None) -> dict:
+def pick_contrarian_source(seed: int = None, exclude_categories: list = None,
+                           force_source: str = None) -> dict:
     """Pick a contrarian source. `seed` controls deterministic selection (for testing).
     `exclude_categories` filters the pool; if all categories are excluded, return the last
-    pool entry (acts as fallback / general-knowledge category)."""
+    pool entry (acts as fallback / general-knowledge category).
+    `force_source`: when set, return that exact pool entry by `source` name, ignoring
+    seed/exclude — used by parallel-N brief perturbation to pin each path to a distinct
+    reverse source. Raises ValueError if the source name is not in the pool."""
+    if force_source is not None:
+        for c in CONTRARIAN_POOL:
+            if c["source"] == force_source:
+                return c
+        valid = [c["source"] for c in CONTRARIAN_POOL]
+        raise ValueError(f"unknown contrarian source {force_source!r}; valid: {valid}")
     pool = CONTRARIAN_POOL
     if exclude_categories:
         filtered = [c for c in pool if c["category"] not in exclude_categories]

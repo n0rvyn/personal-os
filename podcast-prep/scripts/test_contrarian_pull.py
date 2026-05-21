@@ -24,5 +24,20 @@ class ContrarianPullTests(unittest.TestCase):
         result = pick_contrarian_source(seed=42, exclude_categories=[c["category"] for c in CONTRARIAN_POOL[:-1]])
         self.assertEqual(result["category"], CONTRARIAN_POOL[-1]["category"])
 
+    def test_force_source_returns_named_entry(self):
+        # parallel-N perturbation: force_source pins the exact pool entry by name.
+        result = pick_contrarian_source(force_source="lesswrong")
+        self.assertEqual(result["source"], "lesswrong")
+        self.assertEqual(result["category"], "rationality")
+
+    def test_force_source_ignores_seed_and_exclude(self):
+        result = pick_contrarian_source(
+            seed=42, exclude_categories=["rationality"], force_source="lesswrong")
+        self.assertEqual(result["source"], "lesswrong")
+
+    def test_force_source_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            pick_contrarian_source(force_source="nonexistent-blog")
+
 if __name__ == "__main__":
     unittest.main()

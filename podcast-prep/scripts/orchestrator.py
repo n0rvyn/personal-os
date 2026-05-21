@@ -153,11 +153,45 @@ def run_check(candidates: list, topic_log_path: str, today: str,
     }
     return brief
 
+def _archive_episode(script_text: str, today: str, approved_topics: list,
+                     archive_dir: str, named_concept: str = None) -> str:
+    """Archive a finished episode to the vault as a `type: podcast` note (KL-3).
+
+    One note per episode at {archive_dir}/{today}-{slug}.md. Recall (self_past) reads
+    this directory — see the vault directory contract. Returns the written path.
+    """
+    archive_dir = os.path.expanduser(archive_dir)
+    os.makedirs(archive_dir, exist_ok=True)
+    # Slug from the script's first H1, else the first topic_tag.
+    slug = ""
+    for line in script_text.splitlines():
+        if line.startswith("# "):
+            slug = line[2:].strip()
+            break
+    if not slug and approved_topics:
+        slug = approved_topics[0].get("topic_tag", "")
+    slug = re.sub(r"\s+", "-", slug)[:48]
+    slug = "".join(c for c in slug if c.isalnum() or c in "-_") or "episode"
+    tags = [t.get("topic_tag", "") for t in approved_topics if t.get("topic_tag")]
+    fm = [
+        "---", "type: podcast", f"created: {today}",
+        "tags: [" + ", ".join(tags) + "]",
+    ]
+    if named_concept:
+        fm.append(f"named_concept: {named_concept}")
+    fm += ["status: archived", "---", ""]
+    path = os.path.join(archive_dir, f"{today}-{slug}.md")
+    Path(path).write_text("\n".join(fm) + script_text, encoding="utf-8")
+    return path
+
+
 def run_finalize(script_path: str, topic_log_path: str, today: str,
                  approved_topics: list, script_archive_dir: str = None,
-                 threshold: float = 0.15) -> dict:
+                 threshold: float = 0.15, archive_dir: str = None,
+                 named_concept: str = None) -> dict:
     """MinHash-dedupe the script against the past-7-day script archive.
-    On accept: append the episode to topic_log. On retry: return without state change."""
+    On accept: append the episode to topic_log, and (if archive_dir is given) archive
+    the episode to the vault 90-Podcasts directory. On retry: return without state change."""
     script = Path(script_path).read_text(encoding="utf-8")
     corpus = []
     if script_archive_dir and Path(script_archive_dir).exists():
@@ -178,8 +212,12 @@ def run_finalize(script_path: str, topic_log_path: str, today: str,
         {"tag": t["topic_tag"], "angle": t["required_angle"]}
         for t in approved_topics
     ])
-    return {"action": "accept", "jaccard": round(max_sim, 4),
-            "topics_appended": len(approved_topics)}
+    result = {"action": "accept", "jaccard": round(max_sim, 4),
+              "topics_appended": len(approved_topics)}
+    if archive_dir:
+        result["archived"] = _archive_episode(
+            script, today, approved_topics, archive_dir, named_concept)
+    return result
 
 def main():
     parser = argparse.ArgumentParser(description="Podcast-prep orchestrator")
@@ -199,6 +237,10 @@ def main():
     fin.add_argument("--date", required=True)
     fin.add_argument("--approved-topics", required=True, help="JSON array of {topic_tag, required_angle}")
     fin.add_argument("--script-archive-dir", default=None)
+    fin.add_argument("--archive-dir", default=None,
+                     help="Vault 90-Podcasts dir. When set, an accepted episode is archived there as a type:podcast note.")
+    fin.add_argument("--named-concept", default=None,
+                     help="Optional — the concept this episode named, written to the archive note frontmatter.")
     args = parser.parse_args()
     if args.cmd == "check":
         candidates = json.loads(args.candidates)
@@ -210,7 +252,9 @@ def main():
     elif args.cmd == "finalize":
         approved = json.loads(args.approved_topics)
         result = run_finalize(args.script, args.topic_log, args.date, approved,
-                              script_archive_dir=args.script_archive_dir)
+                              script_archive_dir=args.script_archive_dir,
+                              archive_dir=args.archive_dir,
+                              named_concept=args.named_concept)
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":

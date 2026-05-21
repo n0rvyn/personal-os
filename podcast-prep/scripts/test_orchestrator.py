@@ -155,5 +155,36 @@ class OrchestratorFinalizeTests(unittest.TestCase):
         data = load_topic_log(self.topic_log_path)
         self.assertEqual(len(data["episodes"]), 0)
 
+    def test_finalize_archives_episode_when_archive_dir_set(self):
+        Path(self.script_path).write_text("# 概率时代的AI可靠性\n\n正文。")
+        archive_dir = os.path.join(self.tmp_dir.name, "90-Podcasts")
+        result = run_finalize(
+            script_path=self.script_path,
+            topic_log_path=self.topic_log_path,
+            today="2026-05-21",
+            approved_topics=[{"topic_tag": "ai-reliability", "required_angle": "技术内核"}],
+            archive_dir=archive_dir,
+            named_concept="熵蚀",
+        )
+        self.assertEqual(result["action"], "accept")
+        archived = result["archived"]
+        self.assertTrue(os.path.exists(archived))
+        self.assertTrue(os.path.basename(archived).startswith("2026-05-21-"))
+        text = Path(archived).read_text(encoding="utf-8")
+        self.assertIn("type: podcast", text)
+        self.assertIn("named_concept: 熵蚀", text)
+        self.assertIn("ai-reliability", text)
+
+    def test_finalize_skips_archive_when_no_archive_dir(self):
+        Path(self.script_path).write_text("# 标题\n\n正文。")
+        result = run_finalize(
+            script_path=self.script_path,
+            topic_log_path=self.topic_log_path,
+            today="2026-05-21",
+            approved_topics=[{"topic_tag": "x", "required_angle": "y"}],
+        )
+        self.assertEqual(result["action"], "accept")
+        self.assertNotIn("archived", result)
+
 if __name__ == "__main__":
     unittest.main()

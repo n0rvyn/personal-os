@@ -93,16 +93,17 @@ class TagOverlapTests(unittest.TestCase):
 
 class CrossDomainCandidatesTests(unittest.TestCase):
     def _make_notes(self):
+        # cross_domain reads 10-Knowledge/ + 20-Ideas/ per the contract (KL-4).
         return [
-            {"path": "p1.md", "title": "卡拉马佐夫", "tags": ["哲学", "陀思妥耶夫斯基"],
+            {"path": "10-Knowledge/p1.md", "title": "卡拉马佐夫", "tags": ["哲学", "陀思妥耶夫斯基"],
              "created": "2026-05-15", "domain": "philosophy", "excerpt": "..."},
-            {"path": "p2.md", "title": "刻意练习", "tags": ["认知", "刻意练习", "ai"],
+            {"path": "10-Knowledge/p2.md", "title": "刻意练习", "tags": ["认知", "刻意练习", "ai"],
              "created": "2026-05-10", "domain": "cognition", "excerpt": "..."},
-            {"path": "p3.md", "title": "极简管理学", "tags": ["管理", "极简管理"],
+            {"path": "10-Knowledge/p3.md", "title": "极简管理学", "tags": ["管理", "极简管理"],
              "created": "2026-04-20", "domain": "management", "excerpt": "..."},
-            {"path": "p4.md", "title": "Swift 6", "tags": ["swift6", "swiftui"],
+            {"path": "10-Knowledge/p4.md", "title": "Swift 6", "tags": ["swift6", "swiftui"],
              "created": "2026-05-18", "domain": "tech", "excerpt": "..."},
-            {"path": "p5.md", "title": "君子不器", "tags": ["君子", "哲学"],
+            {"path": "10-Knowledge/p5.md", "title": "君子不器", "tags": ["君子", "哲学"],
              "created": "2026-05-12", "domain": "philosophy", "excerpt": "..."},
         ]
 
@@ -128,22 +129,22 @@ class CrossDomainCandidatesTests(unittest.TestCase):
 
     def test_overlap_preferred_over_recency(self):
         notes = [
-            {"path": "older-overlap.md", "title": "Older w/ overlap",
+            {"path": "10-Knowledge/older-overlap.md", "title": "Older w/ overlap",
              "tags": ["哲学", "ai"], "created": "2026-04-01",
              "domain": "philosophy", "excerpt": ""},
-            {"path": "newer-no-overlap.md", "title": "Newer no overlap",
+            {"path": "10-Knowledge/newer-no-overlap.md", "title": "Newer no overlap",
              "tags": ["哲学", "君子"], "created": "2026-05-15",
              "domain": "philosophy", "excerpt": ""},
         ]
         picked = cross_domain_candidates(["ai"], vault_root=None, n=1, notes=notes)
         # With overlap is preferred even though older
-        self.assertEqual(picked[0]["path"], "older-overlap.md")
+        self.assertEqual(picked[0]["path"], "10-Knowledge/older-overlap.md")
 
     def test_rotation_varies_pick_across_seeds(self):
         # A domain with multiple recent notes — different seeds should be able to
         # surface different notes (cooldown against mechanical repeat).
         notes = [
-            {"path": f"p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
+            {"path": f"10-Knowledge/p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
              "created": f"2026-05-{10+i:02d}", "domain": "philosophy", "excerpt": ""}
             for i in range(8)
         ]
@@ -157,7 +158,7 @@ class CrossDomainCandidatesTests(unittest.TestCase):
 
     def test_rotation_reproducible_with_same_seed(self):
         notes = [
-            {"path": f"p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
+            {"path": f"10-Knowledge/p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
              "created": f"2026-05-{10+i:02d}", "domain": "philosophy", "excerpt": ""}
             for i in range(8)
         ]
@@ -167,57 +168,70 @@ class CrossDomainCandidatesTests(unittest.TestCase):
 
 
 class SameTopicPastNotesTests(unittest.TestCase):
+    # KL-4: self_past reads only 20-Ideas/观点心得/ + 90-Podcasts/ per the contract.
+    IDEAS = "20-Ideas/观点心得"
+    POD = "90-Podcasts"
+
     def test_returns_notes_in_window_with_overlap(self):
         # today=2026-05-21 → window 5/22-30d=4/21 to 5/22-7d=5/14
         notes = [
-            {"path": "in.md", "title": "in window", "tags": ["ai", "swift"],
+            {"path": f"{self.IDEAS}/in.md", "title": "in window", "tags": ["ai", "swift"],
              "created": "2026-04-25", "domain": "tech", "excerpt": ""},
-            {"path": "too-recent.md", "title": "too recent", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/too-recent.md", "title": "too recent", "tags": ["ai"],
              "created": "2026-05-19", "domain": "tech", "excerpt": ""},
-            {"path": "too-old.md", "title": "too old", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/too-old.md", "title": "too old", "tags": ["ai"],
              "created": "2026-03-01", "domain": "tech", "excerpt": ""},
-            {"path": "no-overlap.md", "title": "no overlap", "tags": ["history"],
+            {"path": f"{self.IDEAS}/no-overlap.md", "title": "no overlap", "tags": ["history"],
              "created": "2026-04-25", "domain": "history", "excerpt": ""},
         ]
         picked = same_topic_past_notes(
             ["ai"], vault_root=None, today="2026-05-21", notes=notes, days_max=30,
         )
         paths = [nt["path"] for nt in picked]
-        self.assertIn("in.md", paths)
-        self.assertNotIn("too-recent.md", paths)
-        self.assertNotIn("too-old.md", paths)  # 2026-03-01 is outside the 30d window here
-        self.assertNotIn("no-overlap.md", paths)
+        self.assertIn(f"{self.IDEAS}/in.md", paths)
+        self.assertNotIn(f"{self.IDEAS}/too-recent.md", paths)
+        self.assertNotIn(f"{self.IDEAS}/too-old.md", paths)
+        self.assertNotIn(f"{self.IDEAS}/no-overlap.md", paths)
 
     def test_default_window_is_90_days(self):
         # A note 60 days back is inside the default 90d window but outside a 30d window.
         notes = [
-            {"path": "60d.md", "title": "60 days back", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/60d.md", "title": "60 days back", "tags": ["ai"],
              "created": "2026-03-22", "domain": "tech", "excerpt": ""},
         ]
         picked = same_topic_past_notes(
             ["ai"], vault_root=None, today="2026-05-21", notes=notes,
         )
-        self.assertEqual([nt["path"] for nt in picked], ["60d.md"])
+        self.assertEqual([nt["path"] for nt in picked], [f"{self.IDEAS}/60d.md"])
 
-    def test_prefers_ideas_dir_over_knowledge(self):
-        # Same overlap + recency; 20-Ideas note (a stance) outranks 10-Knowledge excerpt.
+    def test_reads_only_self_past_dirs(self):
+        # KL-4: only 20-Ideas/观点心得 and 90-Podcasts feed self_past; a 10-Knowledge
+        # excerpt or a 20-Ideas/产品想法 note is filtered out even with tag overlap.
         notes = [
             {"path": "10-Knowledge/excerpt.md", "title": "excerpt", "tags": ["ai"],
              "created": "2026-05-10", "domain": "tech", "excerpt": ""},
-            {"path": "20-Ideas/my-opinion.md", "title": "my opinion", "tags": ["ai"],
+            {"path": "20-Ideas/产品想法/a-product.md", "title": "product", "tags": ["ai"],
              "created": "2026-05-10", "domain": "tech", "excerpt": ""},
+            {"path": f"{self.IDEAS}/a-viewpoint.md", "title": "viewpoint", "tags": ["ai"],
+             "created": "2026-05-10", "domain": "tech", "excerpt": ""},
+            {"path": f"{self.POD}/2026-05-09-past-episode.md", "title": "past ep",
+             "tags": ["ai"], "created": "2026-05-09", "domain": "tech", "excerpt": ""},
         ]
         picked = same_topic_past_notes(
             ["ai"], vault_root=None, today="2026-05-21", notes=notes,
         )
-        self.assertEqual(picked[0]["path"], "20-Ideas/my-opinion.md")
+        paths = {nt["path"] for nt in picked}
+        self.assertIn(f"{self.IDEAS}/a-viewpoint.md", paths)
+        self.assertIn(f"{self.POD}/2026-05-09-past-episode.md", paths)
+        self.assertNotIn("10-Knowledge/excerpt.md", paths)
+        self.assertNotIn("20-Ideas/产品想法/a-product.md", paths)
 
     def test_dedup_strips_filler_words(self):
         # "X的研究发现" and "X研究发现" differ only by 的 — should collapse.
         notes = [
-            {"path": "20-Ideas/a.md", "title": "AI模型的研究发现", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/a.md", "title": "AI模型的研究发现", "tags": ["ai"],
              "created": "2026-05-10", "domain": "tech", "excerpt": ""},
-            {"path": "10-Knowledge/b.md", "title": "AI模型研究发现", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/b.md", "title": "AI模型研究发现", "tags": ["ai"],
              "created": "2026-05-09", "domain": "tech", "excerpt": ""},
         ]
         picked = same_topic_past_notes(
@@ -227,23 +241,23 @@ class SameTopicPastNotesTests(unittest.TestCase):
 
     def test_sorted_by_overlap_then_created(self):
         notes = [
-            {"path": "low-overlap.md", "title": "1 overlap", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/low-overlap.md", "title": "1 overlap", "tags": ["ai"],
              "created": "2026-05-10", "domain": "tech", "excerpt": ""},
-            {"path": "high-overlap.md", "title": "2 overlap", "tags": ["ai", "swift"],
-             "created": "2026-04-25", "domain": "tech", "excerpt": ""},
+            {"path": f"{self.IDEAS}/high-overlap.md", "title": "2 overlap",
+             "tags": ["ai", "swift"], "created": "2026-04-25", "domain": "tech", "excerpt": ""},
         ]
         picked = same_topic_past_notes(
             ["ai", "swift"], vault_root=None, today="2026-05-21", notes=notes,
         )
         # 2-overlap beats 1-overlap regardless of recency
-        self.assertEqual(picked[0]["path"], "high-overlap.md")
+        self.assertEqual(picked[0]["path"], f"{self.IDEAS}/high-overlap.md")
 
     def test_dedups_near_identical_titles(self):
         # Vault holds re-synced near-dupes; same whitespace-normalized title collapses.
         notes = [
-            {"path": "a.md", "title": "AI 研究 发现", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/a.md", "title": "AI 研究 发现", "tags": ["ai"],
              "created": "2026-05-05", "domain": "tech", "excerpt": ""},
-            {"path": "b.md", "title": "AI研究发现", "tags": ["ai"],
+            {"path": f"{self.IDEAS}/b.md", "title": "AI研究发现", "tags": ["ai"],
              "created": "2026-05-04", "domain": "tech", "excerpt": ""},
         ]
         picked = same_topic_past_notes(

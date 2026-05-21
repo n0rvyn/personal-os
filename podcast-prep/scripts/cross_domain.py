@@ -56,11 +56,15 @@ TECH_KEYWORDS = [
     "swift-agent-frameworks", "ai-cost-economics", "local-ai-inference",
 ]
 
-PKOS_DEFAULT_DIRS = ["10-Knowledge", "20-Ideas", "50-References", "30-Projects"]
+PKOS_DEFAULT_DIRS = ["10-Knowledge", "20-Ideas", "50-References", "30-Projects",
+                     "90-Podcasts"]
 
-# Directory holding the user's own ideas/opinions (notes with a stance), as opposed to
-# 10-Knowledge which holds reading excerpts. self_past recall prefers this dir.
-IDEAS_DIR = "20-Ideas"
+# Recall directories, per the vault directory contract (KL-4):
+# - self_past reads the user's viewpoints (20-Ideas/观点心得) + past on-record stances
+#   (90-Podcasts episode archives).
+# - cross_domain reads the user's knowledge + ideas, bucketed by domain.
+SELF_PAST_DIRS = ("20-Ideas/观点心得/", "90-Podcasts/")
+CROSS_DOMAIN_DIRS = ("10-Knowledge/", "20-Ideas/")
 
 # Placeholder titles carrying no information. getnote/dedao captures use these, often
 # with a numeric suffix ("无标题笔记-1054"), so this is a prefix-pattern match, not a set.
@@ -276,6 +280,8 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
     """
     if notes is None:
         notes = load_pkos_notes(vault_root)
+    # KL-4: cross_domain reads only the contract's cross-domain directories.
+    notes = [nt for nt in notes if nt["path"].startswith(CROSS_DOMAIN_DIRS)]
     domains_priority = [
         "philosophy", "management", "cognition",
         "history", "literature", "natural-science",
@@ -319,6 +325,9 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=90, n=5,
     """
     if notes is None:
         notes = load_pkos_notes(vault_root)
+    # KL-4: self_past reads only 20-Ideas/观点心得 (viewpoints) + 90-Podcasts (past
+    # on-record stances), per the vault directory contract.
+    notes = [nt for nt in notes if nt["path"].startswith(SELF_PAST_DIRS)]
     today_d = date.fromisoformat(today) if today else date.today()
     upper = today_d - timedelta(days=days_min)
     lower = today_d - timedelta(days=days_max)
@@ -334,7 +343,6 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=90, n=5,
             pool.append(nt)
     pool.sort(
         key=lambda nt: (
-            nt["path"].startswith(IDEAS_DIR + "/"),  # opinion notes first
             _tag_overlap(nt["tags"], today_tags),
             nt["created"],
         ),

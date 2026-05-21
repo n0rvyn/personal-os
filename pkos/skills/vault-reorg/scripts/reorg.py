@@ -34,22 +34,20 @@ DEDUP_DIRS = ("10-Knowledge", "20-Ideas", "50-References", "30-Projects")
 
 
 # --------------------------------------------------------------------------
-# domain_classify (lives in the sibling podcast-prep plugin) — load gracefully
+# domain_classify — bundled sibling module (same scripts/ directory)
 # --------------------------------------------------------------------------
 
 def _load_domain_classify():
-    here = Path(__file__).resolve()
-    candidates = [
-        here.parents[4] / "podcast-prep" / "scripts" / "domain_classify.py",
-        here.parents[3] / "podcast-prep" / "scripts" / "domain_classify.py",
-    ]
-    for c in candidates:
-        if c.is_file():
-            spec = importlib.util.spec_from_file_location("domain_classify", c)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
-    return None
+    """Load the bundled domain_classify module. It ships inside this skill, so the
+    retag pass has no cross-plugin dependency."""
+    try:
+        path = Path(__file__).resolve().parent / "domain_classify.py"
+        spec = importlib.util.spec_from_file_location("domain_classify", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except (OSError, ImportError):
+        return None
 
 
 _DC = _load_domain_classify()
@@ -180,9 +178,13 @@ def retag(vault, dry_run):
 # --------------------------------------------------------------------------
 
 def _body_hash(text):
+    """Whitespace-normalized body hash. Bodies under 80 real chars are not hashed —
+    too short to dedup safely (distinct trivial notes would collide)."""
     _, body, _ = split_frontmatter(text)
     norm = re.sub(r"\s+", "", body)
-    return hashlib.md5(norm.encode("utf-8", "replace")).hexdigest() if norm else ""
+    if len(norm) < 80:
+        return ""
+    return hashlib.md5(norm.encode("utf-8", "replace")).hexdigest()
 
 
 def _keep_rank(path):

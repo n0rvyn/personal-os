@@ -56,11 +56,15 @@ class FrontmatterTests(unittest.TestCase):
 
 class DedupTests(unittest.TestCase):
     def test_body_hash_ignores_frontmatter_and_whitespace(self):
-        a = reorg._body_hash("---\nx: 1\n---\n\nsame body here")
-        b = reorg._body_hash("---\nx: 2\n---\n\nsame   body\nhere")
+        long_a = "same identical body content " * 5   # >80 real chars
+        a = reorg._body_hash(f"---\nx: 1\n---\n\n{long_a}")
+        b = reorg._body_hash(f"---\nx: 2\n---\n\n{long_a.replace(' ', chr(10))}")
         self.assertEqual(a, b)
-        c = reorg._body_hash("---\nx: 1\n---\n\ndifferent body")
+        c = reorg._body_hash(f"---\nx: 1\n---\n\n{'a wholly different body text ' * 5}")
         self.assertNotEqual(a, c)
+
+    def test_body_hash_skips_short_bodies(self):
+        self.assertEqual(reorg._body_hash("---\nx: 1\n---\n\ntiny body"), "")
 
     def test_keep_rank_prefers_clean_filename(self):
         ranked = sorted(["10-K/note-a1b2c3.md", "10-K/note.md"], key=reorg._keep_rank)
@@ -80,9 +84,10 @@ class RunTests(unittest.TestCase):
         w("10-Knowledge/a.md", "---\nsource: app\n---\n\n# 关于存在与意义的思考\n\n哲学反思。")
         # already classifiable via topics → must be left alone
         w("10-Knowledge/b.md", "---\ntopics:\n  - 哲学\n---\n\n# b\n\nx")
-        # exact-duplicate pair
-        w("10-Knowledge/dup1.md", "---\ntags: [x]\n---\n\nidentical body content here")
-        w("50-References/dup2.md", "---\ntags: [y]\n---\n\nidentical body content here")
+        # exact-duplicate pair — body ≥80 real chars so it is eligible for dedup
+        dup_body = "identical knowledge body content repeated to exceed the length floor " * 3
+        w("10-Knowledge/dup1.md", f"---\ntags: [x]\n---\n\n{dup_body}")
+        w("50-References/dup2.md", f"---\ntags: [y]\n---\n\n{dup_body}")
         # stale getnote inbox
         w("00-Inbox/getnote/original/old.md", "stale note")
 

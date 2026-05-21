@@ -62,6 +62,6 @@ may remove it.
   replaces existing tags, and only acts on notes that do not already classify.
 - dedup matches **exact** body content (whitespace-normalized). Near-duplicates are
   left alone.
-- domain classification logic is shared with podcast-prep's cross-domain recall
-  (`podcast-prep/scripts/domain_classify.py`) — one source of truth. If the
-  podcast-prep plugin is absent, the retag pass is skipped and reported.
+- domain classification logic (`scripts/domain_classify.py`) is bundled inside this
+  skill — the retag pass has no cross-plugin dependency. The same keyword tables
+  inform podcast-prep's cross-domain recall.

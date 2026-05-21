@@ -63,6 +63,20 @@ class DedupTests(unittest.TestCase):
         c = reorg._body_hash(f"---\nx: 1\n---\n\n{'a wholly different body text ' * 5}")
         self.assertNotEqual(a, c)
 
+    def test_write_domain_tag_matches_block_indent(self):
+        import yaml
+        # A block list at 0-space indent — the appended item must also be 0-space,
+        # or the frontmatter becomes invalid YAML (mixed-indent list).
+        flat = "---\ntags:\n- learning\n- skills\ntype: knowledge\n---\n\nbody"
+        out = reorg.write_domain_tag(flat, "cognition")
+        fm, _, _ = reorg.split_frontmatter(out)
+        parsed = yaml.safe_load(fm)               # must not raise
+        self.assertIn("cognition", parsed["tags"])
+        self.assertIn("learning", parsed["tags"])
+        # 2-space block list stays valid too
+        indented = "---\ntags:\n  - learning\n---\n\nbody"
+        yaml.safe_load(reorg.split_frontmatter(reorg.write_domain_tag(indented, "tech"))[0])
+
     def test_body_hash_skips_short_bodies(self):
         self.assertEqual(reorg._body_hash("---\nx: 1\n---\n\ntiny body"), "")
 

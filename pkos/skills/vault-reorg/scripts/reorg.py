@@ -121,9 +121,14 @@ def write_domain_tag(text, domain):
         fm = fm[:inline.start()] + new + fm[inline.end():]
         return f"---\n{fm}\n---\n\n{body}"
 
-    block = re.search(r"^tags:\s*$", fm, re.M)
+    block = re.search(r"^tags:[ \t]*$", fm, re.M)
     if block:
-        fm = fm[:block.end()] + f"\n  - {domain}" + fm[block.end():]
+        rest = fm[block.end():]
+        # Match the existing list items' indentation — mixing 0-space and 2-space
+        # list items under one key is invalid YAML.
+        im = re.match(r"\n([ \t]*)-[ \t]", rest)
+        indent = im.group(1) if im else "  "
+        fm = fm[:block.end()] + f"\n{indent}- {domain}" + rest
         return f"---\n{fm}\n---\n\n{body}"
 
     single = re.search(r"^tags:\s*(\S.*?)\s*$", fm, re.M)

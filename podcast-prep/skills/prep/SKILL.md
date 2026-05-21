@@ -60,6 +60,10 @@ These three fields target the podcast's core KPI: selection → insight → opin
 
 Each PKOS reference in the script must carry an origin date ("X 月 X 日的笔记" / "最近读到"); undated references read as decoration, not knowledge connection.
 
+The episode quality bar (4 KPI: 洞察 / 命名 / 跨域 / 思考问句, 1-5 each) is defined in
+`references/quality-rubric.md` — shared by Phase-1 manual assessment and the Phase-2
+review-editor Role.
+
 **Novelty scoring**: `score = 1 - (matching_days / 7)` where `matching_days` is the
 count of past-7-day episodes with the same topic_tag.
 - `score < 0.3` → topic dropped (seen 5+ times in past week)

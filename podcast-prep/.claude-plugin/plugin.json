@@ -1,6 +1,6 @@
 {
   "name": "podcast-prep",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker. Returns structured briefs to writer agents; protects against same-topic-reroll patterns.",
   "author": {
     "name": "Norvyn"

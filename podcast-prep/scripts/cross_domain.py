@@ -54,7 +54,24 @@ TECH_KEYWORDS = [
     "ai-agents", "ai-coding", "on-device-ai", "device-side-ai",
     "compile-time-safety", "llm-api-cost", "swift-actor-model",
     "swift-agent-frameworks", "ai-cost-economics", "local-ai-inference",
+    "linux", "linux-sre", "macos", "windows", "docker", "k8s", "kubernetes",
+    "git", "ansible", "database", "sql", "observability", "wordpress",
+    "ocr", "certification", "cka", "computer-geometry", "obsidian",
 ]
+
+# A note's parent directory name (slug) → domain. For an untagged migrated note the
+# directory it nests under is a strong secondary signal — used by the content-scan
+# fallback in classify_note_domain.
+DIR_DOMAIN = {
+    "linux-sre": "tech", "python": "tech", "macos": "tech", "windows-etc": "tech",
+    "git": "tech", "ansible": "tech", "docker-k8s": "tech", "database": "tech",
+    "observability": "tech", "wordpress-blog-caddy": "tech", "ocr": "tech",
+    "certification": "tech", "computer-geometry": "tech", "cloud-vmware": "tech",
+    "ai-llm": "tech", "obsidian-markdown": "tech", "draft-by-ai": "tech",
+    "认知科学": "cognition", "self-improvement": "cognition",
+    "卡拉马佐夫兄弟": "literature",
+    "fitness-health-food": "natural-science",
+}
 
 PKOS_DEFAULT_DIRS = ["10-Knowledge", "20-Ideas", "50-References", "30-Projects",
                      "90-Productions/Podcasts"]
@@ -107,20 +124,39 @@ def _kw_matches_tag(kw, tag):
     return kw in tag
 
 
-def classify_note_domain(tags):
-    """Return the domain bucket for a note given its tags (list of str).
+def _classify_by_text(title, excerpt="", parent_dir=""):
+    """Domain from a note's title + leading excerpt, with the parent directory name
+    as a last-resort signal. The keyword scan runs over title + excerpt only (not the
+    full body) to limit false positives. Returns 'general' when nothing resolves."""
+    blob = f"{title or ''} {excerpt or ''}".lower()
+    if blob.strip():
+        for domain, kws in DOMAIN_KEYWORDS.items():
+            for kw in kws:
+                if _kw_matches_tag(kw.lower(), blob):
+                    return domain
+        for kw in TECH_KEYWORDS:
+            if _kw_matches_tag(kw.lower(), blob):
+                return "tech"
+    if parent_dir:
+        d = DIR_DOMAIN.get(parent_dir.strip().lower())
+        if d:
+            return d
+    return "general"
+
+
+def classify_note_domain(tags, title="", excerpt="", parent_dir=""):
+    """Return the domain bucket for a note.
 
     Returns one of: philosophy / management / cognition / history / literature /
     natural-science / tech / general.
 
-    Logic: check non-tech domains first; if any non-tech domain has a keyword that
-    matches any tag → return that domain. If only tech keywords match → tech. Else → general.
+    Tags first: non-tech domains, then tech. If the tags do not classify (or there
+    are none) and content/parent-dir signals are supplied, fall back to a title +
+    excerpt keyword scan, then the parent directory name. The fallback is what keeps
+    a note with no domain tag (≈1/3 of the legacy vault) from silently falling to
+    'general' and dropping out of cross-domain recall.
     """
-    if not tags:
-        return "general"
-    tags_norm = [t.lower().strip() for t in tags if t and t.strip()]
-    if not tags_norm:
-        return "general"
+    tags_norm = [t.lower().strip() for t in (tags or []) if t and t.strip()]
     for domain, kws in DOMAIN_KEYWORDS.items():
         for kw in kws:
             kw_l = kw.lower()
@@ -132,6 +168,8 @@ def classify_note_domain(tags):
         for tag in tags_norm:
             if _kw_matches_tag(kw_l, tag):
                 return "tech"
+    if title or excerpt or parent_dir:
+        return _classify_by_text(title, excerpt, parent_dir)
     return "general"
 
 
@@ -247,13 +285,15 @@ def load_pkos_notes(vault_root, dirs=None):
             # with real content keep their first body line as the label.
             if not title or not title.strip() or _is_unusable_title(title):
                 continue
+            excerpt = _extract_excerpt(text)
             notes.append({
                 "path": str(md.relative_to(root)),
                 "title": title,
                 "tags": tags,
                 "created": created[:10],
-                "domain": classify_note_domain(tags),
-                "excerpt": _extract_excerpt(text),
+                "domain": classify_note_domain(tags, title=title, excerpt=excerpt,
+                                               parent_dir=md.parent.name),
+                "excerpt": excerpt,
             })
     return notes
 

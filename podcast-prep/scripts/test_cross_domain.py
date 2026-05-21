@@ -57,6 +57,46 @@ class ClassifyDomainTests(unittest.TestCase):
         self.assertEqual(classify_note_domain(["random", "miscellaneous"]), "general")
 
 
+class ContentFallbackTests(unittest.TestCase):
+    """The title+excerpt+parent-dir fallback when tags do not classify a note."""
+
+    def test_tags_still_win_when_they_classify(self):
+        # A classifying tag short-circuits — content is not consulted.
+        self.assertEqual(
+            classify_note_domain(["哲学"], title="a tech note about python"),
+            "philosophy")
+
+    def test_title_keyword_fallback(self):
+        # tags = generic getnote tags that don't classify → title scan finds it
+        self.assertEqual(
+            classify_note_domain(["得到", "某书名"], title="关于存在与意义的哲学思考"),
+            "philosophy")
+
+    def test_excerpt_keyword_fallback(self):
+        self.assertEqual(
+            classify_note_domain([], title="无标题", excerpt="刻意练习与元认知的关系"),
+            "cognition")
+
+    def test_parent_dir_fallback(self):
+        # No domain keyword anywhere → parent directory name resolves it
+        self.assertEqual(
+            classify_note_domain([], title="systemctl", parent_dir="linux-sre"),
+            "tech")
+        self.assertEqual(
+            classify_note_domain([], title="伊凡的独白", parent_dir="卡拉马佐夫兄弟"),
+            "literature")
+
+    def test_no_signal_returns_general(self):
+        self.assertEqual(
+            classify_note_domain([], title="周三的会议记录", parent_dir="misc"),
+            "general")
+
+    def test_backward_compatible_tags_only_call(self):
+        # The original single-arg signature is unchanged.
+        self.assertEqual(classify_note_domain(["ai"]), "tech")
+        self.assertEqual(classify_note_domain([]), "general")
+
+
 class FrontmatterTests(unittest.TestCase):
     def test_block_list_tags(self):
         text = """---

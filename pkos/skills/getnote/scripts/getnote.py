@@ -5,6 +5,7 @@ GetNote JSON parsing helpers for wrapped official OpenAPI responses.
 
 import json
 import os
+import re
 import sys
 
 
@@ -258,6 +259,105 @@ related: []
     return len(notes)
 
 
+def _gn_slugify(text, maxlen=48):
+    """Filename-safe slug. Keeps CJK (isalnum() is true for CJK in py3)."""
+    s = re.sub(r"\s+", "-", (text or "").strip())
+    s = "".join(c for c in s if c.isalnum() or c in "-_")
+    return s[:maxlen] or "untitled"
+
+
+def _gn_tag_names(note):
+    """getnote tags are [{id,name,type}]; return plain name list."""
+    out = []
+    for t in note.get("tags") or []:
+        if isinstance(t, dict) and t.get("name"):
+            out.append(str(t["name"]))
+        elif isinstance(t, str) and t:
+            out.append(t)
+    return out
+
+
+def split_getnote_note(note):
+    """Deterministically split one getnote note into Obsidian-bound parts.
+
+    Per the vault directory contract:
+    - `ref_content` (the 摘抄 / quoted excerpt)        -> type=reference -> 50-References/
+    - `content` on a `ref`/`note`/`plain_text` note    -> the user's 心得 -> type=idea ->
+                                                          20-Ideas/观点心得/
+    - `content` on a `link`/`img` note (an AI 智能总结) -> type=reference -> 50-References/
+
+    A note carrying both an excerpt and the user's reflection yields TWO parts.
+    Returns a list of dicts: {kind, type, subdir, body}. kind is 'reference' or 'idea'.
+    """
+    note_type = (note.get("note_type") or "").strip()
+    content = (note.get("content") or "").strip()
+    ref_content = (note.get("ref_content") or "").strip()
+    parts = []
+    if ref_content:
+        parts.append({"kind": "reference", "type": "reference",
+                      "subdir": "50-References", "body": ref_content})
+    if content:
+        if note_type in ("link", "img_text", "img"):
+            # content is GetNote's AI 智能总结 of external material — still reference.
+            parts.append({"kind": "reference", "type": "reference",
+                          "subdir": "50-References", "body": content})
+        else:
+            # ref / plain_text / note: content is the user's own reflection (心得).
+            parts.append({"kind": "idea", "type": "idea",
+                          "subdir": "20-Ideas/观点心得", "body": content})
+    return parts
+
+
+def _gn_frontmatter(note_type, created, tags, related):
+    rel = "[" + ", ".join(f'"{r}"' for r in related) + "]" if related else "[]"
+    tag_str = "[" + ", ".join(tags) + "]" if tags else "[getnote]"
+    return (f"---\ntype: {note_type}\nsource: getnote\ncreated: {created}\n"
+            f"tags: {tag_str}\nquality: 0\ncitations: 0\nrelated: {rel}\n"
+            f"status: seed\n---\n")
+
+
+def write_getnote_split(notes, vault_root):
+    """Split each getnote note and write the parts to their contract directories,
+    cross-linking the reference and idea siblings when a note yields both.
+    Returns (counts {reference, idea}, processed_ids) — processed_ids lists the
+    note_ids that actually produced at least one written part, so the caller only
+    marks those as synced (a note with an empty async summary produces nothing and
+    must stay in the queue for a later run)."""
+    vault_root = os.path.expanduser(vault_root)
+    counts = {"reference": 0, "idea": 0}
+    processed_ids = []
+    for note in notes:
+        parts = split_getnote_note(note)
+        if not parts:
+            continue
+        nid = first_value(note, "note_id", "id")
+        if nid:
+            processed_ids.append(nid)
+        created = str(note.get("created_at") or note.get("updated_at") or "")[:10]
+        tags = _gn_tag_names(note)
+        title = (note.get("title") or "").strip()
+        # Plan file paths first so siblings can cross-link.
+        planned = []
+        for idx, part in enumerate(parts):
+            base = title or part["body"][:24]
+            slug = _gn_slugify(base)
+            if len(parts) > 1:
+                slug = f"{slug}-{part['kind']}"
+            rel_path = f"{part['subdir']}/{slug}.md"
+            planned.append((part, rel_path))
+        for part, rel_path in planned:
+            related = [p for _, p in planned if p != rel_path]
+            abs_path = os.path.join(vault_root, rel_path)
+            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            fm = _gn_frontmatter(part["type"], created, tags, related)
+            heading = title or part["body"][:24]
+            with open(abs_path, "w", encoding="utf-8") as fh:
+                fh.write(f"{fm}\n# {heading}\n\n{part['body']}\n")
+            counts[part["kind"]] += 1
+            print(f"Wrote [{part['type']}]: {rel_path}", file=sys.stderr)
+    return counts, processed_ids
+
+
 def _print_help():
     print("Usage: getnote.py <command> [args...]", file=sys.stderr)
     print("\nCommands accept wrapped official API responses with a success/data envelope:", file=sys.stderr)
@@ -276,6 +376,7 @@ def _print_help():
     print("  parse-upload-token                 Parse upload token", file=sys.stderr)
     print("  parse-topic-notes                  Parse topic notes", file=sys.stderr)
     print("  write-obsidian <vault_path> <type> [source]  Batch write notes to Obsidian", file=sys.stderr)
+    print("  split-getnote <vault_root>         Split getnote notes into reference+idea by contract", file=sys.stderr)
 
 
 def main(argv):
@@ -356,6 +457,20 @@ def main(argv):
         notes = _as_list(payload, "notes", "results")
         count = write_notes_to_obsidian(notes, vault_path, note_type, source)
         print(f"Wrote {count} notes to {vault_path}")
+
+    elif cmd == "split-getnote":
+        # Contract-aware: splits each getnote note into reference (摘抄) + idea (心得)
+        # parts and writes them to their contract directories. See vault-directory-contract.
+        # stdout = processed note_ids (one per line) for the caller to mark synced;
+        # stderr = human-readable progress + summary.
+        vault_root = argv[2] if len(argv) > 2 else os.path.expanduser("~/Obsidian/PKOS")
+        notes = _as_list(load_payload(input_json), "notes", "results")
+        counts, processed_ids = write_getnote_split(notes, vault_root)
+        for nid in processed_ids:
+            print(nid)
+        print(f"Split {len(notes)} getnote notes -> {counts['reference']} reference, "
+              f"{counts['idea']} idea ({len(processed_ids)} notes produced output)",
+              file=sys.stderr)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

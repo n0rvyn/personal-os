@@ -105,7 +105,41 @@ for note in payload.get('notes', []):
             print(f\"{note_id}\t{note.get('title','Untitled')}\t{note.get('note_type','plain_text')}\")
 " 2>/dev/null || true)
 ```
-Each untagged note becomes an inbox item with `source: getnote`, `raw_type: text`. Link/img types: extract task_id with `getnote.py parse-note-tasks`, then `poll_task` until completed (max 30 retries, 2s interval).
+**getnote notes are NOT sent to inbox-processor.** A getnote note carries structured
+fields (`ref_content` = 摘抄, `content` = the user's 心得 or an AI summary) — splitting
+it is a deterministic, rule-based operation, not an LLM classification. Route getnote
+notes through `getnote.py split-getnote`, which applies the vault directory contract
+(`pkos/references/vault-directory-contract.md`): `ref_content` → `50-References/`,
+a `ref`/`note`-type `content` → `20-Ideas/观点心得/`, a `link`/`img`-type `content`
+(AI 智能总结) → `50-References/`. A note with both an excerpt and a reflection is
+split into two cross-linked notes.
+
+Async note: a `link`/`img` getnote note's `content` (the AI 智能总结) is generated
+asynchronously. For each untagged link/img note whose `content` is still empty, poll
+its task with `getnote.py parse-note-tasks` + `poll_task` (max 30 retries, 2s) until
+the summary is ready, then re-fetch its detail. A note left with empty `content` is
+NOT tagged `#pkos-synced` this run — it stays in the queue for the next run rather
+than being lost.
+
+```bash
+GETNOTE_PARSER="${CLAUDE_PLUGIN_ROOT}/../../pkos/skills/getnote/scripts/getnote.py"
+# Filter NOTES_JSON to untagged notes, then deterministically split + write to the vault.
+echo "$NOTES_JSON" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+payload = data.get('data', data) if isinstance(data, dict) else {}
+untagged = [n for n in payload.get('notes', [])
+            if 'pkos-synced' not in [t.get('name','') for t in n.get('tags', [])]]
+print(json.dumps({'notes': untagged}, ensure_ascii=False))
+" | python3 "$GETNOTE_PARSER" split-getnote ~/Obsidian/PKOS
+```
+
+Only getnote notes that `split-getnote` actually wrote output for get `#pkos-synced`
+tagged below (Step 5); a note that produced nothing (still-empty async summary) stays
+untagged so the next run retries it.
+
+The remaining sources (Reminders / Notes / Voice) DO become inbox items and go to
+inbox-processor as before.
 
 Present a summary to the user:
 ```

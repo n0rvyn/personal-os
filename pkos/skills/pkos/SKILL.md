@@ -13,6 +13,7 @@ allowed-tools:
   - Skill(pkos:harvest)
   - Skill(pkos:ingest-exchange)
   - Skill(pkos:getnote-intel)
+  - Skill(pkos:getnote-import)
   - Skill(pkos:lint)
 ---
 
@@ -30,6 +31,7 @@ Parse from user input (natural language routing):
 - `lint` → Latest Health Report
 - `notion-links [--apply]` → Audit or repair Notion Obsidian links
 - `intel [getnote]` → Get笔记 Intelligence Feed
+- `getnote-import [--dry-run] [--limit N]` → Offline Get笔记 export backfill
 
 ## Routes
 
@@ -212,3 +214,18 @@ Invoke the `migrate` skill:
 - `--resume` → resume from interruption point
 
 To add a new source vault, edit `~/Obsidian/PKOS/.state/migrate-sources.yaml`.
+
+### Route: getnote-import
+
+Trigger: user says "getnote-import", "import getnote export", "导入 Get笔记 导出",
+"getnote 回填", "回填 Get笔记"
+
+Invoke the `getnote-import` skill — a one-shot offline backfill of a getnote HTML
+export archive into the vault (the API is rate-limited, so a full history is
+exported from the getnote app and ingested offline):
+- `--dry-run` → parse and report routing without writing (run this first)
+- `--limit N` → process at most N notes (staged run)
+- `--export-dir DIR` → override the export archive path
+
+Distinct from `intel getnote` (ongoing blogger feed) and the `inbox` skill's
+getnote source (incremental capture) — this route is the bulk historical backfill.

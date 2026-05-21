@@ -46,20 +46,59 @@ Present to the user:
 
 ### Step 2: Migrate
 
-The prior run left damage, so the first real run uses `--force` — it relocates the
-prior output to `.trash/migrate-prior-run/` and re-migrates cleanly:
+The prior run left damage, so the first real run uses `--force` — it relocates ALL
+prior-migration output (everything carrying a `migrated_from` frontmatter field, not
+just what `migrate-state.yaml` recorded) to `.trash/migrate-prior-run/`, then
+re-migrates cleanly:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/migrate/scripts/migrate.py" \
   --source-name 99-Obsidian --force
 ```
 
-A later top-up of new source notes uses `--resume` instead of `--force`.
+A later top-up of new source notes uses `--resume` instead of `--force`. The run
+writes a judgment queue at `~/Obsidian/PKOS/.state/migrate-judgment-queue.jsonl`.
 
-### Step 3: Report
+### Step 3: LLM value judgment
 
-Present the final summary: migrated / discarded / review counts, destination
-breakdown, and the two `.trash/` locations (`migrate-prior-run/`, `migrate-discarded/`).
+The migration in Step 2 is mechanical (routing, titles, tags). It auto-discards only
+empty and mojibake notes. This step applies the content-value judgment — read every
+migrated note and discard the ones with no reusable knowledge.
+
+Process `migrate-judgment-queue.jsonl` (one JSON object per line: `vault_path`,
+`title`, `excerpt`). Read it in batches (≈100 lines per `Read`) so context stays
+bounded. For each note, judge against this rubric:
+
+- **keep** — any reusable knowledge: a command/config snippet, a how-to, a concept
+  note, a reference, a genuine reflection. Short is fine — a one-line command is
+  valuable. When unsure, **keep** (discard is for clear cases only).
+- **discard** — no reusable value: a test/scratch note, a meaningless fragment, a
+  truncated capture with nothing usable, accidental or pure-noise content, a
+  near-duplicate stub.
+
+Collect the `vault_path` of every discard verdict into a plain-text file, one path
+per line:
+
+```bash
+# write the discard list to this path as you judge
+DISCARDS=~/Obsidian/PKOS/.state/migrate-discards.txt
+```
+
+### Step 4: Apply discards
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/migrate/scripts/migrate.py" \
+  --apply-discards ~/Obsidian/PKOS/.state/migrate-discards.txt
+```
+
+This moves the judged-low-value notes to `.trash/migrate-discarded/` and drops them
+from `migrate-state.yaml`. Nothing is deleted.
+
+### Step 5: Report
+
+Present the final summary: migrated count, auto-discarded (empty/mojibake),
+LLM-discarded (low value), destination breakdown, and the `.trash/` locations
+(`migrate-prior-run/`, `migrate-discarded/`).
 
 ## Routing
 
@@ -80,11 +119,14 @@ it; `migrated_from: 99-Obsidian` frontmatter records provenance.
 
 ## Discard policy
 
-Only **empty** notes (no text after frontmatter) and **mojibake** (CJK decoded
-through the wrong codec) are auto-discarded — moved to `.trash/migrate-discarded/`,
-never deleted. A short note (a one-line command, a config snippet) is valid
-knowledge and is migrated, not discarded; if it is short and unstructured it is
-flagged `review` for an optional later pass.
+Two layers, both move to `.trash/migrate-discarded/` — never delete:
+
+1. **Mechanical (Step 2)** — `migrate.py` auto-discards only **empty** notes (no text
+   after frontmatter) and **mojibake** (CJK decoded through the wrong codec). A short
+   note — a one-line command, a config snippet — is valid knowledge and is migrated.
+2. **LLM value judgment (Step 3)** — every migrated note is read and discarded if it
+   carries no reusable knowledge (test/scratch, meaningless fragment, truncated
+   noise). Conservative: when unsure, keep.
 
 ## Notes
 

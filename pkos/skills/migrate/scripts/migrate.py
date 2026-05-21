@@ -26,6 +26,7 @@ Usage:
 import argparse
 import fnmatch
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -267,23 +268,47 @@ def load_state(path):
         return yaml.safe_load(fh) or {"migrated": [], "errors": []}
 
 
+_MIGRATED_FROM_RE = re.compile(r"^migrated_from:\s*\S", re.M)
+_MIGRATED_HOMES = ("10-Knowledge", "20-Ideas", "30-Projects", "50-References",
+                   "90-Productions")
+
+
 def clean_prior_run(vault, state):
-    """Relocate every file the prior broken run wrote (recorded in migrate-state)
-    to .trash/migrate-prior-run/. Returns the count moved."""
+    """Relocate prior-migration output to .trash/migrate-prior-run/.
+
+    Sweeps the union of (a) every path recorded in migrate-state.yaml and (b) every
+    vault .md that carries a `migrated_from:` frontmatter field. (b) is essential:
+    an earlier migration that did not record state (e.g. a Notion-synced run) leaves
+    files this skill would otherwise collide with, producing `-<hash>` duplicates.
+    """
     trash = os.path.join(vault, ".trash", "migrate-prior-run")
-    moved = 0
+    targets = set()
     for entry in state.get("migrated", []):
         vp = entry.get("vault_path", "")
-        if not vp:
+        if vp:
+            targets.add(vp)
+    for top in _MIGRATED_HOMES:
+        base = Path(vault) / top
+        if not base.is_dir():
             continue
-        src = os.path.join(vault, vp)
+        for md in base.rglob("*.md"):
+            try:
+                head = md.read_text(encoding="utf-8")[:600]
+            except (OSError, UnicodeDecodeError):
+                continue
+            if _MIGRATED_FROM_RE.search(head):
+                targets.add(str(md.relative_to(vault)))
+
+    moved = 0
+    for rel in targets:
+        src = os.path.join(vault, rel)
         if os.path.isfile(src):
-            dst = os.path.join(trash, vp)
+            dst = os.path.join(trash, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.move(src, dst)
             moved += 1
-    # Drop now-empty directories left behind under 10-Knowledge / 50-References.
-    for top in ("10-Knowledge", "50-References", "30-Projects"):
+    # Drop now-empty directories left behind under the migration home dirs.
+    for top in _MIGRATED_HOMES:
         base = os.path.join(vault, top)
         if not os.path.isdir(base):
             continue
@@ -291,6 +316,69 @@ def clean_prior_run(vault, state):
             if dp != base and not os.listdir(dp):
                 os.rmdir(dp)
     return moved
+
+
+# --------------------------------------------------------------------------
+# LLM value-judgment queue
+# --------------------------------------------------------------------------
+
+def emit_judgment_queue(vault, entries, queue_path):
+    """Write a JSONL queue of {vault_path, title, excerpt} for every migrated note.
+
+    The migration itself is mechanical; this queue is what the migrate skill's LLM
+    pass reads to judge each note's content value ('整篇价值不大' → discard). The
+    excerpt is the note body's leading text — enough to judge value without loading
+    every full note into the skill's context.
+    """
+    written = 0
+    with open(queue_path, "w", encoding="utf-8") as fh:
+        for e in entries:
+            ap = os.path.join(vault, e["vault_path"])
+            try:
+                text = Path(ap).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            tm = re.search(r"^#\s+(.+)$", text, re.M)
+            title = tm.group(1).strip() if tm else ""
+            body = strip_frontmatter(text)
+            body = re.sub(r"^#\s+.+\n+", "", body, count=1)   # drop the title heading
+            excerpt = re.sub(r"\s+", " ", body).strip()[:320]
+            fh.write(json.dumps({"vault_path": e["vault_path"], "title": title,
+                                 "excerpt": excerpt}, ensure_ascii=False) + "\n")
+            written += 1
+    return written
+
+
+def apply_discards(vault, discard_file, state_path):
+    """Move LLM-judged low-value notes to .trash/migrate-discarded/ and drop them
+    from migrate-state. `discard_file` is a plain list of vault-relative paths."""
+    vault = os.path.expanduser(vault)
+    discard = set()
+    for line in Path(discard_file).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            discard.add(line)
+    state = load_state(state_path)
+    trash = os.path.join(vault, ".trash", "migrate-discarded")
+    moved = 0
+    kept = []
+    for e in state.get("migrated", []):
+        vp = e.get("vault_path", "")
+        if vp in discard:
+            src = os.path.join(vault, vp)
+            if os.path.isfile(src):
+                dst = os.path.join(trash, vp)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+                moved += 1
+        else:
+            kept.append(e)
+    state["migrated"] = kept
+    with open(state_path, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(state, fh, allow_unicode=True, sort_keys=False)
+    print(f"[migrate] apply-discards: moved {moved} low-value notes to "
+          f".trash/migrate-discarded/  ({len(kept)} notes remain migrated)")
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -389,11 +477,15 @@ def run(source_root, vault=DEFAULT_VAULT, rules=None, state_path=DEFAULT_STATE,
                             "vault_path": target_rel, "type": ntype, "status": "migrated"})
         stats["migrated"] += 1
 
+    queue_path = ""
     if not scan_only:
         state.setdefault("migrated", []).extend(new_entries)
         state["last_migration_path"] = "batch-complete"
         with open(state_path, "w", encoding="utf-8") as fh:
             yaml.safe_dump(state, fh, allow_unicode=True, sort_keys=False)
+        queue_path = os.path.join(os.path.dirname(state_path) or ".",
+                                  "migrate-judgment-queue.jsonl")
+        emit_judgment_queue(vault, new_entries, queue_path)
 
     mode = "SCAN-ONLY" if scan_only else "MIGRATE"
     print(f"[migrate] {mode} — source: {source_root}")
@@ -416,12 +508,15 @@ def run(source_root, vault=DEFAULT_VAULT, rules=None, state_path=DEFAULT_STATE,
             print(f"    {r}")
         if len(review_list) > 30:
             print(f"    ... +{len(review_list) - 30} more")
+    if queue_path:
+        print(f"  judgment queue: {queue_path}")
+        print(f"    → next: LLM value-judgment pass over {len(new_entries)} migrated notes")
     return 0
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Migrate an external vault into PKOS.")
-    g = ap.add_mutually_exclusive_group(required=True)
+    g = ap.add_mutually_exclusive_group(required=False)
     g.add_argument("--source-name", help="A named source from migrate-sources.yaml.")
     g.add_argument("--source-vault", help="A source vault path directly.")
     ap.add_argument("--vault", default=DEFAULT_VAULT)
@@ -432,7 +527,16 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true",
                     help="Relocate the prior run's output to .trash/ and re-migrate all.")
     ap.add_argument("--resume", action="store_true", help="Skip already-migrated notes.")
+    ap.add_argument("--apply-discards", metavar="FILE",
+                    help="Apply an LLM value-judgment pass: move the vault-relative "
+                         "paths listed in FILE to .trash/migrate-discarded/.")
     args = ap.parse_args(argv)
+
+    if args.apply_discards:
+        return apply_discards(args.vault, args.apply_discards, args.state_file)
+
+    if not (args.source_name or args.source_vault):
+        ap.error("one of --source-name / --source-vault / --apply-discards is required")
 
     rules = None
     source_root = args.source_vault

@@ -147,5 +147,52 @@ class RunTests(unittest.TestCase):
         self.assertEqual(len(live), 3)  # re-migrated cleanly
 
 
+class ValueJudgmentTests(unittest.TestCase):
+    def setUp(self):
+        self.src = tempfile.mkdtemp()
+        self.vault = tempfile.mkdtemp()
+        self.state = os.path.join(tempfile.mkdtemp(), "migrate-state.yaml")
+        p = Path(self.src) / "Python" / "note.md"
+        p.parent.mkdir(parents=True)
+        p.write_text("# note\n\n" + "real python knowledge content. " * 20, encoding="utf-8")
+
+    def test_run_emits_judgment_queue(self):
+        mig.run(self.src, vault=self.vault, rules=None, state_path=self.state)
+        queue = os.path.join(os.path.dirname(self.state), "migrate-judgment-queue.jsonl")
+        self.assertTrue(os.path.exists(queue))
+        import json
+        rows = [json.loads(l) for l in open(queue, encoding="utf-8") if l.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("vault_path", rows[0])
+        self.assertIn("excerpt", rows[0])
+        self.assertEqual(rows[0]["title"], "note")
+
+    def test_apply_discards_moves_to_trash(self):
+        mig.run(self.src, vault=self.vault, rules=None, state_path=self.state)
+        st = yaml.safe_load(open(self.state, encoding="utf-8"))
+        victim = st["migrated"][0]["vault_path"]
+        dfile = os.path.join(self.vault, "discards.txt")
+        Path(dfile).write_text(victim + "\n", encoding="utf-8")
+        mig.apply_discards(self.vault, dfile, self.state)
+        self.assertFalse(os.path.exists(os.path.join(self.vault, victim)))
+        self.assertTrue(os.path.exists(
+            os.path.join(self.vault, ".trash", "migrate-discarded", victim)))
+        st2 = yaml.safe_load(open(self.state, encoding="utf-8"))
+        self.assertEqual(len(st2["migrated"]), 0)
+
+    def test_clean_prior_run_sweeps_undocumented_migrated_from(self):
+        # A prior-migration file NOT recorded in migrate-state must still be swept,
+        # by its `migrated_from` frontmatter (the April-migration duplicate bug).
+        old = Path(self.vault) / "10-Knowledge" / "linux-sre" / "old.md"
+        old.parent.mkdir(parents=True)
+        old.write_text("---\nmigrated_from: 99-Obsidian/Linux SRE/old.md\n---\n\nx",
+                       encoding="utf-8")
+        moved = mig.clean_prior_run(self.vault, {"migrated": []})
+        self.assertEqual(moved, 1)
+        self.assertFalse(old.exists())
+        self.assertTrue((Path(self.vault) / ".trash" / "migrate-prior-run"
+                         / "10-Knowledge" / "linux-sre" / "old.md").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

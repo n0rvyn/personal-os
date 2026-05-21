@@ -11,6 +11,7 @@ Public helpers:
 - same_topic_past_notes(today_tags, vault_root, days_min, days_max, n) -> past notes on similar topic
 """
 import os
+import random
 import re
 from datetime import date, timedelta
 from pathlib import Path
@@ -224,15 +225,18 @@ def _tag_overlap(a, b):
     return len(sa & sb)
 
 
-def cross_domain_candidates(today_tags, vault_root, n=5, notes=None):
+def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
+                            recent_pool=8, seed=None):
     """Return up to n notes from NON-tech domains, one per domain bucket.
 
-    Selection: for each non-tech domain that has any note matching ≥1 today_tag (loose
-    semantic overlap via tags), pick the most recent. If no overlap exists in a domain,
-    pick the most recent note in that domain regardless. Returns notes sorted by domain
-    priority (philosophy → management → cognition → history → literature → natural-science).
+    Selection: for each non-tech domain, prefer notes matching ≥1 today_tag; from that
+    set (or the whole domain if no overlap), take the `recent_pool` most-recent notes and
+    pick one at random. Random (not always-newest) so consecutive episodes on similar
+    topics do not keep surfacing the identical note — a cooldown against mechanical repeat.
+    Pass `seed` for reproducibility; seed=None → fresh pick each run.
 
-    Pass `notes` to skip filesystem walk (for testing).
+    Returns notes ordered by domain priority (philosophy → management → cognition →
+    history → literature → natural-science). Pass `notes` to skip filesystem walk.
     """
     if notes is None:
         notes = load_pkos_notes(vault_root)
@@ -240,6 +244,7 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None):
         "philosophy", "management", "cognition",
         "history", "literature", "natural-science",
     ]
+    rng = random.Random(seed)
     picked = []
     for dom in domains_priority:
         domain_notes = [nt for nt in notes if nt["domain"] == dom]
@@ -251,7 +256,7 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None):
         ]
         pool = with_overlap if with_overlap else domain_notes
         pool.sort(key=lambda nt: nt["created"], reverse=True)
-        picked.append(pool[0])
+        picked.append(rng.choice(pool[:recent_pool]))
         if len(picked) >= n:
             break
     return picked
@@ -285,4 +290,14 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=30, n=5,
         key=lambda nt: (_tag_overlap(nt["tags"], today_tags), nt["created"]),
         reverse=True,
     )
-    return pool[:n]
+    # Dedup by normalized title — the vault holds near-identical re-syncs of the same
+    # note (e.g. "X的研究发现" vs "X研究发现"); collapse them so the writer sees variety.
+    seen = set()
+    deduped = []
+    for nt in pool:
+        norm = re.sub(r"\s+", "", nt["title"]).lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        deduped.append(nt)
+    return deduped[:n]

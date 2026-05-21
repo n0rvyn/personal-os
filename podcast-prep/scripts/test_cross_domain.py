@@ -115,6 +115,32 @@ class CrossDomainCandidatesTests(unittest.TestCase):
         # With overlap is preferred even though older
         self.assertEqual(picked[0]["path"], "older-overlap.md")
 
+    def test_rotation_varies_pick_across_seeds(self):
+        # A domain with multiple recent notes — different seeds should be able to
+        # surface different notes (cooldown against mechanical repeat).
+        notes = [
+            {"path": f"p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
+             "created": f"2026-05-{10+i:02d}", "domain": "philosophy", "excerpt": ""}
+            for i in range(8)
+        ]
+        picks = {
+            cross_domain_candidates(["ai"], vault_root=None, n=1, notes=notes,
+                                    seed=s)[0]["path"]
+            for s in range(20)
+        }
+        # Across 20 seeds, more than one distinct note should appear
+        self.assertGreater(len(picks), 1)
+
+    def test_rotation_reproducible_with_same_seed(self):
+        notes = [
+            {"path": f"p{i}.md", "title": f"note {i}", "tags": ["哲学", "ai"],
+             "created": f"2026-05-{10+i:02d}", "domain": "philosophy", "excerpt": ""}
+            for i in range(8)
+        ]
+        a = cross_domain_candidates(["ai"], vault_root=None, n=1, notes=notes, seed=7)
+        b = cross_domain_candidates(["ai"], vault_root=None, n=1, notes=notes, seed=7)
+        self.assertEqual(a[0]["path"], b[0]["path"])
+
 
 class SameTopicPastNotesTests(unittest.TestCase):
     def test_returns_notes_in_window_with_overlap(self):
@@ -150,6 +176,19 @@ class SameTopicPastNotesTests(unittest.TestCase):
         )
         # 2-overlap beats 1-overlap regardless of recency
         self.assertEqual(picked[0]["path"], "high-overlap.md")
+
+    def test_dedups_near_identical_titles(self):
+        # Vault holds re-synced near-dupes; same whitespace-normalized title collapses.
+        notes = [
+            {"path": "a.md", "title": "AI 研究 发现", "tags": ["ai"],
+             "created": "2026-05-05", "domain": "tech", "excerpt": ""},
+            {"path": "b.md", "title": "AI研究发现", "tags": ["ai"],
+             "created": "2026-05-04", "domain": "tech", "excerpt": ""},
+        ]
+        picked = same_topic_past_notes(
+            ["ai"], vault_root=None, today="2026-05-21", notes=notes,
+        )
+        self.assertEqual(len(picked), 1)
 
 
 if __name__ == "__main__":

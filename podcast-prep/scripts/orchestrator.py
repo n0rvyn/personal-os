@@ -145,7 +145,7 @@ def run_check(candidates: list, topic_log_path: str, today: str,
         "pkos_note": pkos_note,  # caller-provided, propagated verbatim
         "contrarian_source": _contrarian_pull(seed=seed),
         "cross_domain_candidates": cross_domain_candidates(
-            today_tags, resolved_root, n=5, notes=notes),
+            today_tags, resolved_root, n=5, notes=notes, seed=seed),
         "self_past_candidates": same_topic_past_notes(
             today_tags, resolved_root, today=today, n=5, notes=notes),
         "named_concept_prompt": NAMED_CONCEPT_PROMPT,

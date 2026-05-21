@@ -33,16 +33,32 @@ If the note is missing, `check` returns `{"error": "pkos_note required ..."}` an
   --date=YYYY-MM-DD \
   --topic-log={exchange_dir}/podcast-prep/topic_log.yaml \
   --pkos-note='{"id":"PKOS/note-id","title":"Note Title","excerpt":"brief excerpt"}' \
-  [--seed=N]
+  [--seed=N] \
+  [--vault-root=/path/to/PKOS]
 ```
 
 Returns a JSON brief with:
 - `approved_topics`: list of `{topic_tag: str, novelty_score: float, required_angle: str}`
 - `pkos_note`: the caller-provided PKOS note, propagated verbatim
 - `contrarian_source`: `{source: str, category: str, url: str}` from the curated pool
+- `cross_domain_candidates`: PKOS notes from NON-tech domains (philosophy / management / cognition / history / literature / natural-science), one per domain — seeds cross-domain synthesis
+- `self_past_candidates`: past PKOS notes (created 7-30 days ago) on a topic similar to today's — the writer picks the one whose stance contradicts today's argument
+- `named_concept_prompt`: a directive nudging the writer to name an emergent pattern
 - `generated_at`: ISO timestamp
 
-On missing or invalid `pkos_note`, returns `{"error": "pkos_note required ...", "approved_topics": [], ...}`.
+On missing or invalid `pkos_note`, returns `{"error": "pkos_note required ...", "approved_topics": [], cross_domain_candidates: [], self_past_candidates: [], named_concept_prompt: "...", ...}` — the error brief keeps the full schema.
+
+`--vault-root` defaults to `pkos_root` (or `exchange_dir`'s parent) in `~/.claude/personal-os.yaml`.
+
+### Insight-density fields — writer protocol
+
+These three fields target the podcast's core KPI: selection → insight → opinion → thought-provocation. They are advisory inputs the writer agent (达芬奇) MUST engage with:
+
+1. **`cross_domain_candidates`** — the writer must weave at least ONE non-tech-domain note into the script as a genuine cross-domain connection (not decoration). The strongest episodes emerge when a tech news item collides with a philosophy / cognition / management note (e.g. an AI-agent story × a Kahneman cognition note).
+2. **`self_past_candidates`** — the writer scans these past notes, finds the one whose stance most contradicts today's main argument, and writes a "我 X 天前是这么想的 → 为什么变了 / 哪部分没变" passage. Debating one's past self is the highest-yield insight engine.
+3. **`named_concept_prompt`** — the writer attempts to name one emergent pattern (3-5 字, 画面感, 可复用) with a dedicated naming-ritual paragraph. If nothing today merits naming, say so explicitly — do not force it.
+
+Each PKOS reference in the script must carry an origin date ("X 月 X 日的笔记" / "最近读到"); undated references read as decoration, not knowledge connection.
 
 **Novelty scoring**: `score = 1 - (matching_days / 7)` where `matching_days` is the
 count of past-7-day episodes with the same topic_tag.
@@ -103,6 +119,9 @@ python3 orchestrator.py check \
 #   "approved_topics": [{"topic_tag":"ai-agents","novelty_score":1.0,"required_angle":"技术内核"}, ...],
 #   "pkos_note": {"id":"PKOS/note-42", ...},
 #   "contrarian_source": {"source":"stratechery", ...},
+#   "cross_domain_candidates": [{"domain":"philosophy","title":"...","created":"2026-05-18", ...}, ...],
+#   "self_past_candidates": [{"title":"...","created":"2026-05-03", ...}, ...],
+#   "named_concept_prompt": "命名任务：通读今天的素材 ...",
 #   "generated_at": "2026-05-19T00:00:00Z"
 # }
 ```

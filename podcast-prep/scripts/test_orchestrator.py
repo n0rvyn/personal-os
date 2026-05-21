@@ -49,6 +49,7 @@ class OrchestratorCheckTests(unittest.TestCase):
                 topic_log_path=self.topic_log_path,
                 today="2026-05-19",
                 pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+                vault_root=os.path.join(self.tmp_dir.name, "nonexistent_vault"),
             )
         tags = [t["topic_tag"] for t in brief["approved_topics"]]
         self.assertNotIn("swift6", tags)  # 5/7 matches → score 0.28 < 0.3 → drop
@@ -56,6 +57,11 @@ class OrchestratorCheckTests(unittest.TestCase):
         # pkos_note is the caller-provided value, propagated to brief verbatim
         self.assertEqual(brief["pkos_note"], {"id": "PKOS/x", "title": "y", "excerpt": "z"})
         self.assertIn("contrarian_source", brief)
+        # Insight-density fields present; empty vault → empty candidate lists
+        self.assertEqual(brief["cross_domain_candidates"], [])
+        self.assertEqual(brief["self_past_candidates"], [])
+        self.assertIn("named_concept_prompt", brief)
+        self.assertIn("命名", brief["named_concept_prompt"])
 
     def test_run_check_keeps_medium_novelty_with_angle(self):
         # 3 matches in 7 days → 1 - 3/7 = 0.571 → 0.3-0.7 → keep + pick_unused_angle
@@ -73,6 +79,7 @@ class OrchestratorCheckTests(unittest.TestCase):
                 topic_log_path=self.topic_log_path,
                 today="2026-05-19",
                 pkos_note={"id": "PKOS/test", "title": "t", "excerpt": "e"},
+                vault_root=os.path.join(self.tmp_dir.name, "nonexistent_vault"),
             )
         topics = brief["approved_topics"]
         self.assertEqual(len(topics), 1)
@@ -92,9 +99,14 @@ class OrchestratorCheckTests(unittest.TestCase):
                 topic_log_path=self.topic_log_path,
                 today="2026-05-19",
                 pkos_note=None,  # caller failed to provide
+                vault_root=os.path.join(self.tmp_dir.name, "nonexistent_vault"),
             )
         self.assertIn("error", brief)
         self.assertIn("pkos_note", brief["error"])
+        # Error brief keeps the full schema so downstream consumers don't KeyError
+        self.assertEqual(brief["cross_domain_candidates"], [])
+        self.assertEqual(brief["self_past_candidates"], [])
+        self.assertIn("named_concept_prompt", brief)
 
 class OrchestratorFinalizeTests(unittest.TestCase):
     def setUp(self):

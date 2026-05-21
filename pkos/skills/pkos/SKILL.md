@@ -15,6 +15,7 @@ allowed-tools:
   - Skill(pkos:getnote-intel)
   - Skill(pkos:getnote-import)
   - Skill(pkos:migrate)
+  - Skill(pkos:vault-reorg)
   - Skill(pkos:lint)
 ---
 
@@ -33,6 +34,7 @@ Parse from user input (natural language routing):
 - `notion-links [--apply]` → Audit or repair Notion Obsidian links
 - `intel [getnote]` → Get笔记 Intelligence Feed
 - `getnote-import [--dry-run] [--limit N]` → Offline Get笔记 export backfill
+- `vault-reorg [--dry-run] [--only retag|dedup|cleanup]` → Vault retag / dedup / cleanup
 
 ## Routes
 
@@ -231,3 +233,16 @@ exported from the getnote app and ingested offline):
 
 Distinct from `intel getnote` (ongoing blogger feed) and the `inbox` skill's
 getnote source (incremental capture) — this route is the bulk historical backfill.
+
+### Route: vault-reorg
+
+Trigger: user says "vault-reorg", "reorganize vault", "retag", "整理 vault",
+"vault 重整", "去重笔记"
+
+Invoke the `vault-reorg` skill — a one-shot vault cleanup run after a bulk ingest:
+- `--dry-run` → report retag / dedup / cleanup counts without writing (run first)
+- `--only retag|dedup|cleanup` → run a single pass (default: all three)
+
+retag appends a domain tag to notes that don't classify (so cross-domain recall can
+bucket them); dedup collapses exact content-duplicates; cleanup relocates the stale
+`00-Inbox/getnote/` tree and removes empty directories. All removals go to `.trash/`.

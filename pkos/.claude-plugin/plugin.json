@@ -1,6 +1,6 @@
 {
   "name": "pkos",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Personal Knowledge Operating System: automated knowledge compilation with ripple ingest, wiki health maintenance, cross-plugin intel sync, IEF-compliant exchange artifact ingestion, and unified /pkos entry point",
   "author": {
     "name": "Norvyn"

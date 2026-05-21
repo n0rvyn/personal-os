@@ -58,6 +58,25 @@ TECH_KEYWORDS = [
 
 PKOS_DEFAULT_DIRS = ["10-Knowledge", "20-Ideas", "50-References", "30-Projects"]
 
+# Directory holding the user's own ideas/opinions (notes with a stance), as opposed to
+# 10-Knowledge which holds reading excerpts. self_past recall prefers this dir.
+IDEAS_DIR = "20-Ideas"
+
+# Placeholder titles carrying no information. getnote/dedao captures use these, often
+# with a numeric suffix ("无标题笔记-1054"), so this is a prefix-pattern match, not a set.
+_UNUSABLE_TITLE_RE = re.compile(
+    r"^(无标题|未命名|untitled)[\s\-_0-9笔记]*$", re.IGNORECASE
+)
+
+
+def _is_unusable_title(title):
+    """True if the title is a content-free placeholder (incl. numbered variants)."""
+    return bool(title) and bool(_UNUSABLE_TITLE_RE.match(title.strip()))
+
+# CJK function words stripped when building a title signature for dedup, so that
+# "X的研究发现" and "X研究发现" collapse to the same near-duplicate.
+_DEDUP_FILLER = str.maketrans("", "", "的了之与和及在")
+
 
 def _kw_matches_tag(kw, tag):
     """True if keyword kw matches tag (both already lowercased).
@@ -156,16 +175,27 @@ def _parse_frontmatter(text):
 
 
 def _extract_title(text, fallback_path):
-    """Get title: frontmatter aliases[0] / title / first H1 / filename."""
+    """Get title from the first USABLE of: aliases[0] / frontmatter title / first H1 /
+    filename stem. Roughly 23% of the vault are getnote/dedao captures whose title is a
+    placeholder ("无标题") — it can land in any of those slots, so each candidate is
+    checked. When all are unusable, fall back to the first body line so the note still
+    carries a referenceable label."""
     fm = _parse_frontmatter(text)
+    candidates = []
     if isinstance(fm.get("aliases"), list) and fm["aliases"]:
-        return fm["aliases"][0]
+        candidates.append(fm["aliases"][0])
     if fm.get("title"):
-        return fm["title"]
+        candidates.append(str(fm["title"]))
     for line in text.splitlines():
         if line.startswith("# "):
-            return line[2:].strip()
-    return Path(fallback_path).stem
+            candidates.append(line[2:].strip())
+            break
+    candidates.append(Path(fallback_path).stem)
+    for c in candidates:
+        if c and c.strip() and not _is_unusable_title(c):
+            return c
+    # Every candidate is a placeholder → use the first body line as a de-facto title.
+    return _extract_excerpt(text, max_len=40) or (candidates[0] if candidates else "")
 
 
 def _extract_excerpt(text, max_len=200):
@@ -207,9 +237,15 @@ def load_pkos_notes(vault_root, dirs=None):
             created = fm.get("created", "")
             if not created or not re.match(r"^\d{4}-\d{2}-\d{2}", str(created)):
                 continue
+            title = _extract_title(text, md)
+            # Drop only notes that are still unusable after the excerpt fallback —
+            # i.e. truly empty notes (no title, no body). Placeholder-titled notes
+            # with real content keep their first body line as the label.
+            if not title or not title.strip() or _is_unusable_title(title):
+                continue
             notes.append({
                 "path": str(md.relative_to(root)),
-                "title": _extract_title(text, md),
+                "title": title,
                 "tags": tags,
                 "created": created[:10],
                 "domain": classify_note_domain(tags),
@@ -262,12 +298,22 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
     return picked
 
 
-def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=30, n=5,
-                          today=None, notes=None):
-    """Notes with ≥1 tag overlap with today_tags, created in [today-days_max, today-days_min].
+def _title_signature(title):
+    """Normalized title key for near-duplicate detection: drop whitespace, lowercase,
+    strip CJK function words so "X的研究发现" and "X研究发现" collapse together."""
+    return re.sub(r"\s+", "", title).lower().translate(_DEDUP_FILLER)
 
-    Used for the self-past-contrarian feature: 达芬奇 picks the one whose stance contradicts
-    today's main argument. Orchestrator surfaces candidates; stance comparison stays with 达芬奇.
+
+def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=90, n=5,
+                          today=None, notes=None):
+    """Past notes for the self-past-contrarian feature: surface notes the user may have
+    taken a STANCE on, so 达芬奇 can find one that contradicts today's argument and write
+    a "我X天前是这么想的→为什么变了" passage.
+
+    Selection: ≥1 tag overlap with today_tags, created in [today-days_max, today-days_min].
+    Ranking prefers notes from 20-Ideas/ (the user's own opinions — likely to carry a
+    stance) over 10-Knowledge/ excerpts, then higher tag overlap, then recency. The window
+    is 90 days because a past stance worth debating is often older than a month.
 
     Pass `today` (ISO date str) and `notes` for testing.
     """
@@ -287,17 +333,20 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=30, n=5,
         if lower <= created_d <= upper:
             pool.append(nt)
     pool.sort(
-        key=lambda nt: (_tag_overlap(nt["tags"], today_tags), nt["created"]),
+        key=lambda nt: (
+            nt["path"].startswith(IDEAS_DIR + "/"),  # opinion notes first
+            _tag_overlap(nt["tags"], today_tags),
+            nt["created"],
+        ),
         reverse=True,
     )
-    # Dedup by normalized title — the vault holds near-identical re-syncs of the same
-    # note (e.g. "X的研究发现" vs "X研究发现"); collapse them so the writer sees variety.
+    # Dedup by title signature — the vault holds near-identical re-syncs of the same note.
     seen = set()
     deduped = []
     for nt in pool:
-        norm = re.sub(r"\s+", "", nt["title"]).lower()
-        if norm in seen:
+        sig = _title_signature(nt["title"])
+        if sig in seen:
             continue
-        seen.add(norm)
+        seen.add(sig)
         deduped.append(nt)
     return deduped[:n]

@@ -6,7 +6,31 @@ from cross_domain import (
     same_topic_past_notes,
     _parse_frontmatter,
     _tag_overlap,
+    _is_unusable_title,
+    _extract_title,
 )
+
+
+class UnusableTitleTests(unittest.TestCase):
+    def test_plain_placeholder_is_unusable(self):
+        self.assertTrue(_is_unusable_title("无标题"))
+        self.assertTrue(_is_unusable_title("无标题笔记"))
+        self.assertTrue(_is_unusable_title("未命名"))
+        self.assertTrue(_is_unusable_title("untitled"))
+
+    def test_numbered_placeholder_is_unusable(self):
+        # getnote captures append a numeric suffix
+        self.assertTrue(_is_unusable_title("无标题笔记-1054"))
+        self.assertTrue(_is_unusable_title("untitled-3"))
+
+    def test_real_title_is_usable(self):
+        self.assertFalse(_is_unusable_title("AI落地的新瓶颈：上下文工程"))
+        self.assertFalse(_is_unusable_title("熵蚀与系统衰退"))
+
+    def test_extract_title_falls_back_to_body_when_placeholder(self):
+        text = "---\ntitle: 无标题\n---\n\n这是正文第一行讲了一个真实的观点。\n"
+        self.assertEqual(_extract_title(text, "无标题笔记-12.md"),
+                         "这是正文第一行讲了一个真实的观点。")
 
 
 class ClassifyDomainTests(unittest.TestCase):
@@ -156,13 +180,50 @@ class SameTopicPastNotesTests(unittest.TestCase):
              "created": "2026-04-25", "domain": "history", "excerpt": ""},
         ]
         picked = same_topic_past_notes(
-            ["ai"], vault_root=None, today="2026-05-21", notes=notes,
+            ["ai"], vault_root=None, today="2026-05-21", notes=notes, days_max=30,
         )
         paths = [nt["path"] for nt in picked]
         self.assertIn("in.md", paths)
         self.assertNotIn("too-recent.md", paths)
-        self.assertNotIn("too-old.md", paths)
+        self.assertNotIn("too-old.md", paths)  # 2026-03-01 is outside the 30d window here
         self.assertNotIn("no-overlap.md", paths)
+
+    def test_default_window_is_90_days(self):
+        # A note 60 days back is inside the default 90d window but outside a 30d window.
+        notes = [
+            {"path": "60d.md", "title": "60 days back", "tags": ["ai"],
+             "created": "2026-03-22", "domain": "tech", "excerpt": ""},
+        ]
+        picked = same_topic_past_notes(
+            ["ai"], vault_root=None, today="2026-05-21", notes=notes,
+        )
+        self.assertEqual([nt["path"] for nt in picked], ["60d.md"])
+
+    def test_prefers_ideas_dir_over_knowledge(self):
+        # Same overlap + recency; 20-Ideas note (a stance) outranks 10-Knowledge excerpt.
+        notes = [
+            {"path": "10-Knowledge/excerpt.md", "title": "excerpt", "tags": ["ai"],
+             "created": "2026-05-10", "domain": "tech", "excerpt": ""},
+            {"path": "20-Ideas/my-opinion.md", "title": "my opinion", "tags": ["ai"],
+             "created": "2026-05-10", "domain": "tech", "excerpt": ""},
+        ]
+        picked = same_topic_past_notes(
+            ["ai"], vault_root=None, today="2026-05-21", notes=notes,
+        )
+        self.assertEqual(picked[0]["path"], "20-Ideas/my-opinion.md")
+
+    def test_dedup_strips_filler_words(self):
+        # "X的研究发现" and "X研究发现" differ only by 的 — should collapse.
+        notes = [
+            {"path": "20-Ideas/a.md", "title": "AI模型的研究发现", "tags": ["ai"],
+             "created": "2026-05-10", "domain": "tech", "excerpt": ""},
+            {"path": "10-Knowledge/b.md", "title": "AI模型研究发现", "tags": ["ai"],
+             "created": "2026-05-09", "domain": "tech", "excerpt": ""},
+        ]
+        picked = same_topic_past_notes(
+            ["ai"], vault_root=None, today="2026-05-21", notes=notes,
+        )
+        self.assertEqual(len(picked), 1)
 
     def test_sorted_by_overlap_then_created(self):
         notes = [

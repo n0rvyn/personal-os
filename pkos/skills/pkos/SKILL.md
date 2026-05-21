@@ -14,6 +14,7 @@ allowed-tools:
   - Skill(pkos:ingest-exchange)
   - Skill(pkos:getnote-intel)
   - Skill(pkos:getnote-import)
+  - Skill(pkos:migrate)
   - Skill(pkos:lint)
 ---
 
@@ -206,12 +207,13 @@ Invoke the `harvest` skill:
 Trigger: user says "migrate", "import vault", "迁移", "migrate --scan-only"
 
 Invoke the `migrate` skill:
-- `--scan-only` (or `--dry-run`) → scan source vault and present migration report without writing files
+- `--scan-only` (or `--dry-run`) → scan the source vault and present the migration
+  report (destinations, discard list, review candidates) without writing files
 - `--source-name {name}` → use a named source from `migrate-sources.yaml`
 - `--source-vault {path}` → specify source vault path directly
-- `--force` → re-migrate all files (skip state file check)
-- `--skip-ripple` → skip ripple compilation after import
-- `--resume` → resume from interruption point
+- `--force` → relocate the prior run's output to `.trash/migrate-prior-run/`, then
+  re-migrate everything cleanly (the correct first real run — the prior migrate broke)
+- `--resume` → skip notes already migrated (by content hash)
 
 To add a new source vault, edit `~/Obsidian/PKOS/.state/migrate-sources.yaml`.
 

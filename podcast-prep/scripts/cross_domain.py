@@ -57,13 +57,13 @@ TECH_KEYWORDS = [
 ]
 
 PKOS_DEFAULT_DIRS = ["10-Knowledge", "20-Ideas", "50-References", "30-Projects",
-                     "90-Podcasts"]
+                     "90-Productions/Podcasts"]
 
 # Recall directories, per the vault directory contract (KL-4):
 # - self_past reads the user's viewpoints (20-Ideas/观点心得) + past on-record stances
-#   (90-Podcasts episode archives).
+#   (90-Productions/Podcasts episode archives).
 # - cross_domain reads the user's knowledge + ideas, bucketed by domain.
-SELF_PAST_DIRS = ("20-Ideas/观点心得/", "90-Podcasts/")
+SELF_PAST_DIRS = ("20-Ideas/观点心得/", "90-Productions/Podcasts/")
 CROSS_DOMAIN_DIRS = ("10-Knowledge/", "20-Ideas/")
 
 # Placeholder titles carrying no information. getnote/dedao captures use these, often
@@ -345,7 +345,7 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=90, n=5,
     """
     if notes is None:
         notes = load_pkos_notes(vault_root)
-    # KL-4: self_past reads only 20-Ideas/观点心得 (viewpoints) + 90-Podcasts (past
+    # KL-4: self_past reads only 20-Ideas/观点心得 (viewpoints) + 90-Productions/Podcasts (past
     # on-record stances), per the vault directory contract.
     notes = [nt for nt in notes if nt["path"].startswith(SELF_PAST_DIRS)]
     today_d = date.fromisoformat(today) if today else date.today()

@@ -207,7 +207,7 @@ def run_finalize(script_path: str, topic_log_path: str, today: str,
                  named_concept: str = None) -> dict:
     """MinHash-dedupe the script against the past-7-day script archive.
     On accept: append the episode to topic_log, and (if archive_dir is given) archive
-    the episode to the vault 90-Podcasts directory. On retry: return without state change."""
+    the episode to the vault 90-Productions/Podcasts directory. On retry: return without state change."""
     script = Path(script_path).read_text(encoding="utf-8")
     corpus = []
     if script_archive_dir and Path(script_archive_dir).exists():
@@ -260,7 +260,7 @@ def main():
     fin.add_argument("--approved-topics", required=True, help="JSON array of {topic_tag, required_angle}")
     fin.add_argument("--script-archive-dir", default=None)
     fin.add_argument("--archive-dir", default=None,
-                     help="Vault 90-Podcasts dir. When set, an accepted episode is archived there as a type:podcast note.")
+                     help="Vault 90-Productions/Podcasts dir. When set, an accepted episode is archived there as a type:podcast note.")
     fin.add_argument("--named-concept", default=None,
                      help="Optional — the concept this episode named, written to the archive note frontmatter.")
     args = parser.parse_args()

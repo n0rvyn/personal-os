@@ -157,7 +157,7 @@ class OrchestratorFinalizeTests(unittest.TestCase):
 
     def test_finalize_archives_episode_when_archive_dir_set(self):
         Path(self.script_path).write_text("# 概率时代的AI可靠性\n\n正文。")
-        archive_dir = os.path.join(self.tmp_dir.name, "90-Podcasts")
+        archive_dir = os.path.join(self.tmp_dir.name, "90-Productions/Podcasts")
         result = run_finalize(
             script_path=self.script_path,
             topic_log_path=self.topic_log_path,

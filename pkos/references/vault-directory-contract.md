@@ -20,10 +20,18 @@ not ad-hoc keyword guesses.
 | `reference` | `50-References/` | External content saved as-is — article/book/video notes, intel captures |
 | `person` | `40-People/` | Key-people profiles |
 | `project` | `30-Projects/` | Active project notes |
-| `podcast` | `90-Podcasts/` | One archived note per generated podcast episode |
+| `podcast` | `90-Productions/Podcasts/` | One archived note per generated podcast episode |
+| `production` | `90-Productions/` | The user's own published work — articles, course scripts |
 
 Other directories: `00-Inbox/` (manual capture), `60-Digests/`, `70-Reviews/`,
 `80-MOCs/`, `99-System/` (system docs incl. the contract).
+
+## 90-Productions subdivision
+
+`90-Productions/` = the user's own published output, split by channel:
+- `90-Productions/Podcasts/` — archived podcast episodes (`type: podcast`)
+- `90-Productions/WeChat/<series>/` — WeChat published articles and course scripts
+  (`type: production`)
 
 ## 20-Ideas subdivision
 
@@ -40,6 +48,7 @@ split at ingestion: excerpt → `50-References/`, reflection → `20-Ideas/观�
 
 ## Recall contract
 
-- `self_past_candidates` ← `20-Ideas/观点心得/` + `90-Podcasts/` (past on-record stances)
+- `self_past_candidates` ← `20-Ideas/观点心得/` + `90-Productions/Podcasts/` (past on-record stances)
 - `cross_domain_candidates` ← `10-Knowledge/` + `20-Ideas/`, bucketed by domain
 - `50-References/` is supporting context, never a stance source
+- `90-Productions/WeChat/` is a production archive — not read by recall

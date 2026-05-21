@@ -192,9 +192,9 @@ class CrossDomainCandidatesTests(unittest.TestCase):
 
 
 class SameTopicPastNotesTests(unittest.TestCase):
-    # KL-4: self_past reads only 20-Ideas/观点心得/ + 90-Podcasts/ per the contract.
+    # KL-4: self_past reads only 20-Ideas/观点心得/ + 90-Productions/Podcasts/ per the contract.
     IDEAS = "20-Ideas/观点心得"
-    POD = "90-Podcasts"
+    POD = "90-Productions/Podcasts"
 
     def test_returns_notes_in_window_with_overlap(self):
         # today=2026-05-21 → window 5/22-30d=4/21 to 5/22-7d=5/14
@@ -229,7 +229,7 @@ class SameTopicPastNotesTests(unittest.TestCase):
         self.assertEqual([nt["path"] for nt in picked], [f"{self.IDEAS}/60d.md"])
 
     def test_reads_only_self_past_dirs(self):
-        # KL-4: only 20-Ideas/观点心得 and 90-Podcasts feed self_past; a 10-Knowledge
+        # KL-4: only 20-Ideas/观点心得 and 90-Productions/Podcasts feed self_past; a 10-Knowledge
         # excerpt or a 20-Ideas/产品想法 note is filtered out even with tag overlap.
         notes = [
             {"path": "10-Knowledge/excerpt.md", "title": "excerpt", "tags": ["ai"],

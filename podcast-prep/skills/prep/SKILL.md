@@ -42,7 +42,7 @@ Returns a JSON brief with:
 - `pkos_note`: the caller-provided PKOS note, propagated verbatim
 - `contrarian_source`: `{source: str, category: str, url: str}` from the curated pool
 - `cross_domain_candidates`: PKOS notes from NON-tech domains (philosophy / management / cognition / history / literature / natural-science), one per domain — seeds cross-domain synthesis
-- `self_past_candidates`: past notes from `20-Ideas/观点心得/` (the user's recorded viewpoints) and `90-Podcasts/` (past episodes — dated on-record stances), created 7-90 days ago on a topic similar to today's — the writer picks the one whose stance contradicts today's argument. Directory-scoped per the vault directory contract (`pkos/references/vault-directory-contract.md`).
+- `self_past_candidates`: past notes from `20-Ideas/观点心得/` (the user's recorded viewpoints) and `90-Productions/Podcasts/` (past episodes — dated on-record stances), created 7-90 days ago on a topic similar to today's — the writer picks the one whose stance contradicts today's argument. Directory-scoped per the vault directory contract (`pkos/references/vault-directory-contract.md`).
 - `named_concept_prompt`: a directive nudging the writer to name an emergent pattern
 - `generated_at`: ISO timestamp
 

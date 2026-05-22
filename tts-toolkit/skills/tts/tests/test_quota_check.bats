@@ -167,3 +167,58 @@ print(json.dumps({'model_remains': [{'model_name': 'speech-hd', 'current_interva
     [ "$status" -eq 0 ]
     [[ "$output" == *"minimax ok"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Volcengine per-tier (1.0 / 2.0) — local ledger
+# ---------------------------------------------------------------------------
+
+@test "volcengine --tier 2.0 ok when ledger usage well under per-tier budget" {
+    export TTS_LEDGER_DIR="$BATS_TMPDIR/ledger_${BATS_TEST_NUMBER}"
+    mkdir -p "$TTS_LEDGER_DIR"
+    printf '%s\t2.0\t1000\n' "$(date -u +%Y-%m-%d)" > "$TTS_LEDGER_DIR/volc-usage.log"
+    export VOLC_TTS_DAILY_BUDGET_V2=20000
+    run bash "$QUOTA_CHECK" check --vendor volcengine --tier 2.0 --required-chars 5000
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"tier 2.0 ok"* ]]
+}
+
+@test "volcengine --tier 2.0 over-budget when ledger usage + required exceeds budget" {
+    export TTS_LEDGER_DIR="$BATS_TMPDIR/ledger_${BATS_TEST_NUMBER}"
+    mkdir -p "$TTS_LEDGER_DIR"
+    printf '%s\t2.0\t18000\n' "$(date -u +%Y-%m-%d)" > "$TTS_LEDGER_DIR/volc-usage.log"
+    export VOLC_TTS_DAILY_BUDGET_V2=20000
+    run bash "$QUOTA_CHECK" check --vendor volcengine --tier 2.0 --required-chars 5000
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"over-budget"* ]]
+}
+
+@test "volcengine --tier sums only today's matching-tier ledger rows" {
+    export TTS_LEDGER_DIR="$BATS_TMPDIR/ledger_${BATS_TEST_NUMBER}"
+    mkdir -p "$TTS_LEDGER_DIR"
+    today="$(date -u +%Y-%m-%d)"
+    {
+        printf '%s\t2.0\t3000\n' "$today"
+        printf '%s\t1.0\t9000\n' "$today"     # other tier — must NOT count
+        printf '2020-01-01\t2.0\t9999\n'      # other day  — must NOT count
+    } > "$TTS_LEDGER_DIR/volc-usage.log"
+    export VOLC_TTS_DAILY_BUDGET_V2=10000
+    run bash "$QUOTA_CHECK" show --vendor volcengine --tier 2.0
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"used_today=3000"* ]]
+}
+
+@test "volcengine --tier 2.0 missing VOLC_TTS_DAILY_BUDGET_V2 yields exit 3" {
+    export TTS_LEDGER_DIR="$BATS_TMPDIR/ledger_${BATS_TEST_NUMBER}"
+    mkdir -p "$TTS_LEDGER_DIR"
+    unset VOLC_TTS_DAILY_BUDGET_V2
+    run bash "$QUOTA_CHECK" check --vendor volcengine --tier 2.0 --required-chars 100
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"VOLC_TTS_DAILY_BUDGET_V2"* ]]
+}
+
+@test "volcengine --tier with invalid tier yields exit 1" {
+    export VOLC_TTS_DAILY_BUDGET_V2=20000
+    run bash "$QUOTA_CHECK" check --vendor volcengine --tier 3.0 --required-chars 100
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tier must be"* ]]
+}

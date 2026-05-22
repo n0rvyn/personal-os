@@ -67,7 +67,7 @@ response="$(curl -sS \
 }
 
 # Decode-and-validate via python3 — one parse, clear error, base64 → bytes.
-python3 - "$response" "$output" <<'PYEOF'
+if python3 - "$response" "$output" <<'PYEOF'
 import sys, json, base64
 resp_raw, out = sys.argv[1], sys.argv[2]
 try:
@@ -86,3 +86,23 @@ if not audio_b64:
 with open(out, "wb") as f:
     f.write(base64.b64decode(audio_b64))
 PYEOF
+then
+    :
+else
+    exit 3
+fi
+
+# Record actual billed usage to the per-model local ledger. 大模型语音合成 is
+# 字符版 (billed by input character count); the v1/tts HTTP endpoint returns no
+# usage field (verified 2026-05-22), so we count the input text we sent — which
+# IS the billing basis. 1.0 and 2.0 are separate billing products → separate
+# ledger rows by tier. quota_check.sh --tier reads this back.
+_volc_tier="2.0"
+case "$resource_id" in
+    seed-tts-1.0*) _volc_tier="1.0" ;;
+    seed-tts-2.0)  _volc_tier="2.0" ;;
+esac
+_volc_ledger_dir="${TTS_LEDGER_DIR:-$HOME/.tts-toolkit/ledger}"
+mkdir -p "$_volc_ledger_dir"
+_volc_chars="$(VOLC_LT="$text" python3 -c 'import os; print(len(os.environ["VOLC_LT"]))')"
+printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%d)" "$_volc_tier" "$_volc_chars" >> "$_volc_ledger_dir/volc-usage.log"

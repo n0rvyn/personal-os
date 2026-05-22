@@ -39,6 +39,7 @@ vendor=""
 required_chars=0
 reserve_pct=0
 model=""
+tier=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --required-chars) required_chars="$2"; shift 2;;
         --reserve-pct)  reserve_pct="$2";    shift 2;;
         --model)        model="$2";           shift 2;;
+        --tier)         tier="$2";            shift 2;;
         *) echo "unknown arg: $1" >&2; exit 1;;
     esac
 done
@@ -171,10 +173,56 @@ print(json.dumps({'ProjectName': '$project', 'ResourceID': '$resource_id', 'AppI
 }
 
 # ---------------------------------------------------------------------------
+# Volcengine per-model-tier branch (1.0 / 2.0 are separate billing products /
+# separate quota pools). UsageMonitoring cannot split them (both public voices
+# bill under volc.service_type.10029), so per-tier used_today comes from the
+# local ledger written by providers/volcengine.sh — actual input chars synthed.
+# ---------------------------------------------------------------------------
+volcengine_tier_check() {
+    local t="$1" budget_var budget ledger_dir today used available req
+    case "$t" in
+        1.0) budget_var="VOLC_TTS_DAILY_BUDGET_V1" ;;
+        2.0) budget_var="VOLC_TTS_DAILY_BUDGET_V2" ;;
+        *) echo "quota_check: --tier must be 1.0 or 2.0 (got '${t}')" >&2; exit 1 ;;
+    esac
+    budget="${!budget_var:-}"
+    if [[ -z "$budget" ]]; then
+        echo "volcengine tier ${t}: ${budget_var} required (your self-set daily char ceiling for the ${t} model tier)" >&2
+        exit 3
+    fi
+    ledger_dir="${TTS_LEDGER_DIR:-$HOME/.tts-toolkit/ledger}"
+    today="$(date -u +%Y-%m-%d)"
+    used="$(awk -F'\t' -v d="$today" -v tr="$t" \
+        '$1==d && $2==tr {s+=$3} END{print s+0}' \
+        "$ledger_dir/volc-usage.log" 2>/dev/null || echo 0)"
+    [[ -n "$used" ]] || used=0
+    available=$(( budget - used ))
+    req=$(( required_chars + required_chars * reserve_pct / 100 ))
+
+    echo "volcengine tier ${t}: budget=${budget} used_today=${used} available=${available} (local ledger)" >&2
+
+    if [[ "$subcommand" == "show" ]]; then
+        echo "volcengine tier ${t}: used_today=${used} budget=${budget} available=${available}"
+        return 0
+    fi
+    if (( available < req )); then
+        echo "volcengine tier ${t} over-budget: need ${req} (req=${required_chars} +${reserve_pct}% reserve); available=${available} (used=${used}/budget=${budget})" >&2
+        exit 1
+    fi
+    echo "volcengine tier ${t} ok: available=${available}, need=${req}"
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 case "$vendor" in
     minimax)     minimax_check ;;
-    volcengine)  volcengine_check ;;
+    volcengine)
+        if [[ -n "$tier" ]]; then
+            volcengine_tier_check "$tier"
+        else
+            volcengine_check
+        fi
+        ;;
     *) echo "quota_check: unknown vendor: ${vendor} (supported: minimax, volcengine)" >&2; exit 1 ;;
 esac

@@ -1,6 +1,6 @@
 {
   "name": "tts-toolkit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Unified TTS skill across Volcengine (Doubao) and MiniMax with cross-vendor voice catalog, provider-quirk references, and chunk/merge scripts for long-form audio.",
   "author": {
     "name": "Norvyn"

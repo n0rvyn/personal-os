@@ -44,7 +44,28 @@ tts-toolkit/skills/tts/scripts/synth.sh \
   [--max-chars 280]
 ```
 
-Behaviour: strips markdown, chunks on paragraph/sentence boundary (≤ `max-chars`), synthesizes each chunk serially with a 500 ms gap (gentle rate limit), then ffmpeg-concats into the final output. Single-chunk failure aborts the whole run.
+Behaviour: strips markdown, chunks on paragraph/sentence boundary (≤ `max-chars`), synthesizes each chunk, then ffmpeg-concats into the final output.
+
+- **Transient 1002 rate-limit** on a chunk is retried in place (bounded, env `TTS_RATELIMIT_RETRIES`, default 3, growing wait) — a passing RPM blip does NOT abort the run.
+- **Resumable staging**: the staging dir is named deterministically from input+voice+params, and each chunk is written atomically (`.partial`→rename). An interrupted run (or an outer step-retry) re-runs `synth.sh` with the same input and **resumes** — already-synthesized chunks are skipped, not re-billed.
+- A non-rate-limit chunk failure still aborts the run.
+
+### `synth-auto` — quota-aware: pick a vendor that can finish, then synthesize
+
+```bash
+tts-toolkit/skills/tts/scripts/synth-auto.sh \
+  --input transcript.md \
+  --output podcast.mp3 \
+  [--reserve-pct 25] [--concurrency 3] [--vendor-pool minimax,volc-2.0,volc-1.0]
+```
+
+Behaviour: estimates the WHOLE job's character count (chunks once, generic format), then walks the vendor pool in priority order (default **minimax → volc-2.0 → volc-1.0**) calling `quota_check` for each. The FIRST vendor with enough quota for the entire job is selected and synthesizes all of it. If NO vendor has enough, it exits **4 before synthesizing a single character** — never a half-made podcast, never a half-spent budget. Use this (not raw `synth-batch`) for any unattended long-form run.
+
+Exit codes: `0` success · `1` arg error · `4` no vendor has enough quota (decided pre-synthesis) · other = propagated from `synth.sh`.
+
+### Volcengine 1.0 / 2.0 — separate models, separate quota
+
+`seed-tts-1.0` and `seed-tts-2.0` are different models billed as separate products. UsageMonitoring cannot split them, so `providers/volcengine.sh` writes every successful call's input char count to a per-tier local ledger (`${TTS_LEDGER_DIR:-~/.tts-toolkit/ledger}/volc-usage.log`), and `quota_check.sh check --vendor volcengine --tier 1.0|2.0` reads that ledger for an accurate per-tier `used_today`. Per-tier budgets: env `VOLC_TTS_DAILY_BUDGET_V1` / `_V2`.
 
 ### Voice resolution
 

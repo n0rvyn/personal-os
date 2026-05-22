@@ -11,8 +11,10 @@
 #
 # Env overrides:
 #   E2E_FIXTURE        — path to input markdown (default: smoke fixture)
-#   E2E_VOICE          — voice id; prefix determines vendor
+#   E2E_VOICE          — voice id; prefix determines vendor (legacy path only)
 #   E2E_OUTPUT         — output mp3 path
+#   E2E_AUTO=1         — run synth-auto.sh (quota pre-flight + vendor fallback)
+#                        instead of the legacy explicit quota-check + synth
 #   SKIP_QUOTA_CHECK=1 — skip provider quota preflight (use when a vendor's
 #                        quota API is broken; the run still consumes real chars
 #                        but the size is bounded by the fixture)
@@ -52,24 +54,30 @@ echo "fixture chars: $CHARS"
 echo "vendor: $VENDOR"
 [[ "$CHARS" -ge 100 ]] || { echo "fixture too short ($CHARS chars, need >= 100)"; exit 1; }
 
-# Quota pre-check (informational — exits 1 if over-budget so caller can decide).
-# SKIP_QUOTA_CHECK=1 bypasses when a vendor's quota API is broken; fixture size
-# already bounds the actual consumption.
-if [[ "${SKIP_QUOTA_CHECK:-0}" != "1" ]]; then
-  echo "--- quota pre-check ---"
-  bash "$QUOTA_CHECK" check --vendor "$VENDOR" --required-chars "$CHARS" --reserve-pct 30 || {
-    echo "quota pre-check failed — aborting to preserve daily budget" >&2
-    exit 1
-  }
+if [[ "${E2E_AUTO:-0}" == "1" ]]; then
+  # Exercise synth-auto.sh end to end: pre-flight quota across the vendor pool,
+  # vendor selection, then synthesis. Vendor is chosen by synth-auto, not E2E_VOICE.
+  echo "--- synth-auto (quota-aware orchestration) ---"
+  echo "output: $OUT"
+  bash "$HERE/../scripts/synth-auto.sh" --input "$FIXTURE" --output "$OUT" --concurrency 3
 else
-  echo "--- quota pre-check skipped (SKIP_QUOTA_CHECK=1) ---"
+  # Legacy path: explicit quota pre-check, then single-vendor synth.
+  # SKIP_QUOTA_CHECK=1 bypasses when a vendor's quota API is broken; fixture size
+  # already bounds the actual consumption.
+  if [[ "${SKIP_QUOTA_CHECK:-0}" != "1" ]]; then
+    echo "--- quota pre-check ---"
+    bash "$QUOTA_CHECK" check --vendor "$VENDOR" --required-chars "$CHARS" --reserve-pct 30 || {
+      echo "quota pre-check failed — aborting to preserve daily budget" >&2
+      exit 1
+    }
+  else
+    echo "--- quota pre-check skipped (SKIP_QUOTA_CHECK=1) ---"
+  fi
+  echo "--- synthesizing ---"
+  echo "output: $OUT"
+  echo "voice: $VOICE"
+  bash "$SYNTH" --input "$FIXTURE" --voice "$VOICE" --output "$OUT" --concurrency 3
 fi
-
-# Synthesize
-echo "--- synthesizing ---"
-echo "output: $OUT"
-echo "voice: $VOICE"
-bash "$SYNTH" --input "$FIXTURE" --voice "$VOICE" --output "$OUT" --concurrency 3
 
 # Validate magic byte
 echo "--- validating ---"

@@ -108,16 +108,49 @@ if [[ -n "$provider_override" ]]; then
     voice_inner="$voice"
 fi
 
-# Helper: invoke the provider for one chunk.
-# Routes MiniMax model via env injection; Volcengine ABI unchanged (positional only).
+# Portable sha256 (macOS shasum / Linux sha256sum).
+_sha256() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; }
+
+# Retryable transient rate-limit signatures across providers (MiniMax 1002/1039,
+# generic English/Chinese phrasing). A 1002 is a passing RPM blip — it must not
+# escalate into a whole-run abort that an outer step-retry would re-bill.
+RATELIMIT_RE='code=1002|code=1039|rate.?limit|限流|too many request'
+
+# Helper: invoke the provider for one chunk, with bounded retry on transient
+# rate-limit. Synthesizes to a .partial path and renames on success, so a
+# resumed run never sees (and never skips) a half-written chunk.
 call_provider() {
     local chunk_text="$1" chunk_out="$2"
-    if [[ -z "$provider_override" && "$voice" == mm-* ]]; then
-        MINIMAX_MODEL="${model:-${MINIMAX_MODEL:-speech-2.8-hd}}" \
-            bash "$provider" "$chunk_text" "$voice_inner" "$chunk_out" "$speed" "$rate"
-    else
-        bash "$provider" "$chunk_text" "$voice_inner" "$chunk_out" "$speed" "$rate"
-    fi
+    # Keep a real .mp3 extension on the temp path — some providers/encoders
+    # (e.g. ffmpeg) infer the output muxer from the extension.
+    local tmp_out="${chunk_out}.partial.mp3"
+    local attempt=1 max_attempts="${TTS_RATELIMIT_RETRIES:-3}" rc errf
+    errf="$(mktemp -t tts-chunk-err-XXXXXX)"
+    while :; do
+        rc=0
+        if [[ -z "$provider_override" && "$voice" == mm-* ]]; then
+            MINIMAX_MODEL="${model:-${MINIMAX_MODEL:-speech-2.8-hd}}" \
+                bash "$provider" "$chunk_text" "$voice_inner" "$tmp_out" "$speed" "$rate" 2>"$errf" || rc=$?
+        else
+            bash "$provider" "$chunk_text" "$voice_inner" "$tmp_out" "$speed" "$rate" 2>"$errf" || rc=$?
+        fi
+        cat "$errf" >&2
+        if [[ "$rc" -eq 0 ]]; then
+            mv -f "$tmp_out" "$chunk_out"
+            rm -f "$errf"
+            return 0
+        fi
+        if grep -qiE "$RATELIMIT_RE" "$errf" && [[ "$attempt" -lt "$max_attempts" ]]; then
+            local wait_s=$(( 30 * attempt ))
+            echo "synth.sh: chunk rate-limited (attempt ${attempt}/${max_attempts}), waiting ${wait_s}s" >&2
+            rm -f "$tmp_out"
+            sleep "$wait_s"
+            attempt=$(( attempt + 1 ))
+            continue
+        fi
+        rm -f "$errf" "$tmp_out"
+        return "$rc"
+    done
 }
 
 # Bash ≥ 4.3 check for wait -n (parallel concurrency)
@@ -140,7 +173,17 @@ if [[ -n "$text" ]]; then
 fi
 
 # --- Batch/Segments mode --------------------------------------------------
-staging="$(mktemp -d -t tts-batch-XXXXXX)"
+# Deterministic staging dir keyed by input content + voice + params. An
+# interrupted batch (or an outer step-retry) reuses this dir and resumes —
+# skipping already-synthesized chunks — instead of re-billing from chunk 1.
+_batch_src="${input:-$segments}"
+if [[ -n "$_batch_src" && -f "$_batch_src" ]]; then
+    _batch_key="$(_sha256 < "$_batch_src" | cut -d' ' -f1)|${voice}|${speed}|${rate}|${max_chars}"
+else
+    _batch_key="$(date +%s%N)|${voice}|${speed}|${rate}|${max_chars}"
+fi
+_batch_hash="$(printf '%s' "$_batch_key" | _sha256 | cut -c1-16)"
+staging="${TMPDIR:-/tmp}/tts-batch-${_batch_hash}"
 chunks_dir="$staging/chunks"
 mkdir -p "$chunks_dir"
 
@@ -187,6 +230,13 @@ for chunk_file in "$chunks_dir"/chunk_*.txt; do
     chunk_text="$(cat "$chunk_file")"
     chunk_mp3="$chunks_dir/chunk_$(printf "%03d" "$idx").mp3"
     echo "file '$chunk_mp3'" >> "$list_file"
+
+    # Resume: a chunk mp3 exists only if call_provider fully succeeded (atomic
+    # .partial→rename), so presence == done. Skip → no re-bill on retry.
+    if [[ -s "$chunk_mp3" ]]; then
+        echo "synth.sh: resume — chunk $(printf '%03d' "$idx") already done, skip" >&2
+        continue
+    fi
 
     if [[ "$concurrency" -gt 1 ]]; then
         call_provider "$chunk_text" "$chunk_mp3" &

@@ -33,8 +33,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SYNTH="$HERE/synth.sh"
 QUOTA="$HERE/quota_check.sh"
-REPO_ROOT="$(cd "$HERE/../../../.." && pwd)"
-CHUNKER="${TTS_CHUNKER_PATH:-$REPO_ROOT/pkos/skills/text-to-segments/scripts/chunker.py}"
+# chunker.py is vendored as a sibling — tts-toolkit is self-contained, no
+# cross-plugin path (installed plugins cannot reach outside their own dir).
+CHUNKER="${TTS_CHUNKER_PATH:-$HERE/chunker.py}"
 
 input="" segments="" output=""
 reserve_pct=25 concurrency=3 max_chars=280 vendor_pool=""

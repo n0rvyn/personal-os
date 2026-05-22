@@ -25,7 +25,7 @@ Do not use this skill for:
 ### `synth` — single chunk
 
 ```bash
-tts-toolkit/skills/tts/scripts/synth.sh \
+${CLAUDE_SKILL_DIR}/scripts/synth.sh \
   --text "你好测试" \
   --voice volc-zh_male_M392_conversation_wvae_bigtts \
   --output out.mp3 \
@@ -37,7 +37,7 @@ Behaviour: routes to backend by voice prefix, writes one mp3, exits 0 on success
 ### `synth-batch` — long text → single merged mp3
 
 ```bash
-tts-toolkit/skills/tts/scripts/synth.sh \
+${CLAUDE_SKILL_DIR}/scripts/synth.sh \
   --input transcript.md \
   --voice volc-zh_male_M392_conversation_wvae_bigtts \
   --output podcast.mp3 \
@@ -53,7 +53,7 @@ Behaviour: strips markdown, chunks on paragraph/sentence boundary (≤ `max-char
 ### `synth-auto` — quota-aware: pick a vendor that can finish, then synthesize
 
 ```bash
-tts-toolkit/skills/tts/scripts/synth-auto.sh \
+${CLAUDE_SKILL_DIR}/scripts/synth-auto.sh \
   --input transcript.md \
   --output podcast.mp3 \
   [--reserve-pct 25] [--concurrency 3] [--vendor-pool minimax,volc-2.0,volc-1.0]

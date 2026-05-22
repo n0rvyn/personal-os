@@ -9,9 +9,7 @@ FIXTURES="$HERE/fixtures"
 
 setup() {
     export TTS_PROVIDER_OVERRIDE="$FIXTURES/stub-provider.sh"
-    SCRIPTS_DIR="$(cd "$HERE/../scripts" && pwd)"
-    REPO_ROOT="$(cd "$SCRIPTS_DIR/../../../.." && pwd)"
-    export TTS_CHUNKER_PATH="$REPO_ROOT/pkos/skills/text-to-segments/scripts/chunker.py"
+    # chunker.py is vendored into the skill — no TTS_CHUNKER_PATH needed.
     export TTS_LEDGER_DIR="$BATS_TMPDIR/ledger_${BATS_TEST_NUMBER}"
     mkdir -p "$TTS_LEDGER_DIR"
     INPUT="$BATS_TMPDIR/in_${BATS_TEST_NUMBER}.md"

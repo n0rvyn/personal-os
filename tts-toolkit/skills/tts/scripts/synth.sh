@@ -17,12 +17,12 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-# Repo-root resolution: synth.sh lives at tts-toolkit/skills/tts/scripts/
-# pkos sibling is 4 levels up from HERE.
-REPO_ROOT="$(cd "$HERE/../../../.." && pwd)"
-TTS_CHUNKER="${TTS_CHUNKER_PATH:-$REPO_ROOT/pkos/skills/text-to-segments/scripts/chunker.py}"
+# chunker.py is vendored into this skill's own scripts/ dir — a Claude plugin
+# cannot reference files outside its directory once installed, so the chunker
+# is a sibling of this script, not a cross-plugin path.
+TTS_CHUNKER="${TTS_CHUNKER_PATH:-$HERE/chunker.py}"
 if [[ ! -f "$TTS_CHUNKER" ]]; then
-    echo "synth: text-to-segments chunker not found at $TTS_CHUNKER (set TTS_CHUNKER_PATH)" >&2
+    echo "synth: chunker.py not found at $TTS_CHUNKER (set TTS_CHUNKER_PATH to override)" >&2
     exit 1
 fi
 

@@ -10,14 +10,8 @@ FIXTURES="$HERE/fixtures"
 setup() {
     # Stub provider: write a minimal mp3 to $3 (output arg)
     export TTS_PROVIDER_OVERRIDE="$FIXTURES/stub-provider.sh"
-
-    # TTS_CHUNKER_PATH: point to the actual chunker in the worktree
-    # synth.sh computes REPO_ROOT as 4 levels up from its own location
-    # ($HERE/../../../.. from scripts/ = personal-os root)
-    # Set explicitly so tests are not sensitive to worktree layout
-    SCRIPTS_DIR="$(cd "$HERE/../scripts" && pwd)"
-    REPO_ROOT="$(cd "$SCRIPTS_DIR/../../../.." && pwd)"
-    export TTS_CHUNKER_PATH="$REPO_ROOT/pkos/skills/text-to-segments/scripts/chunker.py"
+    # chunker.py is vendored into the skill's scripts/ dir — synth.sh finds it
+    # as a sibling, so no TTS_CHUNKER_PATH override is needed.
 }
 
 teardown() {

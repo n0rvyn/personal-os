@@ -34,7 +34,7 @@ output=""
 speed="1.0"
 rate="24000"
 max_chars="280"
-concurrency=3
+concurrency=2
 model=""
 provider_override="${TTS_PROVIDER_OVERRIDE:-}"
 
@@ -55,8 +55,8 @@ while [[ $# -gt 0 ]]; do
             cat <<'EOF'
 Usage:
   synth.sh --text <s>        --voice <id> --output <path> [--speed 1.0] [--rate 24000]
-  synth.sh --input <md>      --voice <id> --output <path> [--speed 1.0] [--rate 24000] [--max-chars 280] [--concurrency 3]
-  synth.sh --segments <json> --voice <id> --output <path> [--speed 1.0] [--rate 24000] [--concurrency 3]
+  synth.sh --input <md>      --voice <id> --output <path> [--speed 1.0] [--rate 24000] [--max-chars 280] [--concurrency 2]
+  synth.sh --segments <json> --voice <id> --output <path> [--speed 1.0] [--rate 24000] [--concurrency 2]
 
 Voice prefix routing:
   volc-*  Volcengine (Doubao) TTS
@@ -64,7 +64,7 @@ Voice prefix routing:
 
 Flags:
   --model <name>       MiniMax model name (default: speech-2.8-hd); env MINIMAX_MODEL also works
-  --concurrency <N>    Max parallel provider calls for batch/segments mode (default: 3)
+  --concurrency <N>    Max parallel provider calls for batch/segments mode (default: 2)
   --max-chars <N>      Max chars per chunk when using --input mode (default: 280)
 
 Env:
@@ -244,13 +244,14 @@ for chunk_file in "$chunks_dir"/chunk_*.txt; do
         if [[ "$running" -ge "$concurrency" ]]; then
             wait -n
             running=$(( running - 1 ))
-            # 0.5 s inter-batch sleep to stay under MiniMax RPM
-            # (per 周杰伦 Role's learned rule)
-            sleep 0.5
+            # 1.0 s inter-batch sleep to stay under MiniMax RPM
+            # (per 周杰伦 Role's learned rule; widened 0.5→1.0 after a
+            #  2026-06-03 speech-2.8-hd rpm pre-warning email)
+            sleep 1.0
         fi
     else
         call_provider "$chunk_text" "$chunk_mp3"
-        sleep 0.5
+        sleep 1.0
     fi
 done
 

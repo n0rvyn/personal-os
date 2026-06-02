@@ -56,7 +56,7 @@ Behaviour: strips markdown, chunks on paragraph/sentence boundary (≤ `max-char
 ${CLAUDE_SKILL_DIR}/scripts/synth-auto.sh \
   --input transcript.md \
   --output podcast.mp3 \
-  [--reserve-pct 25] [--concurrency 3] [--vendor-pool minimax,volc-2.0,volc-1.0]
+  [--reserve-pct 25] [--concurrency 2] [--vendor-pool minimax,volc-2.0,volc-1.0]
 ```
 
 Behaviour: estimates the WHOLE job's character count (chunks once, generic format), then walks the vendor pool in priority order (default **minimax → volc-2.0 → volc-1.0**) calling `quota_check` for each. The FIRST vendor with enough quota for the entire job is selected and synthesizes all of it. If NO vendor has enough, it exits **4 before synthesizing a single character** — never a half-made podcast, never a half-spent budget. Use this (not raw `synth-batch`) for any unattended long-form run.

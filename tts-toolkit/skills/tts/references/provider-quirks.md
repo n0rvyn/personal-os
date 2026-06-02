@@ -54,7 +54,7 @@ Set `app.cluster: "volcano_tts"` (default). Other cluster names are documented b
 
 ### Network resilience
 
-Wrap each call in a retry-on-network-error loop (NOT retry on auth/quota errors — those are deterministic). The 2026-05-17 run used 0.5s gentle gap between chunks; that proved sufficient.
+Wrap each call in a retry-on-network-error loop (NOT retry on auth/quota errors — those are deterministic). The 2026-05-17 run used a 0.5s gentle gap between chunks at concurrency 3; that completed jobs but kept brushing MiniMax's `speech-2.8-hd` per-minute ceiling, and on 2026-06-03 MiniMax sent an rpm pre-warning email. Default lowered to concurrency 2 + 1.0s inter-batch gap to pull margin away from the rpm limit.
 
 ### Encoding consistency for ffmpeg concat
 

@@ -11,8 +11,8 @@
 # fallback layer above it.
 #
 # Usage:
-#   synth-auto.sh --input <md>      --output <mp3> [--reserve-pct 25] [--concurrency 3] [--max-chars 280] [--vendor-pool a,b]
-#   synth-auto.sh --segments <json> --output <mp3> [--reserve-pct 25] [--concurrency 3] [--vendor-pool a,b]
+#   synth-auto.sh --input <md>      --output <mp3> [--reserve-pct 25] [--concurrency 2] [--max-chars 280] [--vendor-pool a,b]
+#   synth-auto.sh --segments <json> --output <mp3> [--reserve-pct 25] [--concurrency 2] [--vendor-pool a,b]
 #
 # Default vendor pool (priority order): minimax → volc-2.0 → volc-1.0
 #
@@ -38,7 +38,7 @@ QUOTA="$HERE/quota_check.sh"
 CHUNKER="${TTS_CHUNKER_PATH:-$HERE/chunker.py}"
 
 input="" segments="" output=""
-reserve_pct=25 concurrency=3 max_chars=280 vendor_pool=""
+reserve_pct=25 concurrency=2 max_chars=280 vendor_pool=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

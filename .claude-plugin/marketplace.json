@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.19.2"
+    "version": "0.20.0"
   },
   "plugins": [
     {
@@ -105,7 +105,7 @@
       "name": "tts-toolkit",
       "source": "./tts-toolkit",
       "description": "Unified TTS skill across Volcengine (Doubao) and MiniMax with cross-vendor voice catalog, provider-quirk references, and chunk/merge scripts for long-form audio.",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "category": "audio",
       "tags": [
         "tts",

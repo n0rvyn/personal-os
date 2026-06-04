@@ -40,56 +40,77 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# MiniMax tests
+# MiniMax tests — TokenPlan all-modality shared pool (post-2026-06).
+# Speech draws from the shared "general" credits pool, reported as remaining
+# PERCENT per window. Availability is pace-fair: weekly quota% must keep up with
+# weekly time-remaining%; the 5-hour interval just must not be exhausted.
 # ---------------------------------------------------------------------------
 
-@test "minimax check ok when usage well below total" {
+# Build a token_plan/remains fixture with a "general" shared-pool row.
+# Args: interval_q interval_status weekly_q weekly_status weekly_time_left_frac
+_mm_general_fixture() {
+    local iq="$1" ist="$2" wq="$3" wst="$4" wfrac="$5"
+    local f="$BATS_TMPDIR/mm_general_${BATS_TEST_NUMBER}.json"
+    iq="$iq" ist="$ist" wq="$wq" wst="$wst" wfrac="$wfrac" python3 -c '
+import json, os
+week = 604800000  # 7d in ms
+print(json.dumps({"base_resp": {"status_code": 0, "status_msg": "success"},
+  "model_remains": [{
+    "model_name": "general",
+    "start_time": 0, "end_time": 18000000, "remains_time": 9000000,
+    "current_interval_remaining_percent": int(os.environ["iq"]),
+    "current_interval_status": int(os.environ["ist"]),
+    "current_weekly_remaining_percent": int(os.environ["wq"]),
+    "current_weekly_status": int(os.environ["wst"]),
+    "weekly_start_time": 0, "weekly_end_time": week,
+    "weekly_remains_time": int(week * float(os.environ["wfrac"])),
+  }]}))' > "$f"
+    echo "$f"
+}
+
+@test "minimax available when weekly quota ahead of burn pace" {
     export MINIMAX_API_KEY="test-key"
-    export QUOTA_CURL_FIXTURE="$FIXTURES/minimax_quota_ok.json"
-    # used=1000, total=19000, available=18000; required=5000 => ok
-    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 5000
+    # weekly quota 80% with 50% of the week left => 80 >= 50 => ok
+    export QUOTA_CURL_FIXTURE="$(_mm_general_fixture 90 1 80 1 0.50)"
+    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 8645 --reserve-pct 25
     [ "$status" -eq 0 ]
     [[ "$output" == *"minimax ok"* ]]
 }
 
-@test "minimax check over-budget when usage + required exceeds total" {
+@test "minimax yields when weekly quota behind burn pace" {
     export MINIMAX_API_KEY="test-key"
-    export QUOTA_CURL_FIXTURE="$FIXTURES/minimax_quota_high.json"
-    # used=15000, total=19000, available=4000; required=5000 => over-budget
-    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 5000
+    # weekly quota 20% with 50% of the week left => 20 < 50 => over (yield to fallback)
+    export QUOTA_CURL_FIXTURE="$(_mm_general_fixture 90 1 20 1 0.50)"
+    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 8645
     [ "$status" -eq 1 ]
-    [[ "$output" == *"over-budget"* ]]
+    [[ "$output" == *"behind weekly burn-pace"* ]]
 }
 
-@test "minimax reserve-pct factored in correctly" {
+@test "minimax uses last drops right before a weekly reset (low quota, near reset => ok)" {
     export MINIMAX_API_KEY="test-key"
-    # used=10000, total=19000, available=9000
-    # Create a fixture with used=10000
-    local fixture="$BATS_TMPDIR/minimax_mid_${BATS_TEST_NUMBER}.json"
-    python3 -c "
-import json
-print(json.dumps({'model_remains': [{'model_name': 'speech-hd', 'current_interval_usage_count': 10000, 'current_interval_total_count': 19000}]}))
-" > "$fixture"
-    export QUOTA_CURL_FIXTURE="$fixture"
-
-    # reserve-pct=30: required_with_reserve = 5000 + 5000*30/100 = 6500; available=9000 => ok
-    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 5000 --reserve-pct 30
+    # weekly quota 10% but only ~1.4% of the week left => 10 >= 1.4 => ok
+    export QUOTA_CURL_FIXTURE="$(_mm_general_fixture 90 1 10 1 0.014)"
+    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 8645
     [ "$status" -eq 0 ]
     [[ "$output" == *"minimax ok"* ]]
-
-    # reserve-pct=100: required_with_reserve = 5000 + 5000*100/100 = 10000; available=9000 => over-budget
-    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 5000 --reserve-pct 100
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"over-budget"* ]]
 }
 
-@test "minimax model not in response yields exit 2" {
+@test "minimax yields when the 5-hour interval is exhausted even if weekly is healthy" {
     export MINIMAX_API_KEY="test-key"
-    export QUOTA_CURL_FIXTURE="$FIXTURES/minimax_quota_no_model.json"
-    # Only speech-turbo in fixture; default model maps to speech-hd => not found
+    # interval quota 0% (exhausted) but weekly fine => over
+    export QUOTA_CURL_FIXTURE="$(_mm_general_fixture 0 1 88 1 0.50)"
+    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 100
+    [ "$status" -eq 1 ]
+}
+
+@test "minimax no 'general' shared-pool row yields exit 2" {
+    export MINIMAX_API_KEY="test-key"
+    local f="$BATS_TMPDIR/mm_nogeneral_${BATS_TEST_NUMBER}.json"
+    python3 -c "import json; print(json.dumps({'base_resp':{'status_code':0,'status_msg':'success'},'model_remains':[{'model_name':'video','current_interval_total_count':3}]}))" > "$f"
+    export QUOTA_CURL_FIXTURE="$f"
     run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 1000
     [ "$status" -eq 2 ]
-    [[ "$output" == *"not in response"* ]]
+    [[ "$output" == *"general"* ]]
 }
 
 @test "minimax missing MINIMAX_API_KEY yields exit 3" {
@@ -120,13 +141,13 @@ print(json.dumps({'model_remains': [{'model_name': 'speech-hd', 'current_interva
     [[ "$output" == *"VOLC_TTS_DAILY_BUDGET"* ]]
 }
 
-@test "show subcommand prints used/total/available for minimax" {
+@test "show subcommand prints shared-pool interval/weekly percents for minimax" {
     export MINIMAX_API_KEY="test-key"
-    export QUOTA_CURL_FIXTURE="$FIXTURES/minimax_quota_ok.json"
+    export QUOTA_CURL_FIXTURE="$(_mm_general_fixture 90 1 88 1 0.50)"
     run bash "$QUOTA_CHECK" show --vendor minimax
     [ "$status" -eq 0 ]
-    [[ "$output" == *"used="* ]]
-    [[ "$output" == *"available="* ]]
+    [[ "$output" == *"interval["* ]]
+    [[ "$output" == *"weekly["* ]]
 }
 
 @test "volcsign.py REAL binary never echoes VOLC_IAM_SECRET_ACCESS_KEY on network error" {
@@ -157,15 +178,6 @@ print(json.dumps({'model_remains': [{'model_name': 'speech-hd', 'current_interva
     local post_count
     post_count=$(grep -rl "$sentinel" /tmp 2>/dev/null | wc -l | tr -d ' ')
     [ "$post_count" -le "$pre_count" ]
-}
-
-@test "minimax model speech-2.8-hd maps to family speech-hd" {
-    export MINIMAX_API_KEY="test-key"
-    export QUOTA_CURL_FIXTURE="$FIXTURES/minimax_quota_ok.json"
-    # minimax_quota_ok.json has speech-hd row; passing --model speech-2.8-hd should map => speech-hd => ok
-    run bash "$QUOTA_CHECK" check --vendor minimax --required-chars 1000 --model speech-2.8-hd
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"minimax ok"* ]]
 }
 
 # ---------------------------------------------------------------------------

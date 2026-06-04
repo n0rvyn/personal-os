@@ -58,8 +58,26 @@ if [[ -z "$vendor" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# MiniMax branch
+# MiniMax branch — TokenPlan all-modality shared pool (post-2026-06)
 # ---------------------------------------------------------------------------
+# As of MiniMax's early-June-2026 M3 / Token Plan upgrade, speech no longer has
+# its own `speech-hd` quota row: text / speech / image / music all draw from one
+# shared "general" credits pool. `token_plan/remains` reports that pool as a
+# REMAINING PERCENT per window (a 5-hour rolling interval + a weekly window); the
+# old per-model character counts (current_interval_total_count / usage_count) are
+# now zeroed and meaningless. Querying it requires the sk-cp subscription key.
+#
+# Availability is judged by reset-time AND remaining-quota together (pace-fair):
+#   - Weekly window (the real shared budget): pass iff remaining-quota% >=
+#     remaining-time% of the week. Spend freely when ahead of the burn pace;
+#     yield to fallback when spending faster than the pool refills; and naturally
+#     use the last drops right before a weekly reset (threshold → 0 as t → 0).
+#     This protects the credits the user's coding / other modalities also need.
+#   - 5-hour interval (a burst limiter, not a budget): pass iff it is not
+#     exhausted (active + remaining% > 0).
+#
+# --required-chars / --reserve-pct are accepted for interface compatibility but
+# do NOT gate MiniMax here — the shared pool is percent-based, not char-based.
 minimax_check() {
     if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
         echo "minimax: MINIMAX_API_KEY required" >&2
@@ -71,48 +89,71 @@ minimax_check() {
         --max-time 15 \
         "https://www.minimaxi.com/v1/token_plan/remains")" || exit 2
 
-    # Map variant model name to family name (quota endpoint returns family rows).
-    model_in="${model:-speech-2.8-hd}"
-    case "$model_in" in
-        speech-hd|speech-turbo|MiniMax-*) model_family="$model_in" ;;
-        speech-*-hd)    model_family="speech-hd" ;;
-        speech-*-turbo) model_family="speech-turbo" ;;
-        *)              model_family="$model_in" ;;
+    # All schema interpretation + the pace-fair verdict happen in Python; the
+    # script prints a single verdict token (always exits 0 so `set -e` / the
+    # pipeline can't kill us on a parse hiccup — we map the token below).
+    result="$(printf '%s' "$curl_resp" | MM_SUB="$subcommand" python3 -c '
+import json, sys, os
+sub = os.environ.get("MM_SUB", "check")
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("PARSE_ERR"); sys.exit(0)
+if data.get("base_resp", {}).get("status_code", -1) != 0:
+    print("API_ERR " + str(data.get("base_resp", {}).get("status_msg", "unknown"))); sys.exit(0)
+gen = next((r for r in data.get("model_remains", []) if r.get("model_name") == "general"), None)
+if gen is None:
+    print("NO_GENERAL"); sys.exit(0)
+
+def time_pct(remains_field, start_field, end_field):
+    tr = gen.get(remains_field); st = gen.get(start_field); en = gen.get(end_field)
+    if tr is None or st is None or en is None or (en - st) <= 0:
+        return None
+    return max(0.0, min(100.0, 100.0 * tr / (en - st)))
+
+iq = gen.get("current_interval_remaining_percent")
+ist = gen.get("current_interval_status", 1)
+wq = gen.get("current_weekly_remaining_percent")
+wst = gen.get("current_weekly_status", 1)
+wt = time_pct("weekly_remains_time", "weekly_start_time", "weekly_end_time")
+
+def f(x):
+    return ("%.0f" % x) if isinstance(x, (int, float)) else "NA"
+
+msg = "interval[q=%s%% st=%s] weekly[q=%s%% time-left=%s%% st=%s]" % (f(iq), ist, f(wq), f(wt), wst)
+
+# 5-hour interval: just must not be exhausted.
+interval_ok = (ist == 1) and (iq is not None) and (iq > 0)
+# weekly: pace-fair — quota% must keep up with time-remaining%.
+if wq is None:
+    weekly_ok = False
+elif wt is None:
+    weekly_ok = (wst == 1) and (wq > 0)
+else:
+    weekly_ok = (wst == 1) and (wq >= wt)
+
+if sub == "show":
+    print("SHOW " + msg); sys.exit(0)
+print(("OK " if (interval_ok and weekly_ok) else "OVER ") + msg)
+sys.exit(0)
+')"
+
+    case "$result" in
+        PARSE_ERR*)  echo "minimax: non-JSON quota response" >&2; exit 2;;
+        API_ERR*)    echo "minimax: quota API error: ${result#API_ERR }" >&2; exit 2;;
+        NO_GENERAL*) echo "minimax: no 'general' shared-pool row in token_plan/remains (unexpected TokenPlan schema — speech draws from the shared pool since 2026-06)" >&2; exit 2;;
+        SHOW\ *)
+            echo "minimax shared-pool: ${result#SHOW }"
+            return 0;;
+        OK\ *)
+            echo "minimax shared-pool ok (pace-fair): ${result#OK }" >&2
+            echo "minimax ok: ${result#OK }"
+            ;;
+        OVER\ *)
+            echo "minimax shared-pool behind weekly burn-pace → yield to fallback: ${result#OVER }" >&2
+            exit 1;;
+        *) echo "minimax: unexpected quota result: ${result}" >&2; exit 2;;
     esac
-
-    quota_line="$(echo "$curl_resp" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-family = '$model_family'
-for row in data.get('model_remains', []):
-    if row.get('model_name') == family:
-        print(row['current_interval_usage_count'], row['current_interval_total_count'])
-        sys.exit(0)
-sys.exit(1)
-" 2>/dev/null)" || { echo "minimax: model ${model_family} (mapped from ${model_in}) not in response" >&2; exit 2; }
-
-    read -r used total <<<"$quota_line"
-
-    if [[ -z "${used:-}" || -z "${total:-}" ]]; then
-        echo "minimax: model ${model_family} (mapped from ${model_in}) not in response" >&2
-        exit 2
-    fi
-
-    available=$(( total - used ))
-    required_with_reserve=$(( required_chars + required_chars * reserve_pct / 100 ))
-
-    echo "minimax quota: family=${model_family} (requested=${model_in}) used=${used}/${total} available=${available}" >&2
-
-    if [[ "$subcommand" == "show" ]]; then
-        echo "minimax: used=${used}/${total} available=${available} family=${model_family} (requested=${model_in})"
-        return 0
-    fi
-
-    if (( available < required_with_reserve )); then
-        echo "minimax over-budget: need ${required_with_reserve} (req=${required_chars} +${reserve_pct}% reserve); available=${available} (used=${used}/${total} on family=${model_family}, requested=${model_in})" >&2
-        exit 1
-    fi
-    echo "minimax ok: available=${available}, need=${required_with_reserve}, family=${model_family} (requested=${model_in})"
 }
 
 # ---------------------------------------------------------------------------

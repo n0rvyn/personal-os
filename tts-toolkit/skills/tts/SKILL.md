@@ -22,6 +22,15 @@ Do not use this skill for:
 
 ## API
 
+> **Entry point for unattended long-form (podcasts, any multi-chunk job): always `synth-auto`.**
+> It does quota-aware vendor selection (default priority **minimax → volc-2.0 → volc-1.0**),
+> pre-flight quota checks, rate-limit handling, and cross-vendor fallback for you.
+> `synth` (`--input`/`--segments`), `synth-batch`, and `quota_check` are internal building
+> blocks that `synth-auto` orchestrates — do **not** call them directly for long-form, and do
+> **not** hand-pick a vendor or inject `--vendor-pool` to exclude one. Let quota decide.
+> (Direct batch `synth.sh` is refused unless invoked via `synth-auto`; single `synth --text`
+> for a one-off character line is still fine.)
+
 ### `synth` — single chunk
 
 ```bash
@@ -99,6 +108,17 @@ Each provider script handles its own auth header format, request body shape, and
 - 3: provider API error (3001 not authorized, 1004 voice unauthorized, etc. — original response included in stderr)
 - 4: ffmpeg concat error (batch mode)
 
+## MiniMax quota note (TokenPlan all-modality, since 2026-06)
+
+MiniMax's June-2026 Token Plan upgrade folded text / speech / image / music into one
+shared credits pool. `token_plan/remains` no longer carries a per-speech `speech-hd` row —
+speech consumes the shared `general` pool, reported as remaining **percent** per window
+(a 5-hour interval + a weekly window). `quota_check.sh` reads that pool and judges MiniMax
+availability **pace-fair**: the weekly quota% must keep up with the weekly time-remaining%
+(spend freely when ahead of pace, yield to fallback when behind, use the last drops just
+before a reset). This protects the same credits the user's coding / other modalities draw on.
+The `sk-cp` subscription key is required to read the endpoint.
+
 ## Acceptance test
 
 Single-chunk Volcengine call (requires `VOLC_TTS_APPID` + `VOLC_TTS_TOKEN`):
@@ -111,4 +131,12 @@ scripts/synth.sh \
 file /tmp/tts-smoke.mp3   # expect: "MPEG ADTS, layer III"
 ```
 
-MiniMax single-chunk: TODO — provider script is a skeleton, returns exit code 2 until implemented.
+Single-chunk MiniMax call (requires `MINIMAX_API_KEY`; provider is implemented and verified):
+
+```bash
+scripts/synth.sh \
+  --text "你好测试" \
+  --voice "mm-Chinese (Mandarin)_Radio_Host" \
+  --output /tmp/tts-smoke-mm.mp3
+file /tmp/tts-smoke-mm.mp3   # expect: "MPEG ADTS, layer III"
+```

@@ -14,6 +14,7 @@ Multi-plugin marketplace for Personal OS data plugins: health intelligence, sess
 | portfolio-lens | product | Indie project portfolio management: scan, progress pulse, verdict refresh |
 | tts-toolkit | audio | Unified TTS across Volcengine (Doubao) and MiniMax: voice-prefix routing, cross-vendor catalog, chunk+concat for long-form audio |
 | podcast-prep | intelligence | Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker |
+| novel-forge | writing | 中文网文连载创作引擎:立项→分卷章纲→逐章写→多镜头评审,故事圣经防连续性漂移,rubric 按定位调权;支持新写/续写/扩写/卡文/拆书等 8 模式 |
 
 See [personal-os-spec.md](./docs/personal-os-spec.md) for the shared config contract and IEF exchange conventions.
 
@@ -35,6 +36,7 @@ Install plugins:
 /plugin install pkos@personal-os
 /plugin install portfolio-lens@personal-os
 /plugin install tts-toolkit@personal-os
+/plugin install novel-forge@personal-os
 ```
 
 ## Repository Layout
@@ -48,6 +50,7 @@ Install plugins:
 ├── pkos/
 ├── portfolio-lens/
 ├── tts-toolkit/
+├── novel-forge/
 ├── docs/
 │   ├── personal-os-spec.md
 │   └── ief-format.md

@@ -1,0 +1,19 @@
+{
+  "book": "",
+  "定位": {
+    "爽文档位": "均衡",
+    "流派": "",
+    "平台": "",
+    "日更字数": 3000
+  },
+  "bible_path": "bible.md",
+  "outline_path": "outline.md",
+  "current_卷": 1,
+  "current_章": 0,
+  "chapter_step": "章纲细化",
+  "total_words": 0,
+  "chapters_done": 0,
+  "last_钩子": "",
+  "pending_伏笔": 0,
+  "last_updated": ""
+}

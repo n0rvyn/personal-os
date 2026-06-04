@@ -12,6 +12,7 @@ on:
       - "portfolio-lens/**"
       - "tts-toolkit/**"
       - "podcast-prep/**"
+      - "novel-forge/**"
 
 permissions:
   contents: write
@@ -20,5 +21,5 @@ jobs:
   call-reusable:
     uses: n0rvyn/indie-toolkit/.github/workflows/auto-version.yml@workflows/v2
     with:
-      plugins: "health-insights session-reflect domain-intel youtube-scout pkos portfolio-lens tts-toolkit podcast-prep"
+      plugins: "health-insights session-reflect domain-intel youtube-scout pkos portfolio-lens tts-toolkit podcast-prep novel-forge"
       marketplace_tag_prefix: "personal-os-"

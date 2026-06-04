@@ -92,6 +92,23 @@ if [[ "$mode_count" -gt 1 ]]; then
     echo "--text, --input, and --segments are mutually exclusive" >&2; exit 1
 fi
 
+# --- Boundary guard (harness, issue #279) ---------------------------------
+# Unattended long-form batch MUST go through synth-auto.sh, which does
+# quota-aware vendor selection + cross-vendor fallback. A direct batch call
+# bypasses vendor selection — that is exactly how run-to-run vendor drift
+# happened (an executor hand-rolled `synth.sh --segments --voice <volc>` and
+# pinned one vendor, so MiniMax never got picked). Refuse direct batch unless
+# we were launched by synth-auto (TTS_VIA_SYNTH_AUTO=1) or a human/test
+# explicitly opts in (TTS_ALLOW_DIRECT_BATCH=1). Single --text is unaffected.
+if [[ ( -n "$input" || -n "$segments" ) \
+      && -z "${TTS_VIA_SYNTH_AUTO:-}" \
+      && -z "${TTS_ALLOW_DIRECT_BATCH:-}" ]]; then
+    echo "synth.sh: direct batch (--input/--segments) is disabled — long-form must run through synth-auto.sh for quota-aware vendor selection + fallback." >&2
+    echo "synth.sh: re-run:  synth-auto.sh --input <file> --output <mp3>" >&2
+    echo "synth.sh: (advanced single-vendor batch, bypassing fallback: set TTS_ALLOW_DIRECT_BATCH=1)" >&2
+    exit 1
+fi
+
 # Voice-prefix routing: always validate prefix; provider_override only replaces the
 # binary, not the validation. voice_inner strips the known prefix for the provider call.
 case "$voice" in

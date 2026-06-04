@@ -119,9 +119,48 @@ if [[ -z "$total_chars" || "$total_chars" -le 0 ]]; then
 fi
 echo "synth-auto: full job ≈ ${total_chars} chars (+${reserve_pct}% reserve)" >&2
 
-# --- Pre-flight: pick the first vendor that can do the WHOLE job ----------
-selected_name="" selected_voice="" selected_resource=""
+# --- Synthesize the whole job on one vendor, with watchdog keep-alive ------
+# synth.sh writes chunk mp3s to $TMPDIR, not the workspace, so a long run (many
+# chunks + rate-limit waits) leaves the workspace mtime stale and a host
+# watchdog may kill the task as hung. Touch a progress file next to the output
+# every ~45s while synth runs. Returns synth.sh's exit code.
+run_synth_with_progress() {
+    local _voice="$1" _label="$2" progress synth_pid ticks rc
+    progress="$(dirname "$output")/.tts-auto-progress"
+    # TTS_VIA_SYNTH_AUTO lets synth.sh's batch boundary guard recognize this as
+    # synth-auto's own (sanctioned) call rather than a hand-rolled bypass.
+    TTS_VIA_SYNTH_AUTO=1 bash "$SYNTH" --segments "$seg_json" --voice "$_voice" \
+        --output "$output" --concurrency "$concurrency" &
+    synth_pid=$!
+    ticks=0
+    while kill -0 "$synth_pid" 2>/dev/null; do
+        if (( ticks % 45 == 0 )); then
+            { date -u +%Y-%m-%dT%H:%M:%SZ; echo "synth-auto: ${_label} synthesizing ${total_chars} chars"; } \
+                > "$progress" 2>/dev/null || true
+        fi
+        ticks=$(( ticks + 1 ))
+        sleep 1
+    done
+    rc=0
+    wait "$synth_pid" || rc=$?
+    rm -f "$progress"
+    return "$rc"
+}
+
+# --- Walk the pool: the first vendor with quota synthesizes; if its SYNTHESIS
+# --- fails, fall back to the next quota-OK vendor (issue #279, A2).
+# Pre-flight still guarantees synthesis never *starts* unless a vendor has quota
+# (exit 4 otherwise — zero characters spent). The added robustness: if a
+# selected vendor fails mid-run, we retry on the next vendor instead of failing
+# the whole job. Tradeoff (user-approved): a vendor that fails partway may have
+# spent some of its budget before we fall back — a complete podcast beats a
+# half-spent abort. Each vendor uses a distinct synth.sh staging dir (keyed by
+# voice), so no cross-vendor chunk contamination.
 declare -a tried=()
+quota_passed=0          # did ANY vendor clear the quota check? (exit 4 vs synth-fail)
+last_synth_rc=0
+succeeded=0
+final_vendor=""
 
 for entry in "${POOL[@]}"; do
     IFS='|' read -r name voice resource qargs <<<"$entry"
@@ -129,15 +168,36 @@ for entry in "${POOL[@]}"; do
     # shellcheck disable=SC2086 — qargs is intentional multi-word.
     bash "$QUOTA" check $qargs --required-chars "$total_chars" --reserve-pct "$reserve_pct" 1>&2 || rc=$?
     case "$rc" in
-        0) selected_name="$name"; selected_voice="$voice"; selected_resource="$resource"; break;;
-        1) tried+=("${name}: over-budget");   echo "synth-auto: ${name} over budget → next" >&2;;
-        2) tried+=("${name}: vendor-down");   echo "synth-auto: ${name} vendor unavailable → next" >&2;;
-        3) tried+=("${name}: auth-missing");  echo "synth-auto: ${name} auth/config missing → next" >&2;;
-        *) tried+=("${name}: check-error rc=${rc}"); echo "synth-auto: ${name} quota check errored (rc=${rc}) → next" >&2;;
+        0) : ;;  # quota OK → attempt synthesis below
+        1) tried+=("${name}: over-budget");   echo "synth-auto: ${name} over budget → next" >&2; continue;;
+        2) tried+=("${name}: vendor-down");   echo "synth-auto: ${name} vendor unavailable → next" >&2; continue;;
+        3) tried+=("${name}: auth-missing");  echo "synth-auto: ${name} auth/config missing → next" >&2; continue;;
+        *) tried+=("${name}: check-error rc=${rc}"); echo "synth-auto: ${name} quota check errored (rc=${rc}) → next" >&2; continue;;
     esac
+
+    quota_passed=1
+    echo "synth-auto: selected '${name}' (voice: ${voice}) — synthesizing" >&2
+    # Per-vendor resource id (Volcengine tier); unset so a previous vendor's id
+    # never leaks into MiniMax or a different tier.
+    if [[ -n "$resource" ]]; then export VOLC_TTS_RESOURCE_ID="$resource"; else unset VOLC_TTS_RESOURCE_ID; fi
+
+    rc=0
+    run_synth_with_progress "$voice" "$name" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        succeeded=1; final_vendor="$name"; break
+    fi
+    last_synth_rc="$rc"
+    tried+=("${name}: synth-failed rc=${rc}")
+    echo "synth-auto: ${name} synthesis FAILED (rc=${rc}) → falling back to next vendor" >&2
 done
 
-if [[ -z "$selected_name" ]]; then
+if [[ "$succeeded" -eq 1 ]]; then
+    echo "synth-auto: done — ${output} (vendor: ${final_vendor})" >&2
+    echo "$output"
+    exit 0
+fi
+
+if [[ "$quota_passed" -eq 0 ]]; then
     {
         echo "synth-auto: NO VENDOR can complete this ${total_chars}-char job (+${reserve_pct}% reserve)."
         echo "synth-auto: aborting BEFORE synthesis — zero characters spent. Vendor results:"
@@ -145,36 +205,9 @@ if [[ -z "$selected_name" ]]; then
     } >&2
     exit 4
 fi
-echo "synth-auto: selected '${selected_name}' (voice: ${selected_voice})" >&2
 
-# --- Synthesize the whole job on the selected vendor ----------------------
-[[ -n "$selected_resource" ]] && export VOLC_TTS_RESOURCE_ID="$selected_resource"
-
-# Watchdog keep-alive: synth.sh writes chunk mp3s to $TMPDIR, not the workspace,
-# so a long run (many chunks + rate-limit waits) leaves the workspace mtime
-# stale and a host watchdog may kill the task as hung. Touch a progress file
-# next to the output every 45s while synth runs.
-progress="$(dirname "$output")/.tts-auto-progress"
-bash "$SYNTH" --segments "$seg_json" --voice "$selected_voice" \
-    --output "$output" --concurrency "$concurrency" &
-synth_pid=$!
-# Poll every 1s so completion is detected promptly; refresh the progress file
-# (workspace mtime) every ~45 ticks.
-ticks=0
-while kill -0 "$synth_pid" 2>/dev/null; do
-    if (( ticks % 45 == 0 )); then
-        { date -u +%Y-%m-%dT%H:%M:%SZ; echo "synth-auto: ${selected_name} synthesizing ${total_chars} chars"; } \
-            > "$progress" 2>/dev/null || true
-    fi
-    ticks=$(( ticks + 1 ))
-    sleep 1
-done
-rc=0
-wait "$synth_pid" || rc=$?
-rm -f "$progress"
-
-if [[ "$rc" -eq 0 ]]; then
-    echo "synth-auto: done — ${output}" >&2
-    echo "$output"
-fi
-exit "$rc"
+{
+    echo "synth-auto: all quota-OK vendors FAILED synthesis. Vendor results:"
+    printf 'synth-auto:   - %s\n' "${tried[@]}"
+} >&2
+exit "$last_synth_rc"

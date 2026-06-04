@@ -12,6 +12,9 @@ setup() {
     export TTS_PROVIDER_OVERRIDE="$FIXTURES/stub-provider.sh"
     # chunker.py is vendored into the skill's scripts/ dir — synth.sh finds it
     # as a sibling, so no TTS_CHUNKER_PATH override is needed.
+    # These tests exercise synth.sh's batch internals directly (the unit under
+    # test), so they explicitly opt past the synth-auto boundary guard.
+    export TTS_ALLOW_DIRECT_BATCH=1
 }
 
 teardown() {
@@ -70,6 +73,37 @@ print(json.dumps({'segments': segs}))
     [ "$status" -eq 0 ]
     [ -f "$out" ]
     rm -f "$out" "$seg3"
+}
+
+@test "boundary guard: direct batch without synth-auto/opt-in is refused (exit 1)" {
+    out="$BATS_TMPDIR/guard_out_${BATS_TEST_NUMBER}.mp3"
+    # Clear both bypass signals → a direct --segments call must be refused.
+    unset TTS_ALLOW_DIRECT_BATCH
+    unset TTS_VIA_SYNTH_AUTO
+    run bash "$SYNTH" --segments "$FIXTURES/segments-sample.json" --voice volc-test --output "$out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"synth-auto"* ]]
+    [ ! -f "$out" ]
+}
+
+@test "boundary guard: single --text is NOT gated by the batch guard" {
+    out="$BATS_TMPDIR/guard_text_${BATS_TEST_NUMBER}.mp3"
+    unset TTS_ALLOW_DIRECT_BATCH
+    unset TTS_VIA_SYNTH_AUTO
+    run bash "$SYNTH" --text "hi" --voice volc-test --output "$out"
+    [ "$status" -eq 0 ]
+    [ -f "$out" ]
+    rm -f "$out"
+}
+
+@test "boundary guard: TTS_VIA_SYNTH_AUTO=1 allows direct batch (synth-auto's path)" {
+    out="$BATS_TMPDIR/guard_via_${BATS_TEST_NUMBER}.mp3"
+    unset TTS_ALLOW_DIRECT_BATCH
+    export TTS_VIA_SYNTH_AUTO=1
+    run bash "$SYNTH" --segments "$FIXTURES/segments-sample.json" --voice volc-test --output "$out"
+    [ "$status" -eq 0 ]
+    [ -f "$out" ]
+    rm -f "$out"
 }
 
 @test "unknown voice prefix returns exit 1" {

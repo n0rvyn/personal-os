@@ -38,6 +38,8 @@ Did the episode name an emergent pattern with a reusable, vivid handle?
 | 4 | 原创命名，有画面感，但复用性一般 |
 | 5 | 《信息平原》级别：3-5 字、画面感强、听众能带走复用 |
 
+命名是挣来的，不是强制配额。当今天的素材里确实没有值得命名的新现象时，**完全省略命名是正确选择，不得据此打低分**——此时本项不适用（N/A），不按"无命名尝试=1"处理。只有"该命名而硬凑/敷衍"或"明明有新现象却回避命名"才落入低分区间。
+
 ## KPI 3 — 跨域 (Cross-domain collision)
 
 Did a non-tech domain genuinely collide with the tech topic — not decorate it?

@@ -330,5 +330,108 @@ class SameTopicPastNotesTests(unittest.TestCase):
         self.assertEqual(len(picked), 1)
 
 
+# ---------------------------------------------------------------------------
+# Task 7-tests: vault open-questions ranking helper (used by evening spine
+# inversion — same_topic_past_notes and cross_domain_candidates elevate to the
+# brief's PRIMARY `open_questions` field, ranked by openness/relevance).
+# ---------------------------------------------------------------------------
+
+
+class OpenQuestionsRankingTests(unittest.TestCase):
+    """Phase 2 plan Task 7: evening branch pulls vault notes (same_topic_past_notes
+    + cross_domain_candidates) and ranks them as the brief's open-questions spine.
+    The ranking helper should prefer (a) notes that look like open questions vs.
+    closed stances, and (b) notes that share a tag with today's topic_tags.
+
+    Helper under test: `rank_open_questions(notes, today_tags, n)` — sorts by
+    openness_score (presence of question/疑惑/开放/未定 markers in title+excerpt)
+    DESC, then by tag overlap with today_tags DESC, then by created DESC.
+    Returns the top-n.
+    """
+
+    IDEAS = "20-Ideas/观点心得"
+
+    def setUp(self):
+        from cross_domain import rank_open_questions  # noqa: F401 — will fail pre-impl
+
+    def test_open_question_marker_ranks_above_closed_stance(self):
+        from cross_domain import rank_open_questions
+        notes = [
+            {"path": f"{self.IDEAS}/closed.md", "title": "我的判断：AI 不会改变组织结构",
+             "tags": ["ai", "组织"], "created": "2026-05-15", "domain": "tech", "excerpt": ""},
+            {"path": f"{self.IDEAS}/open.md", "title": "AI 改变了什么？开放问题",
+             "tags": ["ai"], "created": "2026-05-10", "domain": "tech",
+             "excerpt": "我还是没想清楚——这件事到底改变了什么？"},
+        ]
+        ranked = rank_open_questions(notes, today_tags=["ai"], n=5)
+        # The open question ranks first despite being older.
+        self.assertEqual(ranked[0]["path"], f"{self.IDEAS}/open.md")
+
+    def test_tag_overlap_breaks_openness_tie(self):
+        from cross_domain import rank_open_questions
+        notes = [
+            {"path": f"{self.IDEAS}/a.md", "title": "开放问题A",
+             "tags": ["ai"], "created": "2026-05-15", "domain": "tech", "excerpt": ""},
+            {"path": f"{self.IDEAS}/b.md", "title": "开放问题B",
+             "tags": ["ai", "swift"], "created": "2026-05-15", "domain": "tech", "excerpt": ""},
+        ]
+        ranked = rank_open_questions(notes, today_tags=["ai", "swift"], n=5)
+        # Same openness score, but B has more overlap → first.
+        self.assertEqual(ranked[0]["path"], f"{self.IDEAS}/b.md")
+
+    def test_n_limits_returned_count(self):
+        from cross_domain import rank_open_questions
+        notes = [
+            {"path": f"{self.IDEAS}/q{i}.md", "title": f"开放问题{i}？",
+             "tags": ["ai"], "created": f"2026-05-{10+i:02d}",
+             "domain": "tech", "excerpt": ""}
+            for i in range(8)
+        ]
+        ranked = rank_open_questions(notes, today_tags=["ai"], n=3)
+        self.assertEqual(len(ranked), 3)
+
+
+class FreshTodayNotesTests(unittest.TestCase):
+    """Task 5: surface notes that newly entered the vault TODAY.
+    D-025 single-funnel: pure SELECTION over already-loaded vault notes — no new source.
+    Helper under test: `fresh_today_notes(notes, today, n)` — filters to created==today."""
+
+    def _note(self, path, created, tags=None, title="t"):
+        return {
+            "path": path, "title": title, "tags": tags or [],
+            "created": created, "domain": "general", "excerpt": "e",
+        }
+
+    def test_returns_only_today_notes(self):
+        from cross_domain import fresh_today_notes
+        notes = [
+            self._note("a.md", "2026-06-05", title="today-1"),
+            self._note("b.md", "2026-06-04", title="yesterday"),
+            self._note("c.md", "2026-05-20", title="old"),
+        ]
+        out = fresh_today_notes(notes, today="2026-06-05", n=5)
+        titles = [n["title"] for n in out]
+        self.assertEqual(titles, ["today-1"])
+        self.assertNotIn("yesterday", titles)
+        self.assertNotIn("old", titles)
+
+    def test_matches_on_date_prefix_with_time_component(self):
+        from cross_domain import fresh_today_notes
+        notes = [self._note("a.md", "2026-06-05T09:00", title="today-ts")]
+        out = fresh_today_notes(notes, today="2026-06-05", n=5)
+        self.assertEqual([n["title"] for n in out], ["today-ts"])
+
+    def test_n_limit_respected(self):
+        from cross_domain import fresh_today_notes
+        notes = [self._note(f"{i}.md", "2026-06-05", title=f"t{i}") for i in range(8)]
+        out = fresh_today_notes(notes, today="2026-06-05", n=3)
+        self.assertEqual(len(out), 3)
+
+    def test_empty_when_nothing_today(self):
+        from cross_domain import fresh_today_notes
+        notes = [self._note("a.md", "2026-06-04", title="yesterday")]
+        self.assertEqual(fresh_today_notes(notes, today="2026-06-05", n=5), [])
+
+
 if __name__ == "__main__":
     unittest.main()

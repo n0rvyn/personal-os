@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.20.0"
+    "version": "0.21.0"
   },
   "plugins": [
     {
@@ -29,7 +29,7 @@
       "name": "session-reflect",
       "source": "./session-reflect",
       "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "category": "reflection",
       "tags": [
         "session-analysis",
@@ -121,7 +121,7 @@
       "name": "podcast-prep",
       "source": "./podcast-prep",
       "description": "Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "category": "intelligence",
       "tags": [
         "podcast",
@@ -136,7 +136,7 @@
       "name": "novel-forge",
       "source": "./novel-forge",
       "description": "中文网文连载创作引擎:立项→分卷章纲→逐章写→多镜头评审,以故事圣经防连续性漂移,rubric 按定位调权(金庸·基督山为锚点)。支持新写/续写/扩写/卡文救场/拆书/写细纲/金手指设计/改写。",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "writing",
       "tags": [
         "web-fiction",

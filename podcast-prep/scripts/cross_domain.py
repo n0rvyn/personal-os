@@ -418,3 +418,61 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=90, n=5,
         seen.add(sig)
         deduped.append(nt)
     return deduped[:n]
+
+
+# Markers in a note's title + excerpt that signal an OPEN question vs. a closed
+# stance. Used by rank_open_questions to elevate the brief's open-question spine.
+# CJK question mark is a strong signal; explicit 开放/未定/未决 flag intent.
+_OPEN_QUESTION_MARKERS = (
+    "？", "?", "开放问题", "开放", "未定", "未决", "未想清楚",
+    "open question", "unresolved", "tbd", "open", "undecided",
+)
+
+
+def _openness_score(note: dict) -> int:
+    """Count open-question markers in title + excerpt. 0 = looks like a closed
+    stance, higher = more open. Empty fields contribute 0."""
+    blob = f"{note.get('title', '')} {note.get('excerpt', '')}".lower()
+    return sum(1 for m in _OPEN_QUESTION_MARKERS if m.lower() in blob)
+
+
+def rank_open_questions(notes: list, today_tags: list, n: int = 5) -> list:
+    """Rank vault notes as the evening brief's open-questions spine.
+
+    Sort key (in order):
+      1. openness_score DESC — open questions beat closed stances
+      2. tag overlap with today_tags DESC — relevant beats tangential
+      3. created DESC — newer first when scores tie
+
+    Returns the top-n. Pure function on caller-passed data (no IO, no DB).
+    """
+    today_tag_set = {t.lower().strip() for t in today_tags if t}
+    def _overlap(note_tags):
+        return sum(1 for t in (note_tags or []) if t and t.lower().strip() in today_tag_set)
+    ranked = sorted(
+        notes,
+        key=lambda nt: (
+            _openness_score(nt),
+            _overlap(nt.get("tags", [])),
+            nt.get("created", ""),
+        ),
+        reverse=True,
+    )
+    return ranked[:n]
+
+
+def fresh_today_notes(notes: list, today: str, n: int = 5) -> list:
+    """Notes that newly entered the vault TODAY — evening brief's "今日新进 vault 的笔记".
+
+    D-025 single-funnel: pure SELECTION over already-loaded vault notes (no new source,
+    no Adam events, no direct API). Filters `notes` to those whose created date (first 10
+    chars, YYYY-MM-DD) equals `today`, ranks by recency then tag count, returns up to n.
+
+    Pure function on caller-passed data (no IO, no DB).
+    """
+    fresh = [nt for nt in notes if str(nt.get("created", ""))[:10] == today]
+    fresh.sort(
+        key=lambda nt: (str(nt.get("created", "")), len(nt.get("tags", []))),
+        reverse=True,
+    )
+    return fresh[:n]

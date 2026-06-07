@@ -22,6 +22,11 @@ DOMAIN_KEYWORDS = {
     "philosophy": [
         "哲学", "philosophy", "思想", "ethics", "伦理", "存在", "意义",
         "认识论", "本体论", "形而上学", "禅", "道", "君子", "卡拉马佐夫",
+        # Task 1-impl: thinker / work names as domain signals (mirrors the
+        # existing 卡拉马佐夫 convention). Lets 方希·韩炳哲·倦怠社会 notes
+        # land in philosophy instead of falling through to general after the
+        # `history` pollution is removed.
+        "韩炳哲", "倦怠社会", "倦怠", "社会批判", "福柯", "本雅明",
     ],
     "management": [
         "管理", "management", "战略", "strategy", "business", "经济",
@@ -33,7 +38,13 @@ DOMAIN_KEYWORDS = {
         "心理学",
     ],
     "history": [
-        "历史", "history", "古代", "war", "civilization", "古典",
+        # Task 1-impl: removed bare `"history"` English keyword. It was a
+        # getnote/dedao junk tag (appended by the capturer with no semantic
+        # content); it was pulling AI/DB/方希 notes into the history bucket.
+        # The CJK keyword `历史` is still here, guarded by negative-lookahead
+        # `历史(?!性)` in _kw_matches_tag so `历史性突破` (rhetorical
+        # emphasis) does NOT match.
+        "历史", "古代", "war", "civilization", "古典",
         "近代史", "帝国",
     ],
     "literature": [
@@ -98,6 +109,18 @@ def _is_unusable_title(title):
 # "X的研究发现" and "X研究发现" collapse to the same near-duplicate.
 _DEDUP_FILLER = str.maketrans("", "", "的了之与和及在")
 
+# Task 1-impl: CJK keyword negative-lookahead guard table. A keyword listed
+# here matches as a substring ONLY when it is not followed by the listed
+# suffix. Used to gate `历史` against the rhetorical-emphasis word `历史性`
+# (historic breakthrough) — that is, "历史" matches 历史人物 / 古代史 / 通史
+# but NOT 历史性突破 / 历史性变革. The guard is applied inside _kw_matches_tag
+# so both the tag-scan and the title+excerpt content-scan paths get the same
+# behavior (single source of truth, no double-patch needed because
+# _classify_by_text also routes through _kw_matches_tag).
+_KW_NEG_LOOKAHEAD: dict[str, tuple[str, ...]] = {
+    "历史": ("性",),
+}
+
 
 def _kw_matches_tag(kw, tag):
     """True if keyword kw matches tag (both already lowercased).
@@ -106,6 +129,11 @@ def _kw_matches_tag(kw, tag):
     so 'ai' matches 'ai编程' but 'war' does NOT match 'software'. CJK keywords of ≥2
     chars match as plain substrings; single-char CJK keywords require exact tag equality
     (avoids '道' matching '知道').
+
+    Task 1-impl: when kw is in `_KW_NEG_LOOKAHEAD`, the kw substring must
+    additionally NOT be followed by any of the listed suffix chars. This
+    gates `历史` against `历史性` (rhetorical-emphasis 修辞强调) so it matches
+    historical-substance tokens but not the historic-breakthrough idiom.
     """
     if not kw or not tag:
         return False
@@ -121,7 +149,16 @@ def _kw_matches_tag(kw, tag):
         return False
     if len(kw) == 1:
         return kw == tag
-    return kw in tag
+    # CJK keyword of length >= 2. The match positions are needed for the
+    # negative-lookahead guard, so do not shortcut with `kw in tag`.
+    neg = _KW_NEG_LOOKAHEAD.get(kw)
+    if neg is None:
+        return kw in tag
+    for m in re.finditer(re.escape(kw), tag):
+        after = tag[m.end():]
+        if not after or after[0] not in neg:
+            return True
+    return False
 
 
 def _classify_by_text(title, excerpt="", parent_dir=""):
@@ -313,7 +350,8 @@ CROSS_DOMAIN_PRIORITY = [
 
 
 def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
-                            recent_pool=8, seed=None, force_domain=None):
+                            recent_pool=8, seed=None, force_domain=None,
+                            exclude_ids=None):
     """Return up to n notes from NON-tech domains.
 
     Default: one note per domain bucket, in domain priority order — a spread across
@@ -326,6 +364,16 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
     `force_domain`: when set, return up to n notes from ONLY that one bucket — used by
     parallel-N brief perturbation to pin each path to a distinct domain so the candidates
     genuinely diverge. Raises ValueError on an unknown domain.
+
+    `exclude_ids` (Task 2-impl): iterable of note paths to skip from each domain pool
+    — fed by the cross-period dedup layer (see Task 3: source_log). None → no
+    exclusion. Order of operations inside each domain:
+      1) collapse near-duplicate titles by _title_signature (keep newest by `created`)
+      2) drop `exclude_ids`
+      3) sort recency DESC, take `recent_pool` head
+    For `force_domain`, if the post-filter head is empty, fall back to the
+    unfiltered (post-collapse) pool so the brief is never empty (small-bucket
+    backfill). The brief's emptiness would be worse than a slightly stale pick.
 
     Returns notes ordered by domain priority (philosophy → management → cognition →
     history → literature → natural-science). Pass `notes` to skip filesystem walk.
@@ -341,6 +389,12 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
                 f"unknown cross-domain bucket {force_domain!r}; "
                 f"valid: {CROSS_DOMAIN_PRIORITY}")
         domains_priority = [force_domain]
+    # Normalize exclude set once (None → empty). Iteration over frozenset is the
+    # cheapest `in` check at the call site.
+    if exclude_ids is None:
+        exclude_set = frozenset()
+    else:
+        exclude_set = frozenset(exclude_ids)
     rng = random.Random(seed)
     picked = []
     for dom in domains_priority:
@@ -352,13 +406,39 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
             if _tag_overlap(nt["tags"], today_tags) > 0
         ]
         pool = with_overlap if with_overlap else domain_notes
-        pool.sort(key=lambda nt: nt["created"], reverse=True)
-        head = pool[:recent_pool]
+        # Task 2-impl: near-duplicate title collapse. Use _title_signature
+        # (whitespace-stripped + filler-stripped CJK lowercased) as the key.
+        # Within each signature keep the newest by `created`. Order of
+        # insertion: first-seen signature wins ties on created date so the
+        # result is stable for tests.
+        collapsed: dict[str, dict] = {}
+        for nt in pool:
+            sig = _title_signature(nt["title"])
+            cur = collapsed.get(sig)
+            if cur is None or nt["created"] > cur["created"]:
+                collapsed[sig] = nt
+        deduped_pool = list(collapsed.values())
+        # Apply exclude_ids filter (after collapse — if 2 of the 3 collapsed
+        # copies were offered yesterday, all 3 copies are equally stale, so
+        # we already collapsed them; now drop the surviving one if it's
+        # itself in the exclude set).
+        filtered_pool = [nt for nt in deduped_pool if nt["path"] not in exclude_set]
+        # Recency sort + recent_pool head.
+        filtered_pool.sort(key=lambda nt: nt["created"], reverse=True)
+        head = filtered_pool[:recent_pool]
+        # Small-bucket backfill: when force_domain is set and the post-filter
+        # head is empty, fall back to the unfiltered (post-collapse) pool so
+        # the brief is never empty. Non-force domains just skip silently.
+        if force_domain is not None and not head and deduped_pool:
+            fallback = list(deduped_pool)
+            fallback.sort(key=lambda nt: nt["created"], reverse=True)
+            head = fallback[:recent_pool]
         if force_domain is not None:
             # Forced single bucket → return up to n distinct notes from it.
             picked.extend(rng.sample(head, min(n, len(head))))
         else:
-            picked.append(rng.choice(head))
+            if head:
+                picked.append(rng.choice(head))
         if len(picked) >= n:
             break
     return picked[:n]

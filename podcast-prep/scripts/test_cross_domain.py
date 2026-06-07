@@ -230,6 +230,119 @@ class CrossDomainCandidatesTests(unittest.TestCase):
             ["ai"], vault_root=None, n=3, notes=notes, force_domain="philosophy")
         self.assertEqual(len(picked), 3)
 
+    # -----------------------------------------------------------------
+    # Task 2-tests: cross_domain_candidates signature gains
+    # `exclude_ids` (path-string iterable) and applies:
+    #   1) near-duplicate title collapse via _title_signature within each
+    #      domain pool (keep newest by `created`),
+    #   2) exclude_paths filter against the post-collapse pool,
+    #   3) small-bucket backfill: in force_domain mode, when the filtered
+    #      pool is empty, fall back to the unfiltered pool so the brief is
+    #      never empty.
+    # Default behavior (no exclude_ids, no near-dup titles) is preserved
+    # verbatim — see `test_cross_domain_backward_compat` below.
+    # -----------------------------------------------------------------
+
+    def test_cross_domain_title_collapse(self):
+        # 3 philosophy notes with the SAME title signature (模拟 编程能力 x 3)
+        # + 1 philosophy note with a distinct title. force_domain pins the
+        # pool to philosophy so we can count the result precisely. Both
+        # title groups carry the "ai" tag so with_overlap is non-empty for
+        # both (avoids the pool falling back to the bare domain set and
+        # complicating the count).
+        notes = [
+            {"path": "10-Knowledge/p1.md", "title": "编程能力全球前20",
+             "tags": ["ai"], "created": "2026-05-15", "domain": "philosophy",
+             "excerpt": ""},
+            {"path": "10-Knowledge/p2.md", "title": "编程能力全球前20",
+             "tags": ["ai"], "created": "2026-05-16", "domain": "philosophy",
+             "excerpt": ""},
+            {"path": "10-Knowledge/p3.md", "title": "编程能力全球前20",
+             "tags": ["ai"], "created": "2026-05-17", "domain": "philosophy",
+             "excerpt": ""},
+            {"path": "10-Knowledge/p4.md", "title": "另一篇哲学笔记",
+             "tags": ["ai", "哲学"], "created": "2026-05-18",
+             "domain": "philosophy", "excerpt": ""},
+        ]
+        picked = cross_domain_candidates(
+            ["ai"], vault_root=None, n=5, notes=notes,
+            seed=42, force_domain="philosophy",
+        )
+        # Collapse rule: same _title_signature → keep newest → 1 survivor.
+        # Expect: 编程能力全球前20 (newest = p3, 5/17) + 另一篇哲学笔记 (p4)
+        paths = [nt["path"] for nt in picked]
+        self.assertEqual(len(picked), 2, f"expected 2 (collapse kept one of 编程能力), got {len(picked)}: {paths}")
+        self.assertIn("10-Knowledge/p3.md", paths)
+        self.assertNotIn("10-Knowledge/p1.md", paths)
+        self.assertNotIn("10-Knowledge/p2.md", paths)
+
+    def test_cross_domain_exclude_ids(self):
+        # 5 distinct philosophy notes; exclude 2 of them.
+        notes = [
+            {"path": f"10-Knowledge/p{i}.md", "title": f"distinct-{i}",
+             "tags": ["哲学", "ai"], "created": f"2026-05-{10+i:02d}",
+             "domain": "philosophy", "excerpt": ""}
+            for i in range(5)
+        ]
+        exclude = {"10-Knowledge/p1.md", "10-Knowledge/p3.md"}
+        picked = cross_domain_candidates(
+            ["ai"], vault_root=None, n=5, notes=notes,
+            seed=0, force_domain="philosophy", exclude_ids=exclude,
+        )
+        paths = {nt["path"] for nt in picked}
+        self.assertNotIn("10-Knowledge/p1.md", paths)
+        self.assertNotIn("10-Knowledge/p3.md", paths)
+        # The other 3 should still be selectable (n=5, recent_pool=8 → head=5)
+        self.assertTrue(paths.issubset({
+            "10-Knowledge/p0.md", "10-Knowledge/p2.md", "10-Knowledge/p4.md",
+        }))
+
+    def test_cross_domain_small_bucket_backfill(self):
+        # 2 philosophy notes; exclude BOTH → post-filter pool is empty.
+        # In force_domain mode, the backfill guard must still return ≥1
+        # so the brief is never empty.
+        notes = [
+            {"path": "10-Knowledge/p0.md", "title": "distinct-0",
+             "tags": ["哲学", "ai"], "created": "2026-05-10",
+             "domain": "philosophy", "excerpt": ""},
+            {"path": "10-Knowledge/p1.md", "title": "distinct-1",
+             "tags": ["哲学", "ai"], "created": "2026-05-11",
+             "domain": "philosophy", "excerpt": ""},
+        ]
+        picked = cross_domain_candidates(
+            ["ai"], vault_root=None, n=5, notes=notes,
+            seed=0, force_domain="philosophy",
+            exclude_ids={"10-Knowledge/p0.md", "10-Knowledge/p1.md"},
+        )
+        # Backfill: drop the exclude filter, return at least 1 (the brief
+        # must never be empty when force_domain is set).
+        self.assertGreaterEqual(len(picked), 1,
+            "force_domain backfill must return ≥1 note even when all are excluded")
+
+    def test_cross_domain_backward_compat(self):
+        # Regression shield: no exclude_ids, no near-dup titles, fixed seed
+        # → result is identical to the pre-fix behavior (single pick per
+        # domain from the with-overlap head).
+        notes = [
+            {"path": "10-Knowledge/phil.md", "title": "哲学笔记A",
+             "tags": ["哲学", "ai"], "created": "2026-05-15",
+             "domain": "philosophy", "excerpt": ""},
+            {"path": "10-Knowledge/mgmt.md", "title": "管理笔记A",
+             "tags": ["管理"], "created": "2026-05-10",
+             "domain": "management", "excerpt": ""},
+            {"path": "10-Knowledge/cog.md", "title": "认知笔记A",
+             "tags": ["认知", "ai"], "created": "2026-05-12",
+             "domain": "cognition", "excerpt": ""},
+        ]
+        picked = cross_domain_candidates(
+            ["ai"], vault_root=None, n=5, notes=notes, seed=7,
+        )
+        # Default: one per domain in priority order — philosophy, management, cognition.
+        domains = [nt["domain"] for nt in picked]
+        self.assertEqual(domains, ["philosophy", "management", "cognition"])
+        # tech should still be excluded
+        self.assertNotIn("tech", domains)
+
 
 class SameTopicPastNotesTests(unittest.TestCase):
     # KL-4: self_past reads only 20-Ideas/观点心得/ + 90-Productions/Podcasts/ per the contract.
@@ -431,6 +544,185 @@ class FreshTodayNotesTests(unittest.TestCase):
         from cross_domain import fresh_today_notes
         notes = [self._note("a.md", "2026-06-04", title="yesterday")]
         self.assertEqual(fresh_today_notes(notes, today="2026-06-05", n=5), [])
+
+
+# ---------------------------------------------------------------------------
+# Task 1-tests (2026-06-07 source-recurrence fix — 治本 a): domain classifier
+# de-pollution. The history bucket has been polluted by:
+#   (1) getnote/dedao captures that carry a bare `history` English tag (added
+#       as junk by the capturer) on non-history content
+#   (2) AI-related 编程稿 that uses "历史性突破" as rhetorical emphasis
+#   (3) 方希 解读韩炳哲《倦怠社会》 — actually a philosophy note whose
+#       title contains "历史感" + a stray `history` tag
+#
+# These notes were falling into the `history` bucket and being offered to
+# path-C of the morning brief, which is why the same note kept recurring.
+# The fix is a regex guard on the CJK keyword `历史` so it does NOT match
+# `历史性` (the rhetorical emphasis), and removal of the bare English
+# `history` keyword from DOMAIN_KEYWORDS["history"] (it is a getnote junk
+# tag with no semantic content). Philosophy bucket gains 思想家/作品词
+# (韩炳哲, 倦怠, 倦怠社会, 福柯, 本雅明, 社会批判) so 方希 notes land
+# in philosophy rather than drifting through to general.
+# ---------------------------------------------------------------------------
+
+
+class DomainHistoryPollutionTests(unittest.TestCase):
+    """Task 1: 域分类器去污染 — 被错分进 history 的三类笔记现在应各归各位。"""
+
+    def test_db2_operations_guide_is_tech_not_history(self):
+        # Real vault sample: a DB2 admin note tagged with the getnote junk
+        # `history` English tag. With bare `history` removed from
+        # DOMAIN_KEYWORDS["history"], the parent_dir name "linux-sre" / tech
+        # signal wins.
+        self.assertEqual(
+            classify_note_domain(
+                ['uncatagory', 'history'],
+                title='DB2 Operatation Guide',
+                excerpt='db2 connect to DATABASE',
+            ),
+            'tech',
+        )
+
+    def test_ai_historic_breakthrough_essay_is_tech_not_history(self):
+        # Real vault sample: 编程稿 标题用 "历史性突破" 作修辞强调,
+        # 含 junk `history` getnote tag. With the regex guard `历史(?!性)`,
+        # the CJK keyword `历史` no longer matches `历史性`; bare `history`
+        # is also gone, so the note falls to general and gets rescued by
+        # the tech content-signal "AI"/"编程".
+        self.assertEqual(
+            classify_note_domain(
+                ['得到', 'history'],
+                title='编程能力进入全球前20AI又迎来历史性突破了',
+                excerpt='编程能力进入全球前20，AI又迎来历史性突破了？',
+            ),
+            'tech',
+        )
+
+    def test_fangxi_hanbingzhe_book_note_is_philosophy_not_history(self):
+        # Real vault sample: 方希 解读韩炳哲《倦怠社会》. Tags carry
+        # `得到` + `《倦怠社会》| 方希解读` + junk `history`. With the
+        # regex guard + philosophy gain (`韩炳哲`/`倦怠`/`倦怠社会`),
+        # the note lands in philosophy. Title contains "历史感" (not
+        # `历史` alone), so the regex guard makes that no-op.
+        self.assertEqual(
+            classify_note_domain(
+                ['得到', '《倦怠社会》| 方希解读', 'history'],
+                title='我特别喜欢方希老师的听书系列总觉得她讲书时有一种博古通今的历史感今天的听书课',
+                excerpt='一位大学老师在向学生介绍韩炳哲时说...',
+            ),
+            'philosophy',
+        )
+
+
+class DomainHistoryTruePositivesTests(unittest.TestCase):
+    """Task 1: 真历史笔记不应被误伤。每条 family 独立断言（plan-verifier 校正：
+    实测这些 family 在 baseline 即为 history，修复后仍必须 history）。"""
+
+    def test_history_research_tag_still_history(self):
+        # 历史研究 是既有 history 域信号，必须保留。
+        self.assertEqual(
+            classify_note_domain(['得到', '历史研究']),
+            'history',
+        )
+
+    def test_history_program_tag_still_history(self):
+        # 历史节目 / 历史频道类笔记
+        self.assertEqual(
+            classify_note_domain(['得到', '历史节目']),
+            'history',
+        )
+
+    def test_historical_figure_tag_still_history(self):
+        # 历史人物 tag 单用即应入 history 域
+        self.assertEqual(
+            classify_note_domain(['历史人物']),
+            'history',
+        )
+
+    def test_history_person_with_wenming_tag_still_history(self):
+        # 复合 family: 录音笔记 + 文明之旅节目 + 历史人物（vault 真实 1 条）
+        self.assertEqual(
+            classify_note_domain(['录音笔记', '文明之旅节目', '历史人物']),
+            'history',
+        )
+
+
+class DomainNeighborsUnaffectedTests(unittest.TestCase):
+    """Task 1: 修复不应误伤非 history 桶。"""
+
+    def test_philosophy_tag_still_philosophy(self):
+        self.assertEqual(classify_note_domain(['哲学', '君子']), 'philosophy')
+
+    def test_karamazov_still_philosophy(self):
+        # 卡拉马佐夫 是既有 philosophy 信号
+        self.assertEqual(
+            classify_note_domain(['哲学', '卡拉马佐夫']),
+            'philosophy',
+        )
+
+    def test_philosophy_plus_ai_still_philosophy(self):
+        # philosophy-first 设计保留：含 ai 的哲学笔记仍 philosophy
+        self.assertEqual(classify_note_domain(['哲学', 'ai']), 'philosophy')
+
+    def test_cognition_tag_still_cognition(self):
+        self.assertEqual(classify_note_domain(['认知', '心理']), 'cognition')
+
+    def test_kahneman_still_cognition(self):
+        self.assertEqual(classify_note_domain(['卡尼曼', '思维']), 'cognition')
+
+    def test_psychology_tag_still_cognition(self):
+        self.assertEqual(classify_note_domain(['心理学']), 'cognition')
+
+
+class DomainHistoryBucketCatastropheFloorTests(unittest.TestCase):
+    """Task 1: 桶大小灾难守卫 — history 桶不能从 161 崩到 60（窄词替换式）。
+
+    注意：这是灾难守卫，不是"填满"门。实测修复后 history≈143（baseline 161
+    正确剔污收缩 17 条污染 + 1 条真历史因仅靠裸 `history` 标签存活而边缘
+    丢失）。门设 135 仅抓窄词替换式崩塌；不得设 ≥150（143 是正确结果）。
+    真正的回归保护靠 per-family 断言。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        cls.vault_root = os.path.expanduser('~/Obsidian/PKOS')
+        cls.vault_present = os.path.isdir(cls.vault_root)
+
+    def test_history_bucket_floor(self):
+        if not self.vault_present:
+            self.skipTest("PKOS vault not present in this environment")
+        from cross_domain import load_pkos_notes
+        ns = load_pkos_notes(self.vault_root)
+        n_history = sum(1 for n in ns if n['domain'] == 'history')
+        # Catastrophe floor: 135 catches narrow-keyword replacement collapse
+        # (e.g. 161 → 60). DO NOT set this to 150 — 143 is the correct
+        # result of the de-pollution; >150 would invite re-introducing the
+        # pollution to satisfy the floor.
+        self.assertGreaterEqual(
+            n_history, 135,
+            f"history bucket {n_history} < 135 (catastrophe floor) — "
+            f"possible narrow-keyword replacement collapse",
+        )
+
+    def test_philosophy_bucket_not_collapsed(self):
+        if not self.vault_present:
+            self.skipTest("PKOS vault not present in this environment")
+        from cross_domain import load_pkos_notes
+        ns = load_pkos_notes(self.vault_root)
+        n_phil = sum(1 for n in ns if n['domain'] == 'philosophy')
+        # Adding 韩炳哲/倦怠/福柯/本雅明 should NOT shrink philosophy below
+        # baseline (≈1112) by a meaningful amount. The pre-fix philosophy
+        # count is the source of truth here.
+        self.assertGreaterEqual(n_phil, 1100)
+
+    def test_cognition_bucket_not_collapsed(self):
+        if not self.vault_present:
+            self.skipTest("PKOS vault not present in this environment")
+        from cross_domain import load_pkos_notes
+        ns = load_pkos_notes(self.vault_root)
+        n_cog = sum(1 for n in ns if n['domain'] == 'cognition')
+        self.assertGreaterEqual(n_cog, 120)
 
 
 if __name__ == "__main__":

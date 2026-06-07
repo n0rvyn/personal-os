@@ -21,6 +21,7 @@ from minhash_check import max_jaccard_against, max_similarity_against
 from contrarian_pull import pick_contrarian_source
 from cross_domain import load_pkos_notes, cross_domain_candidates, same_topic_past_notes, rank_open_questions, fresh_today_notes
 from domain_select import select_with_domain_quota
+import source_log  # Task 3-impl: cross-period note dedup state (read by CLI handler)
 
 NAMED_CONCEPT_PROMPT = (
     "命名是挣来的，不是硬塞的：命名为可选项，只在今天的素材里真的浮现出一个还没有名字的"
@@ -191,7 +192,8 @@ def run_check(candidates: list, topic_log_path: str, today: str,
               vault_root: str = None, force_domain: str = None,
               force_contrarian: str = None,
               show_type: str = None,
-              required_domains: list = None) -> dict:
+              required_domains: list = None,
+              exclude_source_ids: "set | list | None" = None) -> dict:
     """Build the structured brief consumed by the writer agent.
 
     DP-001 A: pkos_note is supplied by the caller (达芬奇 via pkos:serendipity SKILL).
@@ -221,6 +223,14 @@ def run_check(candidates: list, topic_log_path: str, today: str,
 
     `required_domains`: list of domain strings the morning quota selector must cover
     (caller-passed, NEVER hardcoded — fork-safe per D-019).
+
+    `exclude_source_ids` (Task 3-impl): iterable of note paths to skip from the
+    cross-domain pool (per-period dedup, fed by the CLI handler reading
+    source_log.jsonl). None → no exclusion. The function itself is pure — it
+    does NOT read or write source_log; the CLI `check` handler is the only
+    caller that touches IO. The 3rd test in SourceLogWiringTests locks this
+    contract: run_check(...) called directly must not produce a source_log
+    side-effect.
     """
     if not pkos_note or not isinstance(pkos_note, dict) or not pkos_note.get("id"):
         return {
@@ -284,7 +294,8 @@ def run_check(candidates: list, topic_log_path: str, today: str,
         "contrarian_source": contrarian,
         "cross_domain_candidates": cross_domain_candidates(
             today_tags, resolved_root, n=5, notes=notes, seed=seed,
-            force_domain=force_domain),
+            force_domain=force_domain,
+            exclude_ids=exclude_source_ids),
         "self_past_candidates": same_topic_past_notes(
             today_tags, resolved_root, today=today, n=5, notes=notes),
         "named_concept_prompt": NAMED_CONCEPT_PROMPT,
@@ -478,13 +489,35 @@ def main():
             [d.strip() for d in args.required_domains.split(",") if d.strip()]
             if args.required_domains else None
         )
+        # Task 3-impl: source_log roundtrip — read the last 14d of offered
+        # note paths (co-located with --topic-log) and feed the union into
+        # run_check as `exclude_source_ids`. After the brief is built, append
+        # this episode's offered paths back to the same file.
+        source_log_path = os.path.join(
+            os.path.dirname(args.topic_log), "source_log.jsonl")
+        exclude = source_log.recent_source_ids(
+            source_log_path, args.date, window_days=14)
         brief = run_check(candidates, args.topic_log, args.date,
                           pkos_note=pkos_note, seed=args.seed,
                           vault_root=args.vault_root,
                           force_domain=args.force_domain,
                           force_contrarian=args.force_contrarian,
                           show_type=args.show_type,
-                          required_domains=required_domains)
+                          required_domains=required_domains,
+                          exclude_source_ids=exclude)
+        # Write this episode's offered note paths back to source_log.
+        # Morning/legacy brief carries `cross_domain_candidates`; the evening
+        # brief shape (Task 7) does NOT — it uses `open_questions` / `evidence` /
+        # `fresh_today`. `brief.get` with default [] keeps the writer path
+        # working for both shapes.
+        offered_paths = [
+            c.get("path", "")
+            for c in brief.get("cross_domain_candidates", [])
+            if isinstance(c, dict) and c.get("path")
+        ]
+        if offered_paths:
+            source_log.append_offered(
+                source_log_path, args.date, offered_paths)
         print(json.dumps(brief, ensure_ascii=False, indent=2))
     elif args.cmd == "finalize":
         approved = json.loads(args.approved_topics)

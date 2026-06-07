@@ -719,5 +719,193 @@ class EarnedNamingAndAngleTests(unittest.TestCase):
         self.assertIn("省略", NAMED_CONCEPT_PROMPT)
 
 
+# ---------------------------------------------------------------------------
+# Task 3-tests (2026-06-07 source-recurrence fix — 治本 b IO 侧): the CLI
+# `check` handler must:
+#   1) read source_log.jsonl (co-located with --topic-log) for the last
+#      14 days of offered note paths, pass them to run_check as
+#      `exclude_source_ids`,
+#   2) write the brief's cross_domain_candidates paths back to
+#      source_log.jsonl after the brief is generated,
+#   3) NOT do any IO when called via run_check directly (pure-function
+#      contract — preserves the existing 102 tests).
+# ---------------------------------------------------------------------------
+
+
+class SourceLogWiringTests(unittest.TestCase):
+    """Task 3: CLI `check` wires source_log read+write around run_check."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.topic_log_path = os.path.join(self.tmp_dir.name, "topic_log.yaml")
+        from topic_log import save_topic_log
+        save_topic_log(self.topic_log_path, {"episodes": []})
+        # Build a minimal vault so cross_domain_candidates has something to pick
+        self.vault_root = os.path.join(self.tmp_dir.name, "vault")
+        cross = os.path.join(self.vault_root, "10-Knowledge")
+        os.makedirs(cross)
+        # 5 distinct philosophy notes — small enough to avoid triggering
+        # small-bucket backfill; distinct titles so title-collapse is a no-op.
+        for i in range(5):
+            Path(os.path.join(cross, f"phil-{i}.md")).write_text(
+                "---\ntype: knowledge\ntags: [哲学, ai]\ncreated: 2026-05-15\n"
+                f"---\n\n哲学笔记{i} 实体内容。\n",
+                encoding="utf-8",
+            )
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def _check(self, exclude_source_ids=None, vault_root=None):
+        # Pass candidates as DICT list so the morning quota selector accepts
+        # them — bare-string candidates under show_type="morning" are filtered
+        # out (they lack a `domain` key) and the downstream `notes` walk
+        # never runs. The dict shape mirrors the morning producer/consumer
+        # contract that Adam templates use in production.
+        candidates = [
+            {"id": "n1", "domain": "tech", "topic_tag": "new-topic"},
+        ]
+        return run_check(
+            candidates=candidates,
+            topic_log_path=self.topic_log_path,
+            today="2026-06-07",
+            pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+            vault_root=vault_root or self.vault_root,
+            force_domain="philosophy",
+            show_type="morning",
+            required_domains=["tech", "philosophy"],
+            exclude_source_ids=exclude_source_ids,
+        )
+
+    def test_run_check_accepts_exclude_source_ids(self):
+        # The pure function signature must accept `exclude_source_ids` and
+        # filter cross_domain_candidates accordingly.
+        from cross_domain import _title_signature
+        all_brief = self._check()
+        all_paths = [nt["path"] for nt in all_brief["cross_domain_candidates"]]
+        self.assertEqual(len(all_paths), 5)
+        # Now exclude the first 2 — they should drop out of the result.
+        exclude = set(all_paths[:2])
+        filtered = self._check(exclude_source_ids=exclude)
+        filtered_paths = [nt["path"] for nt in filtered["cross_domain_candidates"]]
+        for excluded in exclude:
+            self.assertNotIn(excluded, filtered_paths)
+
+    def test_run_check_pure_no_write(self):
+        # run_check (direct call, not the CLI handler) must NOT touch any
+        # source_log file. The IO is in the CLI handler only.
+        self._check()
+        # No source_log.jsonl should appear next to --topic-log (we did not
+        # route through main()'s `check` branch).
+        source_log_path = os.path.join(self.tmp_dir.name, "source_log.jsonl")
+        self.assertFalse(os.path.exists(source_log_path),
+                         "run_check direct call must not create source_log.jsonl")
+
+    def test_run_check_default_exclude_is_none(self):
+        # Calling run_check with no exclude_source_ids must behave like
+        # the pre-fix contract — no filtering.
+        brief_default = self._check()
+        brief_explicit_none = self._check(exclude_source_ids=None)
+        # Both should return the same set of paths (deterministic on the
+        # fixed topic_log + vault).
+        d1 = sorted(nt["path"] for nt in brief_default["cross_domain_candidates"])
+        d2 = sorted(nt["path"] for nt in brief_explicit_none["cross_domain_candidates"])
+        self.assertEqual(d1, d2)
+
+
+class SourceLogCLIRoundtripTests(unittest.TestCase):
+    """Task 3: CLI `check` roundtrip — running main(['check', ...]) must
+    read exclude + write offered into source_log.jsonl. Tests via
+    subprocess to exercise the real main() entry point."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.topic_log_path = os.path.join(self.tmp_dir.name, "topic_log.yaml")
+        from topic_log import save_topic_log
+        save_topic_log(self.topic_log_path, {"episodes": []})
+        self.vault_root = os.path.join(self.tmp_dir.name, "vault")
+        cross = os.path.join(self.vault_root, "10-Knowledge")
+        os.makedirs(cross)
+        # 8 distinct philosophy notes — large enough that excluding 5
+        # (typical first-run offered) still leaves 3 in the filtered pool,
+        # so the small-bucket backfill never triggers. The plan's step 3
+        # explicitly says: "用足够大的桶避免兜底".
+        for i in range(8):
+            Path(os.path.join(cross, f"phil-{i}.md")).write_text(
+                "---\ntype: knowledge\ntags: [哲学, ai]\ncreated: 2026-05-15\n"
+                f"---\n\n哲学笔记{i}。\n",
+                encoding="utf-8",
+            )
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def _run_check_cli(self, today="2026-06-07", candidates=None):
+        """Drive main() with the same args Adam uses for the morning check."""
+        import subprocess
+        import sys as _sys
+        # Dict shape mirrors the morning producer/consumer contract that
+        # Adam templates use in production. Bare strings under
+        # show_type="morning" would be filtered by select_with_domain_quota
+        # (no `domain` key) and the cross_domain_candidates walk would never
+        # run, defeating the test's purpose.
+        cands = candidates or [
+            {"id": "n1", "domain": "tech", "topic_tag": "new-topic"},
+        ]
+        cands_json = json.dumps(cands)
+        # --pkos-note is REQUIRED by run_check (DP-001 A). Without it the
+        # brief comes back as an error brief with cross_domain_candidates=[]
+        # and source_log.jsonl never gets written. Adam templates always
+        # supply this — the test must mirror that.
+        pkos_note_json = json.dumps({"id": "PKOS/x", "title": "y", "excerpt": "z"})
+        result = subprocess.run(
+            [
+                _sys.executable, "orchestrator.py", "check",
+                "--candidates", cands_json,
+                "--date", today,
+                "--topic-log", self.topic_log_path,
+                "--vault-root", self.vault_root,
+                "--force-domain", "philosophy",
+                "--show-type", "morning",
+                "--required-domains", "tech,philosophy",
+                "--pkos-note", pkos_note_json,
+            ],
+            capture_output=True, text=True,
+            cwd=os.path.join(os.path.dirname(__file__)),
+        )
+        return result
+
+    def test_check_writes_offered_to_source_log(self):
+        result = self._run_check_cli()
+        self.assertEqual(result.returncode, 0, f"check CLI failed: {result.stderr}")
+        source_log_path = os.path.join(self.tmp_dir.name, "source_log.jsonl")
+        self.assertTrue(os.path.exists(source_log_path),
+                        "check CLI must create source_log.jsonl next to --topic-log")
+        # The file must contain at least one jsonl line with note_ids.
+        from source_log import recent_source_ids
+        ids = recent_source_ids(source_log_path, today="2026-06-07", window_days=14)
+        self.assertGreater(len(ids), 0,
+                           "source_log.jsonl must record the offered note paths")
+
+    def test_check_excludes_recent_offered_on_next_run(self):
+        # First run: writes offered paths to source_log.
+        first = self._run_check_cli(today="2026-06-06")
+        self.assertEqual(first.returncode, 0, f"first run failed: {first.stderr}")
+        from source_log import recent_source_ids
+        offered = recent_source_ids(
+            os.path.join(self.tmp_dir.name, "source_log.jsonl"),
+            today="2026-06-07", window_days=14,
+        )
+        self.assertGreater(len(offered), 0)
+        # Second run: those offered paths should be EXCLUDED from the brief.
+        second = self._run_check_cli(today="2026-06-07")
+        self.assertEqual(second.returncode, 0, f"second run failed: {second.stderr}")
+        brief = json.loads(second.stdout)
+        result_paths = {nt["path"] for nt in brief.get("cross_domain_candidates", [])}
+        for prev in offered:
+            self.assertNotIn(prev, result_paths,
+                             f"path {prev!r} offered yesterday must be excluded today")
+
+
 if __name__ == "__main__":
     unittest.main()

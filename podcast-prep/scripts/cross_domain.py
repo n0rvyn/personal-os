@@ -16,6 +16,8 @@ import re
 from datetime import date, timedelta
 from pathlib import Path
 
+from vault_contract import load_recall_dirs
+
 # Domain keyword maps. Order matters: classify_note_domain returns the FIRST matching domain.
 # Non-tech domains come first so a note with both philosophy + ai tags is bucketed as philosophy.
 DOMAIN_KEYWORDS = {
@@ -381,7 +383,11 @@ def cross_domain_candidates(today_tags, vault_root, n=5, notes=None,
     if notes is None:
         notes = load_pkos_notes(vault_root)
     # KL-4: cross_domain reads only the contract's cross-domain directories.
-    notes = [nt for nt in notes if nt["path"].startswith(CROSS_DOMAIN_DIRS)]
+    # Falls back to the hardcoded CROSS_DOMAIN_DIRS constant when the vault
+    # has no parseable contract (load_recall_dirs returns the same defaults
+    # byte-for-byte, so behavior is unchanged in the no-contract case).
+    cross_domain_dirs = load_recall_dirs(vault_root)["cross_domain"]
+    notes = [nt for nt in notes if nt["path"].startswith(cross_domain_dirs)]
     domains_priority = CROSS_DOMAIN_PRIORITY
     if force_domain is not None:
         if force_domain not in CROSS_DOMAIN_PRIORITY:
@@ -466,8 +472,10 @@ def same_topic_past_notes(today_tags, vault_root, days_min=7, days_max=90, n=5,
     if notes is None:
         notes = load_pkos_notes(vault_root)
     # KL-4: self_past reads only 20-Ideas/观点心得 (viewpoints) + 90-Productions/Podcasts (past
-    # on-record stances), per the vault directory contract.
-    notes = [nt for nt in notes if nt["path"].startswith(SELF_PAST_DIRS)]
+    # on-record stances), per the vault directory contract. Falls back to the
+    # hardcoded SELF_PAST_DIRS constant when the vault has no parseable contract.
+    self_past_dirs = load_recall_dirs(vault_root)["self_past"]
+    notes = [nt for nt in notes if nt["path"].startswith(self_past_dirs)]
     today_d = date.fromisoformat(today) if today else date.today()
     upper = today_d - timedelta(days=days_min)
     lower = today_d - timedelta(days=days_max)

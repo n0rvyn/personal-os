@@ -12,9 +12,8 @@ Format: one JSON object per line, append-only.
     {"date": "YYYY-MM-DD", "note_ids": ["a.md", "b.md"]}
 
 Mirrors the style of `topic_log.py` (stdlib only, no PyYAML/other deps).
-The corrupt-line tolerance mirrors `podcast_sources.py`'s jsonl handling:
-a malformed line is silently skipped so a stray truncated write never
-breaks the dedup read path.
+Tolerant jsonl handling: a malformed line is silently skipped so a stray
+truncated write never breaks the dedup read path.
 """
 import json
 import os

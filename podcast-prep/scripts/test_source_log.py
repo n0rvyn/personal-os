@@ -11,7 +11,7 @@ Tests cover:
 - recent_source_ids collects note_ids from lines in [today-window, today]
 - out-of-window dates are excluded; window_days=0 yields empty
 - missing file → empty set (no exception)
-- corrupt lines are skipped (mirrors podcast_sources.py's jsonl tolerance)
+- corrupt lines are skipped (tolerant jsonl: bad line never aborts the read)
 - idempotent: same path appended twice is harmless on read (set dedup)
 """
 import json
@@ -82,8 +82,8 @@ class RecentSourceIdsTests(unittest.TestCase):
             self.assertEqual(ids, set())
 
     def test_corrupt_line_skipped(self):
-        # Mirrors podcast_sources.py jsonl tolerance: skip lines that fail
-        # to parse. A bad line in the middle of the file must not abort the
+        # Tolerant jsonl: skip lines that fail to parse. A bad line in the
+        # middle of the file must not abort the
         # whole read.
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "source_log.jsonl")

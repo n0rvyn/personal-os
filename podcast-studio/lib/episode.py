@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -286,8 +287,51 @@ def check_min_chars(
     return {"ok": True, "reason": f"length ok: {n} ≥ {min_chars} 字 ({where})"}
 
 
+def load_finalize_body(path: str | os.PathLike) -> str:
+    """Read the `body` field from a finalize-result.json, returning clean
+    markdown ready to publish as the reader `.md` (steps 13 + 15).
+
+    finalize-result.json is authored by the kuaidao persona — an LLM
+    hand-writing JSON. A recurring failure is DOUBLE-escaped newlines: the
+    author types the two-char sequence ``\\n`` inside the JSON string, so the
+    file holds ``\\\\n`` and `json.load` yields a literal backslash-n instead of
+    a real newline. The published `.md` then shows ``\\n\\n`` between every
+    paragraph (one solid block in the reader / TTS). Normalize that HERE, in the
+    coded layer, so publishing never depends on the LLM escaping JSON correctly.
+
+    Only rewrites when the body has NO real newline but DOES carry a literal
+    ``\\n`` — the exact corruption signature. A correctly-authored body (real
+    newlines already) is returned untouched.
+
+    Fails closed (raises) on unparseable JSON, a non-dict document, or a
+    missing / non-string / blank `body` — the caller must not publish a silent
+    empty file.
+    """
+    raw = Path(path).read_text(encoding="utf-8", errors="replace")
+    obj = json.loads(raw)  # raises on malformed JSON — fail loud, do not publish
+    if not isinstance(obj, dict):
+        raise ValueError(f"finalize-result is not a JSON object: {Path(path)}")
+    body = obj.get("body")
+    if not isinstance(body, str) or not body.strip():
+        raise ValueError(
+            f"finalize-result 'body' missing or not a non-empty string: {Path(path)}"
+        )
+    if "\n" not in body and "\\n" in body:
+        body = body.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    return body
+
+
 def make_scratch(output_dir: str | os.PathLike, run_id: str) -> Path:
-    """Create a per-run scratch directory under output_dir.
+    """Create a per-INVOCATION scratch directory under output_dir.
+
+    Each call gets its OWN directory: the run_id (the logical `{date}-{show}`
+    slot) is suffixed with the invocation's wall-clock time, so re-running the
+    same slot on the same day (e.g. a redo after a fix) lands in a fresh, empty
+    dir and CANNOT inherit a prior run's drafts/polishes. This is the isolation
+    the old date+show-only key lacked: a second run used to reuse the first
+    run's artifacts through the presence-only gate and ship a near-duplicate
+    episode. Prior runs' dirs are left in place as history (cleanup runs only on
+    success); nothing here overwrites or deletes them.
 
     Returns the scratch path. Caller is responsible for cleanup.
     """
@@ -296,8 +340,18 @@ def make_scratch(output_dir: str | os.PathLike, run_id: str) -> Path:
     # Restrict run_id to a safe filename slug (re-use sanitize_title, which
     # also handles CJK + path-separators).
     safe_id = sanitize_title(run_id) or "run"
-    scratch = Path(str(output_dir)) / f".scratch-{safe_id}"
-    scratch.mkdir(parents=True, exist_ok=True)
+    base = Path(str(output_dir))
+    # Per-invocation suffix: HHMMSS is human-readable for debugging ("which run
+    # was this"); a counter disambiguates a same-second re-run so the dir is
+    # always unique and always freshly created (exist_ok=False — never adopt an
+    # existing dir's contents).
+    stamp = datetime.now().strftime("%H%M%S")
+    scratch = base / f".scratch-{safe_id}-{stamp}"
+    n = 2
+    while scratch.exists():
+        scratch = base / f".scratch-{safe_id}-{stamp}-{n}"
+        n += 1
+    scratch.mkdir(parents=True, exist_ok=False)
     return scratch
 
 

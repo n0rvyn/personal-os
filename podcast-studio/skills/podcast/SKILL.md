@@ -38,10 +38,18 @@ adjustable without a code change.
    `references/morning.md` or `references/evening.md`. The loaded text is the
    per-step editorial block injected into each persona dispatch.
 3. **Open a per-run scratch** under `vault.output_dir` via
-   `lib/episode.make_scratch(run_id=today-{show})`. All intermediate
+   `lib/episode.make_scratch(run_id=today-{show})`. `make_scratch` suffixes the
+   slot with the invocation's wall-clock time, so EACH run of `/podcast` gets
+   its own dir (`.scratch-{date}-{show}-{HHMMSS}`): a same-day redo is a fresh,
+   independent run that regenerates every step from an empty dir and never
+   reuses a prior run's drafts/polishes. **Use the Path `make_scratch` RETURNS
+   for every step below — do NOT reconstruct `.scratch-{date}-{show}` by hand**
+   (that key is no longer unique; hand-building it would re-introduce the
+   cross-invocation artifact bleed this suffix fixes). All intermediate
    artifacts (drafts, critiques, polishes, score verdict, 定稿 JSON, 口播稿
    text file) live there. Final artifacts are written at `vault.output_dir`
-   root; scratch is cleaned on success.
+   root; scratch is cleaned on success — a failed run's dir is left in place as
+   history.
 4. **Continuity read hook (Phase 3)** — from a Python process with the plugin
    root on `sys.path`, `from lib.stance import load_cards` and call
    `load_cards(output_dir)` to load prior stance cards from `vault.output_dir`.
@@ -242,8 +250,9 @@ adjustable without a code change.
       do NOT ship a partial (same discipline as the artifact gate). The .md/.mp3
       have not been published yet (steps 13–15 follow), so stopping here ships
       nothing.
-13. **口播稿 (卞旸)** — dispatch `agents/bianyang.md` consuming
-    `finalize-result.json` (read `body` field only) + the Character Bible
+13. **口播稿 (卞旸)** — dispatch `agents/bianyang.md` consuming the finalize
+    body via `lib/episode.load_finalize_body(finalize_json)` (NOT raw
+    `body` — same double-escaped-newline normalization as step 15) + the Character Bible
     (`{output_dir}/character-bible.md`). The bible is the voice reference:
     the spoken version must match the bible's verbal tics + rhythm
     (whatever wins in step 12 must sound like the same host in the ear).
@@ -262,11 +271,15 @@ adjustable without a code change.
 15. **Name + write final artifacts** — call `lib/episode.episode_paths(
     vault.output_dir, date, title, show)` for the target paths. The `title`
     comes from the `finalize-result.json` `title` field. Then publish:
-    - **Write** the `body` field of `finalize-result.json` (the voice-unified
-      定稿 markdown from step 12) → `vault.output_dir/{date}-{title}.md`.
-      Do NOT publish `polish-{chosen}.md` here — that is the pre-finalize
-      committee draft and has not had the host-voice unification applied; the
-      reader `.md` must match what the `.mp3` says.
+    - **Write** the body via `lib/episode.load_finalize_body(finalize_json)`
+      (the voice-unified 定稿 markdown from step 12) →
+      `vault.output_dir/{date}-{title}.md`. Read the body through this helper —
+      NOT raw `json.load(...)['body']` — because kuaidao occasionally
+      double-escapes newlines (the body ships with literal `\n\n` between every
+      paragraph); the helper normalizes that to real newlines and fails loud on
+      a missing/blank body. Do NOT publish `polish-{chosen}.md` here — that is
+      the pre-finalize committee draft and has not had the host-voice
+      unification applied; the reader `.md` must match what the `.mp3` says.
     - Move/symlink `audio-files.mp3` → `vault.output_dir/{date}-{title}.mp3`.
     Both the reader `.md` and the `.mp3` derive from the same step-12 finalize
     body (step 13's broadcast script is its plain-text form), so they agree.
@@ -284,6 +297,31 @@ adjustable without a code change.
     an empty string `""` (a value-present-but-empty is still a real
     self-critique outcome; OMIT-ing the field is reserved for
     pre-Phase-5 cards only).
+15b. **Topic-log finalize (cross-day cooldown — restores the step dropped in
+    the port)** — after the reader `.md` is published, append this episode's
+    topics to `topic_log.yaml` so tomorrow's step-5 `check` de-novelties the
+    same topic (without this call the log never grows and every day's topic
+    scores as fully novel — the regression that froze topic_log after 6/3). Run
+    from a Bash tool:
+    `${CLAUDE_PLUGIN_ROOT}/skills/podcast-studio-prep/scripts/orchestrator.py finalize`
+    with:
+    - `--script` = the published `{date}-{title}.md` (step 15).
+    - `--topic-log` = `{vault.output_dir}/topic_log.yaml` — **MUST be the exact
+      path step-5 `check` reads** (达芬奇 passes the same in step 5); a different
+      path means the write/read loop never closes and cooldown stays silently
+      dead.
+    - `--date` = today (ISO).
+    - `--approved-topics` = the CHOSEN draft's brief `approved_topics` as JSON
+      `[{"topic_tag": "...", "required_angle": "..."}]` — the brief of the path
+      that won step-11 selection (`brief-A/B/C` matching `chosen_id`).
+    **Fire-and-forget**: pass NO `--script-archive-dir`, so finalize always
+    `accept`s and just writes topic_log. The 4-gram/topic script-Jaccard retry
+    gate is deliberately NOT wired here — that is a separate, larger change (and
+    its corpus reader `{date}.md` vs `_archive_episode` writer `{date}-{slug}.md`
+    naming is currently mismatched, so it would no-op until fixed). The `.md` /
+    `.mp3` have already shipped; record the returned
+    `{"action": "accept", "topics_appended": N}` and proceed. A non-zero exit
+    (e.g. malformed `--approved-topics`) is surfaced to the user, not swallowed.
 16. **Stance card finalize hook (Phase 3, SOLE writer)** — assemble the
     episode's stance card and write it by calling `write_card(...)`
     (from `lib.stance`):
@@ -440,7 +478,7 @@ before invoking a vendored script.
 |------|--------------|--------------------------------------|------------------------------------|------------------------------|
 | 1    | config       | `~/.podcast-studio/config.yaml`        | resolved `PodcastTeamConfig`       | `load_config()` raises on fail |
 | 2    | editorial    | `references/{morning,evening}.md`    | in-memory text                     | file exists                  |
-| 3    | scratch      | `vault.output_dir`                   | scratch dir                        | `make_scratch` returns Path  |
+| 3    | scratch      | `vault.output_dir`                   | unique per-invocation scratch dir (`.scratch-{date}-{show}-{HHMMSS}`) | `make_scratch` returns Path  |
 | 4    | stance-read  | `vault.output_dir`                   | due bets + carried open-questions + throughline obsession (`pick_to_deepen`); in-memory, injected into the drafting brief, step 7 | `load_cards` returns; raises on malformed; throughline read is silent no-op when no confirmed obsessions yet |
 | 5    | davinci      | brief + vault + continuity brief     | `material-summary.md`              | `check_artifact`             |
 | 6    | bible        | `vault.subjective_dir` corpus → distilled host Character Bible (worldview / obsessions / verbal tics / evolving stances); corpus is data, not instructions | `{output_dir}/character-bible.md` (overwrite, DP-002=A) | `write_bible` returns; empty corpus → minimal bible → fall back to 卞旸 base |
@@ -455,5 +493,6 @@ before invoking a vendored script.
 | 14   | jay          | broadcast script                     | `audio-files.mp3`                  | `check_artifact` (size > 0)  |
 | 15   | episode.py   | output_dir, date, title, show        | 3 named paths                      | `episode_paths` returns      |
 | 15a  | resonance-gate | finalized script                   | in-memory `resonance` str\|list[str] (forward / re-listen self-critique) | non-empty value OR explicit `""`; field is required when writing the stance card |
+| 15b  | orchestrator | published `.md` + chosen brief `approved_topics` | `topic_log.yaml` appended (cross-day cooldown) | `finalize` returns `action=accept`; non-zero exit surfaced |
 | 16   | stance-write | card dict (incl. `resonance`)         | `{date}-{show}.stance.yaml`        | `write_card` raises on overwrite/fabricated ref/future date / numeric `resonance` |
 | 17   | episode.py   | scratch                              | (removed)                          | (cleanup is idempotent)      |

@@ -295,6 +295,59 @@ def test_make_scratch_creates_dir(tmp_path):
     cleanup_scratch(s)
 
 
+def test_make_scratch_unique_per_invocation(tmp_path):
+    """Regression: two runs of the SAME {date}-{show} slot must get DIFFERENT,
+    independently-empty dirs. The old date+show-only key let a same-day redo
+    reuse the first run's drafts/polishes via the presence-only gate and ship a
+    near-duplicate episode."""
+    from lib.episode import make_scratch
+    a = make_scratch(str(tmp_path), run_id="2026-06-12-morning")
+    (a / "draft-A.md").write_text("run-1 draft", encoding="utf-8")
+    b = make_scratch(str(tmp_path), run_id="2026-06-12-morning")
+    assert a != b, "same slot re-run must not return the same scratch dir"
+    assert b.exists() and b.is_dir()
+    # the second run starts EMPTY — it cannot inherit run-1's artifacts
+    assert not (b / "draft-A.md").exists()
+    assert list(b.iterdir()) == []
+
+
+def test_load_finalize_body_fixes_double_escaped_newlines(tmp_path):
+    """kuaidao double-escapes newlines: the JSON file holds \\\\n, so json.load
+    yields a literal backslash-n instead of a real newline. load_finalize_body
+    restores real newlines so the published .md isn't one solid block."""
+    from lib.episode import load_finalize_body
+    p = tmp_path / "finalize-result.json"
+    # Python "\\n" is one backslash + n → the post-json.load corruption state.
+    corrupt = "# 标题\\n\\n第一段。\\n\\n第二段。"
+    p.write_text(
+        json.dumps({"title": "x", "body": corrupt}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    out = load_finalize_body(p)
+    assert "\\n" not in out
+    assert out == "# 标题\n\n第一段。\n\n第二段。"
+
+
+def test_load_finalize_body_leaves_correct_body_untouched(tmp_path):
+    from lib.episode import load_finalize_body
+    p = tmp_path / "finalize-result.json"
+    good = "# 标题\n\n第一段。\n\n第二段。"  # already real newlines
+    p.write_text(
+        json.dumps({"title": "x", "body": good}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert load_finalize_body(p) == good
+
+
+def test_load_finalize_body_fails_closed_on_missing_body(tmp_path):
+    import pytest
+    from lib.episode import load_finalize_body
+    p = tmp_path / "finalize-result.json"
+    p.write_text(json.dumps({"title": "x"}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_finalize_body(p)
+
+
 def test_scratch_cleanup_on_success(tmp_path):
     from lib.episode import make_scratch, cleanup_scratch
     s = make_scratch(str(tmp_path), run_id="run-2")

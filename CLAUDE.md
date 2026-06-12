@@ -18,10 +18,10 @@ Personal-OS plugins produce and consume IEF (Insight Exchange Format) files. See
 2. **Add to `marketplace.json`**: add entry with `name`, `source`, `description`, `version`, `category`, `tags`
 3. **Add to `.github/workflows/auto-version.yml`**:
    - Add plugin directory path to the `on.push.paths` list
-   - Add plugin name to `ALL_PLUGINS` array
+   - Add plugin name to the `plugins:` input string (space-separated) passed to the reusable workflow
 4. **Add to `.github/workflows/release-plugin.yml`**:
-   - Add plugin name to the `target.options` list
-   - Add plugin name to `PLUGINS` array if `TARGET == "all"`
+   - Add plugin name to the `target` choice `options:` list (the plugin list, before `- all` — NOT the `bump` options)
+   - Add plugin name to the `PLUGINS=(...)` bash array (the `TARGET == "all"` branch)
 5. **Create plugin README** at `plugins/*/README.md`
 6. **Update root `README.md`**: add plugin to the plugins table
 

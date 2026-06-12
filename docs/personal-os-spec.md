@@ -59,6 +59,38 @@ exchange_dir: /path/to/your/exchange
 scratch_dir:  /path/to/your/scratch
 ```
 
+## Project-root config (Cowork)
+
+A project-root anchored config (`personal-os.yaml`) is the preferred layout for Cowork (multi-plugin workspace) users. Single superset file, namespace-divided.
+
+**File**: `{project-root}/personal-os.yaml`
+
+```yaml
+exchange_dir: ./.exchange          # shared across the plugin fleet (project-relative OK)
+scratch_dir:  ./.scratch           # shared across the plugin fleet (project-relative OK)
+vault:                              # podcast plugin namespace
+  subjective_dir: ./vault/subjective
+  news_dir:       ./vault/news
+  output_dir:     ./vault/output
+  root:           ./vault
+tts:                                # podcast plugin namespace
+  provider:    minimax
+  host_voice:  female-shaonv
+```
+
+**Keys:**
+- **Flat (fleet-shared, top-level):** `exchange_dir`, `scratch_dir`. Both are expanded to absolute paths at load time.
+- **Namespace blocks (plugin-specific):** `vault:`, `tts:` (and any other plugin-owned namespace). Returned as-is, not expanded.
+
+**Resolution order (DP-003=C):**
+1. `PERSONAL_OS_ROOT` env var → load `{env}/personal-os.yaml`. Trusted; no sentinel check.
+2. Bounded cwd-walk: starting at `Path.cwd()`, walk up `Path.cwd().parents` looking for `personal-os.yaml`. Each candidate must parse as a YAML dict and contain at least one of `exchange_dir` / `scratch_dir` / `vault` / `tts` (sentinel check — prevents unrelated `personal-os.yaml` files on the cwd chain from hijacking resolution). Skip on parse failure or missing sentinel keys.
+3. Home fallback: `~/.claude/personal-os.yaml` (the legacy single-user layout, still supported).
+
+**Backwards compatibility:** home single-user mode is still supported. When no env is set and no project-root marker is found, the resolver falls back to `~/.claude/personal-os.yaml` and `load_config()` output is byte-identical to the pre-Phase-2 implementation. Consumers see zero behavioral change.
+
+**Credentials:** TTS / API credentials remain in shell env only (e.g. `MINIMAX_API_KEY`, `VOLC_TTS_*`). They are never written to the YAML.
+
 ## Triggerable Tasks
 
 Each plugin README must include a "Triggerable Tasks" section documenting how to wire the plugin to Adam Templates (cron or event) or host-level cron.

@@ -1,5 +1,14 @@
 """Shared Personal-OS config loader. Duplicated across plugins — no cross-plugin import.
 
+This copy (pkos/scripts/personal_os_config.py) is the Phase 2 canonical source.
+Phase 4 must propagate _resolve_config_path() to the 5 sibling copies:
+  domain-intel/scripts/personal_os_config.py
+  youtube-scout/scripts/personal_os_config.py
+  health-insights/scripts/personal_os_config.py
+  portfolio-lens/scripts/personal_os_config.py
+  session-reflect/scripts/personal_os_config.py
+and reconcile the 2 currently-drifted copies (md5 mismatch) to match this one.
+
 Returned paths are always expanded (~ resolved, absolute). Callers may use
 Path() directly on returned values without extra expanduser().
 
@@ -16,6 +25,43 @@ DEFAULTS = {
     "exchange_dir": "~/Obsidian/PKOS/.exchange",
     "scratch_dir":  "~/.personal-os/scratch",
 }
+
+# Sentinel keys — a cwd-walk candidate `personal-os.yaml` must parse to a dict
+# containing at least one of these to be accepted. Prevents an unrelated
+# same-named file on the cwd chain from hijacking resolution.
+_SENTINEL_KEYS = ("exchange_dir", "scratch_dir", "vault", "tts")
+
+
+def _resolve_config_path() -> Path:
+    """Resolve which personal-os.yaml to load.
+
+    Order (DP-003=C):
+      1. PERSONAL_OS_ROOT env (trusted — no sentinel check)
+      2. bounded cwd-walk for `personal-os.yaml` with sentinel check
+      3. home fallback: ~/.claude/personal-os.yaml
+
+    Sentinel parse failure (read error, YAML error, non-dict root, missing
+    all sentinel keys) is fail-soft: skip that candidate, continue walking.
+    Env-specified path is never sentinel-checked (explicit override = trust).
+    """
+    env_root = os.environ.get("PERSONAL_OS_ROOT")
+    if env_root:
+        return Path(env_root).expanduser() / "personal-os.yaml"
+    for d in [Path.cwd(), *Path.cwd().parents]:
+        candidate = d / "personal-os.yaml"
+        if not candidate.is_file():
+            continue
+        try:
+            data = yaml.safe_load(candidate.read_text())
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if not any(k in data for k in _SENTINEL_KEYS):
+            continue
+        return candidate
+    return Path.home() / ".claude" / "personal-os.yaml"
+
 
 def _expand(cfg: dict) -> dict:
     return {k: str(Path(os.path.expanduser(v)).resolve()) if isinstance(v, str) else v
@@ -40,8 +86,9 @@ def load_config() -> dict:
     Returns a dict with expanded absolute paths for flat keys; namespace sub-dicts
     are returned as-is (not expanded) to preserve their structure.
     """
-    if CONFIG_PATH.exists():
-        data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+    config_path = _resolve_config_path()
+    if config_path.exists():
+        data = yaml.safe_load(config_path.read_text()) or {}
         # Merge defaults at the top level only; namespace keys come from the file
         merged = {**DEFAULTS, **data}
         # Expand only flat (non-namespaced) top-level keys
@@ -60,8 +107,8 @@ def load_config() -> dict:
         cfg = {"exchange_dir": ex, "scratch_dir": sc}
     else:
         cfg = dict(DEFAULTS)
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     resolved = {k: str(Path(os.path.expanduser(v)).resolve()) for k, v in cfg.items()}
     for d in resolved.values():
         Path(d).mkdir(parents=True, exist_ok=True)

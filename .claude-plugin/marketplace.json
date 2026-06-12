@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.21.1"
+    "version": "0.22.0"
   },
   "plugins": [
     {
       "name": "health-insights",
       "source": "./health-insights",
       "description": "Personal health intelligence: ingest Apple Health data, establish baselines, generate AI-driven insights",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "category": "health",
       "tags": [
         "health",
@@ -29,7 +29,7 @@
       "name": "session-reflect",
       "source": "./session-reflect",
       "description": "AI collaboration coach: analyzes Claude Code and Codex sessions to help you improve prompting, workflow, and AI collaboration skills",
-      "version": "2.3.0",
+      "version": "2.4.0",
       "category": "reflection",
       "tags": [
         "session-analysis",
@@ -44,7 +44,7 @@
       "name": "domain-intel",
       "source": "./domain-intel",
       "description": "Domain intelligence engine: automated collection, AI analysis, and trend synthesis from GitHub, Product Hunt, RSS, and more",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "category": "intelligence",
       "tags": [
         "domain-intel",
@@ -61,7 +61,7 @@
       "deprecated": true,
       "replacedBy": "domain-intel/youtube-scan",
       "description": "YouTube video intelligence: scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, exports IEF-compliant insights",
-      "version": "1.0.2",
+      "version": "1.1.0",
       "category": "intelligence",
       "tags": [
         "youtube",
@@ -76,7 +76,7 @@
       "name": "pkos",
       "source": "./pkos",
       "description": "Personal Knowledge Operating System: automated knowledge compilation for Obsidian vaults, IEF ingestion, digest generation, and cross-source signal aggregation",
-      "version": "0.13.2",
+      "version": "0.14.0",
       "category": "knowledge",
       "tags": [
         "knowledge-management",
@@ -91,7 +91,7 @@
       "name": "portfolio-lens",
       "source": "./portfolio-lens",
       "description": "Indie project portfolio management: scan, progress pulse, verdict refresh, reprioritize",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "portfolio",
       "tags": [
         "portfolio",
@@ -121,7 +121,7 @@
       "name": "podcast-prep",
       "source": "./podcast-prep",
       "description": "Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker",
-      "version": "0.9.1",
+      "version": "0.10.0",
       "category": "intelligence",
       "tags": [
         "podcast",
@@ -152,7 +152,7 @@
       "name": "podcast-studio",
       "source": "./podcast-studio",
       "description": "personal-os fleet-member podcast production: a Claude-driven 6-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, vendored prep orchestrator, and TTS synthesis via the personal-os fleet's tts skill. Reads paths and credentials from ~/.podcast-studio/config.yaml.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "audio",
       "tags": [
         "podcast",

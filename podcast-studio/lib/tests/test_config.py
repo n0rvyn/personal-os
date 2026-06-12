@@ -22,6 +22,7 @@ if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
 from lib.config import load_config  # noqa: E402  (test-FAIL-first expects this to fail pre-impl)
+from lib.config import _default_config_path, _resolve_personal_os_yaml  # noqa: E402
 
 
 # ---------- helpers ----------
@@ -267,3 +268,188 @@ def test_no_args_still_prints_resolved_config(tmp_path, monkeypatch):
     )
     assert proc.returncode == 0, proc.stderr
     assert "tts.provider" in proc.stdout
+
+
+# ---------- Phase 3: project-anchor + exchange_dir ----------
+
+def test_env_anchor_resolves_personal_os_yaml(tmp_path, monkeypatch):
+    """PERSONAL_OS_ROOT env var points at a project-root file; load_config()
+    reads vault/tts/exchange_dir from it (no PODCAST_STUDIO_CONFIG, no
+    home fallback consulted)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PODCAST_STUDIO_CONFIG", raising=False)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    dirs = _make_vault_dirs(tmp_path)
+    exchange = tmp_path / "exchange"
+    exchange.mkdir()
+    (tmp_path / "personal-os.yaml").write_text(textwrap.dedent(f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        exchange_dir: {exchange}
+    """))
+    monkeypatch.setenv("PERSONAL_OS_ROOT", str(tmp_path))
+
+    cfg = load_config()
+    assert cfg.vault.subjective_dir.endswith("subjective")
+    assert cfg.tts.provider == "volc"
+    assert cfg.exchange_dir is not None
+    assert cfg.exchange_dir.endswith("exchange")
+
+
+def test_cwd_walk_anchor_finds_marker_in_ancestor(tmp_path, monkeypatch):
+    """No env, chdir into a deep subdir; marker `personal-os.yaml` lives
+    in an ancestor; cwd-walk must find it."""
+    monkeypatch.delenv("PODCAST_STUDIO_CONFIG", raising=False)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    deep = tmp_path / "sub" / "deep"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+
+    dirs = _make_vault_dirs(tmp_path)
+    (tmp_path / "personal-os.yaml").write_text(textwrap.dedent(f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """))
+
+    cfg = load_config()
+    assert cfg.vault.subjective_dir.endswith("subjective")
+    assert cfg.tts.provider == "volc"
+
+
+def test_sentinel_rejects_fleet_only_marker(tmp_path, monkeypatch):
+    """A `personal-os.yaml` with only `exchange_dir`/`scratch_dir` (no
+    vault/tts) must NOT be adopted — sentinel fails the candidate and
+    the function returns None (no podcast-private home fallback here)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    (tmp_path / "personal-os.yaml").write_text(textwrap.dedent("""
+        exchange_dir: /tmp/somewhere
+        scratch_dir: /tmp/scratch
+    """))
+
+    assert _resolve_personal_os_yaml() is None
+
+
+def test_sentinel_fail_soft_on_bad_yaml(tmp_path, monkeypatch):
+    """A broken `personal-os.yaml` at cwd must not raise; sentinel
+    fail-soft skips the candidate, walk continues, returns None."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    (tmp_path / "personal-os.yaml").write_text("this: : is: not [valid yaml :::\n  - oops")
+
+    assert _resolve_personal_os_yaml() is None
+
+
+def test_home_fallback_unchanged(tmp_path, monkeypatch):
+    """命门: 没有 env, cwd 链上无 sentinel-valid marker 时,
+    `_resolve_config_path(None)` 必须仍返回 podcast 私有 home
+    (`~/.podcast-studio/config.yaml`),不是 `~/.claude/personal-os.yaml`。
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PODCAST_STUDIO_CONFIG", raising=False)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    from lib.config import _resolve_config_path
+
+    resolved = _resolve_config_path(None)
+    assert resolved == _default_config_path()
+    # The default path is the podcast-private home, NOT ~/.claude/personal-os.yaml.
+    assert ".podcast-studio/config.yaml" in str(resolved)
+    assert ".claude/personal-os.yaml" not in str(resolved)
+
+
+def test_podcast_studio_config_wins_over_anchor(tmp_path, monkeypatch):
+    """PODCAST_STUDIO_CONFIG 仍居项目锚点之上(既有解析优先级保持)。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    dirs = _make_vault_dirs(tmp_path)
+    # Legacy config (no exchange_dir).
+    legacy_cfg = tmp_path / "legacy.yaml"
+    _write_config(legacy_cfg, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    # An anchor with exchange_dir that must NOT win.
+    (tmp_path / "personal-os.yaml").write_text(textwrap.dedent(f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        exchange_dir: /tmp/anchor_exchange
+    """))
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(legacy_cfg))
+
+    cfg = load_config()
+    assert cfg.exchange_dir is None  # legacy path read, not the anchor.
+
+
+def test_exchange_dir_default_none_for_legacy(tmp_path, monkeypatch):
+    """Legacy `~/.podcast-studio/config.yaml` (no exchange_dir) → cfg.exchange_dir
+    is None (向后兼容,不报错)。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    dirs = _make_vault_dirs(tmp_path)
+    legacy_cfg = tmp_path / "legacy.yaml"
+    _write_config(legacy_cfg, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(legacy_cfg))
+
+    cfg = load_config()
+    assert cfg.exchange_dir is None
+
+
+def test_exchange_dir_non_str_fails_soft(tmp_path, monkeypatch):
+    """exchange_dir 写成 list(或 dict)→ 不抛 TypeError,cfg.exchange_dir is None
+    (类型守卫生效)。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PERSONAL_OS_ROOT", raising=False)
+
+    dirs = _make_vault_dirs(tmp_path)
+    cfg_path = tmp_path / "bad_exchange.yaml"
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        exchange_dir:
+          - /some/path
+          - /another/path
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+    assert cfg.exchange_dir is None

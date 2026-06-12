@@ -24,6 +24,12 @@ class ConfigError(Exception):
 REQUIRED_VAULT_KEYS = ("subjective_dir", "news_dir", "output_dir")
 REQUIRED_TTS_KEYS = ("provider", "host_voice")
 
+# Sentinel keys for project-anchor (`personal-os.yaml`) candidate adoption.
+# A candidate must contain `vault` or `tts` (podcast's data slice) to be
+# accepted — a fleet-only file with just `exchange_dir`/`scratch_dir` does
+# not hijack a standalone podcast user's resolve.
+_SENTINEL_KEYS = ("vault", "tts")
+
 
 @dataclass(frozen=True)
 class VaultConfig:
@@ -46,10 +52,55 @@ class TtsConfig:
 class PodcastTeamConfig:
     vault: VaultConfig
     tts: TtsConfig
+    # Phase 3: project-anchor `personal-os.yaml` top-level `exchange_dir`,
+    # exposed for the IEF producer/consumer path (DP-002=A). Fail-soft
+    # when absent: legacy `~/.podcast-studio/config.yaml` has no key →
+    # `None`. Existence/read of this directory is Phase 5's concern.
+    exchange_dir: str | None = None
 
 
 def _default_config_path() -> Path:
     return Path(os.path.expanduser("~/.podcast-studio/config.yaml"))
+
+
+def _resolve_personal_os_yaml() -> Path | None:
+    """Locate a project-root `personal-os.yaml` for the podcast config.
+
+    Resolution order:
+    1. `PERSONAL_OS_ROOT` env var — if set, trust it and return
+       `<env>/personal-os.yaml` without sentinel validation.
+    2. cwd-walk: starting at `Path.cwd()`, climb `Path.cwd().parents` and
+       return the first `personal-os.yaml` that is a file, parses as a
+       mapping, and contains `vault` or `tts` (podcast's data slice).
+
+    All candidate-parse failures (missing file, unimportable yaml, bad
+    YAML, non-dict, missing sentinel) are fail-soft — the candidate is
+    skipped and the walk continues. If nothing matches, return `None`
+    and let the caller fall back to the podcast-private home default.
+    """
+    env = os.environ.get("PERSONAL_OS_ROOT")
+    if env:
+        return Path(env).expanduser() / "personal-os.yaml"
+
+    for d in [Path.cwd(), *Path.cwd().parents]:
+        candidate = d / "personal-os.yaml"
+        try:
+            if not candidate.is_file():
+                continue
+            import yaml  # type: ignore[import-untyped]
+
+            loaded = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                continue
+            if not any(k in loaded for k in _SENTINEL_KEYS):
+                continue
+            return candidate
+        except Exception:
+            # Any failure (ImportError, YAMLError, OSError, type/key
+            # mismatches) → fail-soft, keep walking up.
+            continue
+
+    return None
 
 
 def _resolve_config_path(path: str | os.PathLike | None) -> Path:
@@ -58,6 +109,9 @@ def _resolve_config_path(path: str | os.PathLike | None) -> Path:
     env = os.environ.get("PODCAST_STUDIO_CONFIG")
     if env:
         return Path(env).expanduser()
+    anchored = _resolve_personal_os_yaml()
+    if anchored is not None:
+        return anchored
     return _default_config_path()
 
 
@@ -187,7 +241,8 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     Lookup order for the config path:
     1. explicit `path` arg
     2. PODCAST_STUDIO_CONFIG env var
-    3. ~/.podcast-studio/config.yaml
+    3. PERSONAL_OS_ROOT/personal-os.yaml or cwd-walk personal-os.yaml (sentinel: vault|tts)
+    4. ~/.podcast-studio/config.yaml (standalone fallback)
     """
     cfg_path = _resolve_config_path(path)
 
@@ -204,7 +259,15 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     vault = _validate_vault_paths(raw["vault"])
     tts = _validate_tts(raw["tts"])
 
-    return PodcastTeamConfig(vault=vault, tts=tts)
+    # exchange_dir: fail-soft. A non-empty str is expanded + resolved to
+    # an absolute path; anything else (missing, non-str, empty, blank)
+    # becomes `None`. No existence check — Phase 5 owns that.
+    exchange_raw = raw.get("exchange_dir")
+    exchange_dir: str | None = None
+    if isinstance(exchange_raw, str) and exchange_raw.strip():
+        exchange_dir = str(Path(os.path.expanduser(exchange_raw)).resolve())
+
+    return PodcastTeamConfig(vault=vault, tts=tts, exchange_dir=exchange_dir)
 
 
 if __name__ == "__main__":
@@ -240,3 +303,5 @@ if __name__ == "__main__":
     print(f"vault.output_dir     = {c.vault.output_dir}")
     print(f"tts.provider         = {c.tts.provider}")
     print(f"tts.host_voice       = {c.tts.host_voice}")
+    if c.exchange_dir is not None:
+        print(f"exchange_dir         = {c.exchange_dir}")

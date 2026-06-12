@@ -1,3 +1,4 @@
+<!-- snapshot from tts-toolkit/skills/tts/references/voice-catalog.md — re-sync when upstream voices change -->
 # Voice catalog
 
 Verified voice IDs grouped by vendor, with scene tags and cross-vendor equivalents. LLMs picking a voice for a Role should consult this file first — inventing IDs returns 3001/1004 from the vendor.

@@ -254,11 +254,11 @@ adjustable without a code change.
     from the .md; the .md is the reader-facing script, the
     broadcast-script is the TTS input.)
 14. **TTS (周杰伦)** — dispatch `agents/jay.md` consuming the broadcast
-    script. Use the `${CLAUDE_PLUGIN_ROOT}/skills/podcast-studio-tts` skill's `synth-auto`
-    (NOT direct vendor curl): it does quota-aware vendor selection,
-    rate-limit handling, and cross-vendor fallback. Publish audio as
-    `audio-files.mp3` (and write the final audio path back to scratch for the
-    naming step). Gate on presence of a non-empty mp3.
+    script. Use the `tts` skill's `synth-auto` (the personal-os fleet's
+    `tts-toolkit`; NOT direct vendor curl): it does quota-aware vendor
+    selection, rate-limit handling, and cross-vendor fallback. Publish
+    audio as `audio-files.mp3` (and write the final audio path back to
+    scratch for the naming step). Gate on presence of a non-empty mp3.
 15. **Name + write final artifacts** — call `lib/episode.episode_paths(
     vault.output_dir, date, title, show)` for the target paths. The `title`
     comes from the `finalize-result.json` `title` field. Then publish:
@@ -403,8 +403,8 @@ so the vendored tts scripts read credentials from the same place.
 
 - `${CLAUDE_PLUGIN_ROOT}/skills/podcast-studio-prep/scripts/orchestrator.py` — `check`
   subcommand for the brief.
-- `${CLAUDE_PLUGIN_ROOT}/skills/podcast-studio-tts/scripts/synth-auto` (via the `tts` skill)
-  — quota-aware long-form TTS.
+- The `tts` skill (personal-os fleet member `tts-toolkit`) — quota-aware
+  long-form TTS via its `synth-auto` entry point.
 - `${CLAUDE_PLUGIN_ROOT}/lib/episode.py` — naming, gate, draft selection,
   scratch lifecycle.
 - `${CLAUDE_PLUGIN_ROOT}/lib/config.py` — config resolver (fails-closed).

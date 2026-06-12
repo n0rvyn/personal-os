@@ -262,7 +262,7 @@ candidates 数组里，`selected` 恰好一个为 true。
 
 ### TTS (周杰伦)
 
-把口播稿文本路径交给 `${CLAUDE_PLUGIN_ROOT}/skills/podcast-studio-tts` 技能的
+把口播稿文本路径交给 `tts` 技能（personal-os 舰队成员 `tts-toolkit`）的
 `synth-auto` 入口（不要自己写 vendor curl；不要硬编码任何脚本绝对路
 径）。脚本会做额度预检、vendor 自动选、限流、跨厂商 fallback。输出
 纯人声 mp3，发布为最终音频 artifact。

@@ -21,7 +21,7 @@ from pathlib import Path
 
 CATALOG = (
     Path(__file__).resolve().parent.parent
-    / "skills" / "podcast-studio-tts" / "references" / "voice-catalog.md"
+    / "references" / "voice-catalog.md"
 )
 
 # Match the MAIN provider section (not the "How to add/verify ..." how-to sections).

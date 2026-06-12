@@ -1,17 +1,18 @@
 # podcast-studio
 
-Self-contained podcast production plugin. The headline is a Claude-driven
-6-persona pipeline (`/podcast morning` / `/podcast evening`) that reads your
-Vault, runs prep, dispatches six persona subagents in sequence, and produces a
-reader-facing script + mp3 with stance-card continuity across episodes. It is
-backed by a vendored `prep` skill (topic dedup, angle rotation, MinHash,
-cross-domain / self-past vault pulls) and a vendored `tts` skill (Volcengine +
-MiniMax unified, with chunk/merge scripts), wired together by a single Python
-config module and a thin bash env shim.
+personal-os fleet-member podcast production plugin. The headline is a
+Claude-driven 6-persona pipeline (`/podcast morning` / `/podcast evening`) that
+reads your Vault, runs prep, dispatches six persona subagents in sequence, and
+produces a reader-facing script + mp3 with stance-card continuity across
+episodes. It is backed by a vendored `prep` skill (topic dedup, angle rotation,
+MinHash, cross-domain / self-past vault pulls); TTS is dispatched to the
+personal-os fleet's `tts` skill (Volcengine + MiniMax unified, with
+chunk/merge). Inputs arrive via the personal-os IEF exchange. Wired together
+by a single Python config module and a thin bash env shim.
 
-**Self-contained** — no Adam, no personal-os dependency. Install the marketplace,
-install the Python dependency, drop a `~/.podcast-studio/config.yaml`, and run the
-vendored scripts.
+**Fleet member** — podcast-studio participates in the personal-os marketplace
+(prep remains vendored in-tree for a config patch + upstream drift; TTS is
+consumed as a fleet skill). Drop a `~/.podcast-studio/config.yaml` and run.
 
 ## Install
 
@@ -96,15 +97,19 @@ carries the morning's open questions forward):
   check_factcheck). Python modules — imported, not run as CLIs.
 - `lib/config.py` — single source of truth for `~/.podcast-studio/config.yaml`.
 - `lib/podcast-env.sh` — exports `tts.*` from config into the env vars the
-  vendored tts scripts expect.
+  fleet `tts` skill's scripts expect (incl. `TTS_LEDGER_DIR`).
 - `skills/podcast-studio-prep/` — vendored from personal-os `podcast-prep` @ 0.8.0
-  (see `skills/podcast-studio-prep/VENDORED.md`).
-- `skills/podcast-studio-tts/` — vendored from personal-os `tts-toolkit` @ 0.4.0
-  (see `skills/podcast-studio-tts/VENDORED.md`).
+  (see `skills/podcast-studio-prep/VENDORED.md`; remains vendored for the
+  `_resolve_vault_root` config patch + upstream drift to 0.10.0).
+- TTS is not vendored — the pipeline dispatches to the personal-os fleet's
+  `tts` skill (from `tts-toolkit`). `references/voice-catalog.md` is a
+  snapshot of the upstream voice-catalog, re-synced when upstream voices
+  change.
 
-## Self-containment
+## Fleet membership
 
-This plugin does not depend on Adam or the personal-os marketplace. It can be
-installed, configured, and used in a clean environment as long as the Python
-dependencies (PyYAML — `pip install -r requirements.txt`),
-`~/.podcast-studio/config.yaml`, and the TTS credential env are set up.
+podcast-studio is a personal-os fleet member (sibling plugin of `podcast-prep`
+and `tts-toolkit` in the same marketplace). Inputs arrive via the personal-os
+IEF exchange; TTS synthesis is consumed as the fleet `tts` skill. Prep remains
+vendored in-tree for its config patch and upstream drift. Configure
+`~/.podcast-studio/config.yaml` and the TTS credential env, and run.

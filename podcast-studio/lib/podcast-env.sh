@@ -18,7 +18,13 @@
 #
 # Resolution order for the config path (handled by lib/config.py):
 #   1. PODCAST_STUDIO_CONFIG env var
-#   2. ~/.podcast-studio/config.yaml
+#   2. PERSONAL_OS_ROOT/personal-os.yaml or cwd-walk personal-os.yaml (sentinel: vault|tts)
+#   3. ~/.podcast-studio/config.yaml (standalone fallback)
+#
+# TTS_LEDGER_DIR is exported by this shim so the (de-vendored) upstream `tts`
+# skill scripts write their quota ledger to the podcast-studio scope
+# (~/.podcast-studio/tts-ledger) instead of the default tts-toolkit path. The
+# user's pre-existing TTS_LEDGER_DIR is honored when set.
 set -euo pipefail
 
 # Resolve the plugin's lib/ dir relative to this script (no matter where
@@ -67,6 +73,10 @@ set -a
 # shellcheck disable=SC1090
 . "$_ENVFILE"
 set +a
+
+# Export TTS_LEDGER_DIR so the upstream `tts` skill writes its quota ledger
+# to the podcast-studio scope. Honor the caller's existing override.
+export TTS_LEDGER_DIR="${TTS_LEDGER_DIR:-$HOME/.podcast-studio/tts-ledger}"
 
 # The trap (set up above) removes $_ENVDIR on EXIT. Internal vars are
 # left in scope but prefixed with `_` to avoid colliding with the

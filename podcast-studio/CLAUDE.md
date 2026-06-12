@@ -7,15 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A **Claude Code marketplace** containing one plugin, `podcast-studio`. The repo
 root holds `.claude-plugin/marketplace.json`; the actual plugin lives in the
 `podcast-studio/` subdirectory (note the nested same-name path:
-`podcast-studio/podcast-studio/`). The plugin is a self-contained podcast
+`podcast-studio/podcast-studio/`). The plugin is a fleet-member podcast
 production team — a Claude-driven 6-persona pipeline that reads an Obsidian
 Vault and produces a script + mp3 + a continuity "stance card" per episode.
 
-**Self-containment is a red line.** The plugin must not depend on or call Adam
-or personal-os code at runtime. Everything it needs ships in-tree (vendored
-prep + tts skills) and is resolved from `~/.podcast-studio/config.yaml`. Do not
-introduce a runtime dependency on those external repos. They are reference /
-re-vendor sources only.
+**podcast-studio is a personal-os fleet member.** Inputs arrive via the
+personal-os IEF exchange (Phase 5); TTS synthesis dispatches to the
+personal-os fleet's `tts` skill (Phase 6, tts-toolkit). The `prep` skill
+remains vendored in-tree (config patch + upstream drift to 0.10.0, see
+`skills/podcast-studio-prep/VENDORED.md`). TTS credentials and config live in
+`~/.podcast-studio/config.yaml` + shell env.
 
 Not a git repository (no `.git`).
 
@@ -34,10 +35,8 @@ python3 -m pytest skills/podcast-studio-prep/scripts/ -q
 python3 -m pytest lib/tests/test_stance.py -q
 python3 -m pytest lib/tests/test_stance.py::test_name -q
 
-# Bash tests — vendored tts skill + env shim (bats)
-bats skills/podcast-studio-tts/tests/         # all .bats
+# Bash tests — env shim
 bats lib/tests/test_podcast_env.bats          # env shim
-bats skills/podcast-studio-tts/tests/test_synth_auto.bats   # one file
 
 # Validate a config file (exit 0 ok, 1 + offending key on stderr)
 python3 -m lib.config --validate ~/.podcast-studio/config.yaml
@@ -74,10 +73,13 @@ self-discipline:
    (`stance.py`); Character Bible distillation (`bible.py`); throughline
    obsession tracking (`throughline.py`); the config resolver (`config.py`).
 
-4. **Vendored skills** — `skills/podcast-studio-prep/` (from personal-os
-   `podcast-prep` @ 0.8.0) and `skills/podcast-studio-tts/` (from `tts-toolkit`
-   @ 0.4.0). Each has a `VENDORED.md` recording its source-of-truth, upstream
-   version, and re-vendor procedure. **When re-vendoring, follow VENDORED.md
+4. **Vendored skill: `skills/podcast-studio-prep/`** — vendored from personal-os
+   `podcast-prep` @ 0.8.0. Has a `VENDORED.md` recording its source-of-truth,
+   upstream version, and re-vendor procedure. **TTS is not vendored** — the
+   pipeline calls the personal-os fleet's `tts` skill (from `tts-toolkit`) by
+   name. `references/voice-catalog.md` is a snapshot of the upstream
+   `tts-toolkit/skills/tts/references/voice-catalog.md` re-synced when
+   upstream voices change. **When re-vendoring prep, follow VENDORED.md
    and re-apply the documented local patches** (e.g. prep's `_resolve_vault_root`
    rewire) — do not hand-edit vendored code without updating VENDORED.md.
 

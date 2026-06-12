@@ -14,7 +14,7 @@ vault:
 
 # tts: which TTS provider + voice to use.
 # Provider is "volc" (Volcengine / Doubao) or "minimax" (MiniMax).
-# Voice must match the provider's voice catalog (see skills/podcast-studio-tts/references/).
+# Voice must match the provider's voice catalog (see references/voice-catalog.md).
 tts:
   provider: volc
   host_voice: BV001_streaming

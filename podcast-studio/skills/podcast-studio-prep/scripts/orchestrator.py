@@ -191,7 +191,8 @@ def run_check(candidates: list, topic_log_path: str, today: str,
               force_contrarian: str = None,
               show_type: str = None,
               required_domains: list = None,
-              exclude_source_ids: "set | list | None" = None) -> dict:
+              exclude_source_ids: "set | list | None" = None,
+              ief_candidates: "list | None" = None) -> dict:
     """Build the structured brief consumed by the writer agent.
 
     DP-001 A: pkos_note is supplied by the caller (达芬奇 selects a subjective note from
@@ -230,6 +231,14 @@ def run_check(candidates: list, topic_log_path: str, today: str,
     caller that touches IO. The 3rd test in SourceLogWiringTests locks this
     contract: run_check(...) called directly must not produce a source_log
     side-effect.
+
+    `ief_candidates` (Phase 5 Task 4): list of IEF candidate dicts read by
+    the CLI handler from {exchange_dir}/**/*.md and de-duped against
+    ief_source_log.jsonl. The function ONLY carries them through into the
+    brief as `brief["ief_candidates"]` (parallel to `cross_domain_candidates`)
+    — it does NOT read exchange files or write ief_source_log. The CLI
+    handler is the only place filesystem IO happens (mirrors the source_log
+    contract above). None → empty list in the brief, fail-soft.
     """
     if not pkos_note or not isinstance(pkos_note, dict) or not pkos_note.get("id"):
         return {
@@ -297,6 +306,11 @@ def run_check(candidates: list, topic_log_path: str, today: str,
             exclude_ids=exclude_source_ids),
         "self_past_candidates": same_topic_past_notes(
             today_tags, resolved_root, today=today, n=5, notes=notes),
+        # Phase 5 Task 4 (B2 brief field): IEF news from upstream plugins
+        # (domain-intel, youtube-scout). Carried through verbatim from the
+        # CLI handler — run_check is pure. Parallel to cross_domain_candidates
+        # (deterministic, not ad-hoc LLM collection).
+        "ief_candidates": list(ief_candidates) if ief_candidates else [],
         "named_concept_prompt": NAMED_CONCEPT_PROMPT,
         # parallel-N perturbation record — copied into editor_scores.brief_diff.
         # cross_domain_bucket is None on unperturbed (normal daily) runs.
@@ -353,6 +367,10 @@ def run_check(candidates: list, topic_log_path: str, today: str,
             "fresh_today": fresh_today,
             "pkos_note": pkos_note,
             "contrarian_source": contrarian,
+            # Phase 5 Task 4: IEF news carried into evening brief too (B2
+            # field, parallel to morning's ief_candidates slot). D-2 keeps
+            # this distinct from the LLM-shaped `evidence` stream.
+            "ief_candidates": list(ief_candidates) if ief_candidates else [],
             "named_concept_prompt": NAMED_CONCEPT_PROMPT,
             "brief_perturbation": brief["brief_perturbation"],
             "generated_at": f"{today}T00:00:00Z",
@@ -503,6 +521,39 @@ def main():
             os.path.dirname(args.topic_log), "source_log.jsonl")
         exclude = source_log.recent_source_ids(
             source_log_path, args.date, window_days=14)
+        # Phase 5 Task 4: IEF roundtrip — read upstream IEF (domain-intel,
+        # youtube-scout, etc.) from {exchange_dir}/**/*.md, dedup against
+        # ief_source_log.jsonl using `include_today=False` (D-3: same-day
+        # check-A/B/C must see the same candidate pool). All filesystem IO
+        # lives here in the CLI handler; run_check stays pure. Mirrors the
+        # source_log roundtrip above.
+        #
+        # exchange_dir is OPTIONAL: when the config is missing or has no
+        # exchange_dir key, the IEF roundtrip is a no-op ([], []) — the
+        # brief still has `ief_candidates: []` and the pipeline produces
+        # a normal episode. This is the same fail-soft contract as
+        # load_config (Phase 3). CLI smoke tests that pass --topic-log +
+        # --vault-root explicitly (without a real ~/.podcast-studio/config.yaml)
+        # must keep working, so we DO NOT raise on config error here.
+        ief_cands: list = []
+        try:
+            import exchange_ief  # local import — keep top-level clean for unit tests
+            cfg = load_config()  # second call is cheap (re-resolves same path)
+            ief_log_path = os.path.join(
+                os.path.dirname(args.topic_log), "ief_source_log.jsonl")
+            recent_ief = source_log.recent_source_ids(
+                ief_log_path, args.date, window_days=14, include_today=False)
+            ief_cands, _ief_diag = exchange_ief.load_ief_candidates(
+                cfg.exchange_dir, args.date, window_days=14,
+                exclude_ids=recent_ief)
+        except ConfigError:
+            # No config / no exchange_dir key → no IEF today, same as
+            # exchange_dir=None in load_ief_candidates. Carry on.
+            pass
+        except ImportError:
+            # exchange_ief module not on path (shouldn't happen in normal
+            # installs but is fail-safe for any test/CI weirdness).
+            pass
         brief = run_check(candidates, args.topic_log, args.date,
                           pkos_note=pkos_note, seed=args.seed,
                           vault_root=args.vault_root,
@@ -510,7 +561,8 @@ def main():
                           force_contrarian=args.force_contrarian,
                           show_type=args.show_type,
                           required_domains=required_domains,
-                          exclude_source_ids=exclude)
+                          exclude_source_ids=exclude,
+                          ief_candidates=ief_cands)
         # Write this episode's offered note paths back to source_log.
         # Morning/legacy brief carries `cross_domain_candidates`; the evening
         # brief shape (Task 7) does NOT — it uses `open_questions` / `evidence` /
@@ -524,6 +576,18 @@ def main():
         if offered_paths:
             source_log.append_offered(
                 source_log_path, args.date, offered_paths)
+        # Phase 5 Task 4: append offered IEF ids to ief_source_log.jsonl.
+        # Dedup is by `id` (D-4), not by path — id is the stable cross-archive
+        # key. exchange_dir None or empty candidate set → no-op, no file
+        # written, no error. First run with no prior log is also no-op on
+        # the read side (recent_source_ids returns empty).
+        offered_ief_ids = [
+            c.get("id", "")
+            for c in brief.get("ief_candidates", [])
+            if isinstance(c, dict) and c.get("id")
+        ]
+        if offered_ief_ids:
+            source_log.append_offered(ief_log_path, args.date, offered_ief_ids)
         print(json.dumps(brief, ensure_ascii=False, indent=2))
     elif args.cmd == "finalize":
         approved = json.loads(args.approved_topics)

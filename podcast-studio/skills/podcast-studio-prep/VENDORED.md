@@ -8,15 +8,25 @@ personal-os marketplace to be installed.
 
 - **Origin repo:** `personal-os` (SAME repo since 2026-06-12 migration; marketplace at `~/Code/Skills/personal-os`)
 - **Source path:** `~/Code/Skills/personal-os/podcast-prep` (upstream skill dir is `skills/prep/`)
-- **Upstream version:** 0.8.0 (upstream now at 0.9.0 — re-vendor pending, see migration dev-guide Phase 6)
+- **Upstream version:** 0.8.0 (upstream now at 0.10.0 — re-vendor pending, see migration dev-guide Phase 6)
 - **Vendored at:** 2026-06-08; relocated into personal-os 2026-06-12
-- **Still vendored after co-location** — do NOT replace with a direct dependency on `../../podcast-prep`. Rationale (migration dev-guide): cross-plugin script invocation isn't clean + this copy carries the `_resolve_vault_root` patch + upstream has drifted to 0.9.0.
+- **Still vendored after co-location** — do NOT replace with a direct dependency on `../../podcast-prep`. Rationale:
+  1. **Config patch** — this copy carries the `_resolve_vault_root` rewire (Task 4-impl of the Phase 1 plan) that the upstream `podcast-prep` does not have. A direct dependency would not apply this patch and would re-introduce the broken vault-root resolution.
+  2. **Upstream drift to 0.10.0** — the upstream `podcast-prep` is now at 0.10.0 (Phase 6 port-back brought `vault_contract.py` to upstream). A direct dependency would skip the documented re-vendor + patch cycle and could silently pull in 0.10.0 semantics before the vendored copy is updated.
+  3. **Same-repo co-location doesn't change the calculus** — `podcast-prep` and `podcast-studio` are sibling plugins in the personal-os marketplace; vendoring prep into podcast-studio keeps the latter's runtime self-contained for the prep stage, matching how the personal-os fleet is intended to compose.
 
 ## Re-vendor procedure
 
-1. From the personal-os repo, copy the source tree (byte-faithful):
+The re-vendor flow is: pull byte-faithful from upstream `podcast-prep` (in
+this same personal-os repo), then re-apply the local patches documented
+below. Do NOT hand-edit vendored scripts in place — fix upstream and
+re-vendor, except for the documented patches that only this copy carries.
+
+1. From the personal-os repo, copy the source tree (byte-faithful) from the
+   upstream `podcast-prep` plugin (in this same repo, since the 2026-06-12
+   migration):
    ```
-   # NOTE: same-repo since migration. Upstream skill dir is `prep`; the vendored copy is renamed `podcast-studio-prep`.
+   # Upstream skill dir is `prep`; the vendored copy is renamed `podcast-studio-prep`.
    cp -R ~/Code/Skills/personal-os/podcast-prep/scripts \
          ~/Code/Skills/personal-os/podcast-studio/skills/podcast-studio-prep/scripts
    cp ~/Code/Skills/personal-os/podcast-prep/skills/prep/SKILL.md \
@@ -24,12 +34,12 @@ personal-os marketplace to be installed.
    cp ~/Code/Skills/personal-os/podcast-prep/references/quality-rubric.md \
       ~/Code/Skills/personal-os/podcast-studio/skills/podcast-studio-prep/references/quality-rubric.md
    ```
-2. Bump the upstream version in this file if the personal-os plugin version
-   in `.claude-plugin/plugin.json` (podcast-prep entry) has changed.
-3. Re-apply Task 4-impl rewire (vault-root resolution) — the only logic
-   change between upstream and this vendored copy. See the
-   `_resolve_vault_root` function in `scripts/orchestrator.py` and the
-   `--topic-log` argparse default in the same file.
+2. Bump the upstream version in this file to match the new
+   `podcast-prep` version in `podcast-prep/.claude-plugin/plugin.json`.
+3. Re-apply the documented local patch — the vault-root resolution rewire
+   (Task 4-impl of the Phase 1 plan). See the `_resolve_vault_root` function
+   in `scripts/orchestrator.py` and the `--topic-log` argparse default in
+   the same file.
 4. Run the vendored tests to confirm parity:
    ```
    cd podcast-studio/skills/podcast-studio-prep && python3 -m pytest scripts/ -q

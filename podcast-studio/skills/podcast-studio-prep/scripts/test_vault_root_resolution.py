@@ -168,3 +168,51 @@ def test_topic_log_defaults_from_config(tmp_path, monkeypatch):
         )
         # Otherwise: it may have completed (code 0) or failed for a
         # business reason (e.g. no candidate) — both acceptable here.
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: project-anchor (`personal-os.yaml`) regression — orchestrator
+# must converge to the unified file via `load_config()` → `vault.root`
+# resolution with zero changes to orchestrator.py.
+# ---------------------------------------------------------------------------
+
+def test_unified_personal_os_yaml_anchor_resolves_vault_root(tmp_path, monkeypatch):
+    """With `PERSONAL_OS_ROOT=tmp_path` and a unified `personal-os.yaml`
+    carrying `vault.root`, `_resolve_vault_root()` returns the root
+    from the anchor — proving orchestrator.py's `load_config()` call
+    transparently picks up the unified source."""
+    from scripts.orchestrator import _resolve_vault_root  # type: ignore[import-not-found]
+
+    # Vault root the test asserts on.
+    vaultroot = tmp_path / "vaultroot"
+    vaultroot.mkdir()
+
+    # Required vault dirs for `load_config()` fails-closed validation.
+    subjective = vaultroot / "subjective"
+    news = vaultroot / "news"
+    output = vaultroot / "output"
+    for d in (subjective, news, output):
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Unified `personal-os.yaml` (Phase 2 schema: vault: with root + 3 dirs
+    # + tts:). This is what Cowork installs at the project root.
+    (tmp_path / "personal-os.yaml").write_text(textwrap.dedent(f"""
+        vault:
+          root: {vaultroot}
+          subjective_dir: {subjective}
+          news_dir: {news}
+          output_dir: {output}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """))
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PKOS_VAULT_ROOT", raising=False)
+    monkeypatch.delenv("PODCAST_STUDIO_CONFIG", raising=False)
+    monkeypatch.setenv("PERSONAL_OS_ROOT", str(tmp_path))
+
+    result = _resolve_vault_root(None)
+    assert result == str(vaultroot), (
+        f"expected vault.root from unified personal-os.yaml anchor; got {result!r}"
+    )

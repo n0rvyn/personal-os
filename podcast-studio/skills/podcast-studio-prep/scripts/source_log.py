@@ -12,9 +12,8 @@ Format: one JSON object per line, append-only.
     {"date": "YYYY-MM-DD", "note_ids": ["a.md", "b.md"]}
 
 Mirrors the style of `topic_log.py` (stdlib only, no PyYAML/other deps).
-The corrupt-line tolerance mirrors `podcast_sources.py`'s jsonl handling:
-a malformed line is silently skipped so a stray truncated write never
-breaks the dedup read path.
+Tolerant jsonl handling: a malformed line is silently skipped so a stray
+truncated write never breaks the dedup read path.
 """
 import json
 import os
@@ -43,14 +42,23 @@ def append_offered(path, ep_date: str, note_ids) -> None:
         f.write(line + "\n")
 
 
-def recent_source_ids(path, today: str, window_days: int = 14) -> set:
+def recent_source_ids(path, today: str, window_days: int = 14,
+                     include_today: bool = True) -> set:
     """Return the set of note paths offered in the last `window_days` days.
 
-    Window is [today - window_days, today], inclusive of both ends. Days
-    outside the window are ignored. Out-of-window lines are simply not
-    included in the returned set; we do NOT prune the file (TODO: optional
-    in-append prune to keep file size bounded — defer; growth is slow and
-    prune is not on the critical path).
+    Window semantics depend on `include_today`:
+    - `include_today=True` (default, back-compat): window is
+      `[today - window_days, today]` — both ends inclusive. The pre-Phase-5
+      contract used by `cross_domain` callers.
+    - `include_today=False` (Phase 5 IEF consumer): window is
+      `[today - window_days, today - 1]` — excludes today. Required by the
+      IEF dedup read so that check-A / B / C within the same `/podcast`
+      invocation see the same candidate pool (path-invariant across the 3
+      parallel-N runs).
+
+    Out-of-window lines are simply not included in the returned set; we do
+    NOT prune the file (TODO: optional in-append prune to keep file size
+    bounded — defer; growth is slow and prune is not on the critical path).
 
     Edge cases:
     - File missing → empty set (no exception)
@@ -68,6 +76,8 @@ def recent_source_ids(path, today: str, window_days: int = 14) -> set:
     except ValueError:
         return set()
     cutoff = today_d - timedelta(days=window_days)
+    # Upper bound: today (inclusive) OR today-1 (exclude-today).
+    upper = today_d if include_today else today_d - timedelta(days=1)
     ids: set = set()
     for raw in p.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -84,7 +94,7 @@ def recent_source_ids(path, today: str, window_days: int = 14) -> set:
             d = date.fromisoformat(d_str)
         except (TypeError, ValueError):
             continue
-        if not (cutoff <= d <= today_d):
+        if not (cutoff <= d <= upper):
             continue
         note_ids = rec.get("note_ids", [])
         if not isinstance(note_ids, list):

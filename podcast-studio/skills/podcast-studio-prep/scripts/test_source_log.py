@@ -11,7 +11,7 @@ Tests cover:
 - recent_source_ids collects note_ids from lines in [today-window, today]
 - out-of-window dates are excluded; window_days=0 yields empty
 - missing file → empty set (no exception)
-- corrupt lines are skipped (mirrors podcast_sources.py's jsonl tolerance)
+- corrupt lines are skipped
 - idempotent: same path appended twice is harmless on read (set dedup)
 """
 import json
@@ -82,9 +82,8 @@ class RecentSourceIdsTests(unittest.TestCase):
             self.assertEqual(ids, set())
 
     def test_corrupt_line_skipped(self):
-        # Mirrors podcast_sources.py jsonl tolerance: skip lines that fail
-        # to parse. A bad line in the middle of the file must not abort the
-        # whole read.
+        # Tolerant jsonl: skip lines that fail to parse. A bad line in the
+        # middle of the file must not abort the whole read.
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "source_log.jsonl")
             Path(path).write_text(
@@ -113,6 +112,32 @@ class RecentSourceIdsTests(unittest.TestCase):
             # today == line date → included
             ids = recent_source_ids(path, today="2026-06-07", window_days=14)
             self.assertIn("a.md", ids)
+
+    # Phase 5 Task 3: `include_today` parameter — defaults to True (back-compat
+    # for the 2 existing source_log callers in orchestrator.py); False is the
+    # IEF consumer's window so check-A / B / C see the same pool.
+    def test_include_today_true_includes_today(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "source_log.jsonl")
+            append_offered(path, "2026-06-07", ["a.md"])
+            ids = recent_source_ids(
+                path, today="2026-06-07", window_days=14, include_today=True)
+            self.assertIn("a.md", ids)
+
+    def test_include_today_false_excludes_today(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "source_log.jsonl")
+            append_offered(path, "2026-06-07", ["a.md"])
+            ids = recent_source_ids(
+                path, today="2026-06-07", window_days=14, include_today=False)
+            # today == line date → excluded under include_today=False
+            self.assertNotIn("a.md", ids)
+            # Sanity: yesterday's entry still in the window.
+            append_offered(path, "2026-06-06", ["b.md"])
+            ids = recent_source_ids(
+                path, today="2026-06-07", window_days=14, include_today=False)
+            self.assertIn("b.md", ids)
+            self.assertNotIn("a.md", ids)
 
 
 if __name__ == "__main__":

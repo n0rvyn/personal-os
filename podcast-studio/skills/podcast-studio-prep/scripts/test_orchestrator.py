@@ -719,19 +719,6 @@ class EarnedNamingAndAngleTests(unittest.TestCase):
         self.assertIn("省略", NAMED_CONCEPT_PROMPT)
 
 
-# ---------------------------------------------------------------------------
-# Task 3-tests (2026-06-07 source-recurrence fix — 治本 b IO 侧): the CLI
-# `check` handler must:
-#   1) read source_log.jsonl (co-located with --topic-log) for the last
-#      14 days of offered note paths, pass them to run_check as
-#      `exclude_source_ids`,
-#   2) write the brief's cross_domain_candidates paths back to
-#      source_log.jsonl after the brief is generated,
-#   3) NOT do any IO when called via run_check directly (pure-function
-#      contract — preserves the existing 102 tests).
-# ---------------------------------------------------------------------------
-
-
 class SourceLogWiringTests(unittest.TestCase):
     """Task 3: CLI `check` wires source_log read+write around run_check."""
 
@@ -811,6 +798,153 @@ class SourceLogWiringTests(unittest.TestCase):
         d1 = sorted(nt["path"] for nt in brief_default["cross_domain_candidates"])
         d2 = sorted(nt["path"] for nt in brief_explicit_none["cross_domain_candidates"])
         self.assertEqual(d1, d2)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 4 tests: run_check gains an `ief_candidates` param that
+# surfaces in BOTH the morning and evening brief shapes as
+# `brief["ief_candidates"]`. run_check stays PURE — the CLI handler does
+# the file IO, run_check just carries the list through. The contract
+# matches the existing source_log wiring (pure function, IO only in CLI).
+# ---------------------------------------------------------------------------
+
+
+class IefCandidatesBriefFieldTests(unittest.TestCase):
+    """Phase 5 Task 4: run_check must surface IEF news as a brief field
+    on BOTH morning and evening brief shapes, parallel to
+    `cross_domain_candidates`. Default (None) → empty list. The function
+    itself is pure: no file IO."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.topic_log_path = os.path.join(self.tmp_dir.name, "topic_log.yaml")
+        from topic_log import save_topic_log
+        save_topic_log(self.topic_log_path, {"episodes": []})
+        self.vault_root = os.path.join(self.tmp_dir.name, "vault")
+        os.makedirs(self.vault_root)
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_morning_brief_carries_ief_candidates(self):
+        candidates = [
+            {"id": "n1", "domain": "tech", "topic_tag": "ai-x"},
+        ]
+        ief = [
+            {"id": "2026-06-11-youtube-001", "title": "Fact 1",
+             "tags": ["ai"], "created": "2026-06-11", "domain": "ai-ml",
+             "excerpt": "x", "source": "youtube", "significance": 4,
+             "category": "framework", "url": "https://example.com/1",
+             "read": False, "path": "domain-intel/2026-06/ief1.md"},
+            {"id": "2026-06-10-youtube-002", "title": "Fact 2",
+             "tags": ["ml"], "created": "2026-06-10", "domain": "ai-ml",
+             "excerpt": "y", "source": "youtube", "significance": 3,
+             "category": "framework", "url": "https://example.com/2",
+             "read": False, "path": "domain-intel/2026-06/ief2.md"},
+        ]
+        with patch("orchestrator._contrarian_pull") as mc:
+            mc.return_value = {"source": "x", "category": "y", "url": "z"}
+            brief = run_check(
+                candidates=candidates,
+                topic_log_path=self.topic_log_path,
+                today="2026-06-12",
+                pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+                vault_root=self.vault_root,
+                show_type="morning",
+                required_domains=["tech"],
+                ief_candidates=ief,
+            )
+        # B2 field present, equal to the input list (run_check carries it
+        # through verbatim — it is the CLI handler's job to compute).
+        self.assertIn("ief_candidates", brief)
+        self.assertEqual(len(brief["ief_candidates"]), 2)
+        self.assertEqual(brief["ief_candidates"][0]["id"],
+                         "2026-06-11-youtube-001")
+
+    def test_evening_brief_carries_ief_candidates(self):
+        candidates = [
+            {"id": "n1", "domain": "tech", "topic_tag": "ai-x"},
+        ]
+        ief = [
+            {"id": "2026-06-11-youtube-001", "title": "Fact 1",
+             "tags": ["ai"], "created": "2026-06-11", "domain": "ai-ml",
+             "excerpt": "x", "source": "youtube", "significance": 4,
+             "category": "framework", "url": "https://example.com/1",
+             "read": False, "path": "domain-intel/2026-06/ief1.md"},
+        ]
+        with patch("orchestrator._contrarian_pull") as mc:
+            mc.return_value = {"source": "x", "category": "y", "url": "z"}
+            brief = run_check(
+                candidates=candidates,
+                topic_log_path=self.topic_log_path,
+                today="2026-06-12",
+                pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+                vault_root=self.vault_root,
+                show_type="evening",
+                required_domains=["tech"],
+                ief_candidates=ief,
+            )
+        # Evening brief shape — must carry ief_candidates parallel to
+        # morning (D-2: B2 dedicated field on both shapes).
+        self.assertIn("ief_candidates", brief)
+        self.assertEqual(len(brief["ief_candidates"]), 1)
+        self.assertEqual(brief["ief_candidates"][0]["id"],
+                         "2026-06-11-youtube-001")
+        # Sanity: the existing evening spine is intact.
+        self.assertIn("open_questions", brief)
+        self.assertIn("evidence", brief)
+
+    def test_default_ief_candidates_is_empty_list(self):
+        # None / omitted → empty list, not a KeyError or None. This is
+        # the B2 field's "no IEF today" representation; the writer step
+        # iterates over it and sees an empty list.
+        candidates = [
+            {"id": "n1", "domain": "tech", "topic_tag": "ai-x"},
+        ]
+        with patch("orchestrator._contrarian_pull") as mc:
+            mc.return_value = {"source": "x", "category": "y", "url": "z"}
+            brief = run_check(
+                candidates=candidates,
+                topic_log_path=self.topic_log_path,
+                today="2026-06-12",
+                pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+                vault_root=self.vault_root,
+                show_type="morning",
+                required_domains=["tech"],
+            )
+        self.assertIn("ief_candidates", brief)
+        self.assertEqual(brief["ief_candidates"], [])
+
+    def test_run_check_does_not_write_ief_source_log(self):
+        # Purity: run_check direct call must NOT create ief_source_log.jsonl.
+        # The CLI handler is the only place that writes it.
+        candidates = [
+            {"id": "n1", "domain": "tech", "topic_tag": "ai-x"},
+        ]
+        ief = [
+            {"id": "2026-06-11-youtube-001", "title": "F", "tags": ["ai"],
+             "created": "2026-06-11", "domain": "ai-ml", "excerpt": "x",
+             "source": "youtube", "significance": 4, "category": "framework",
+             "url": "https://example.com/1", "read": False,
+             "path": "domain-intel/2026-06/ief1.md"},
+        ]
+        with patch("orchestrator._contrarian_pull") as mc:
+            mc.return_value = {"source": "x", "category": "y", "url": "z"}
+            run_check(
+                candidates=candidates,
+                topic_log_path=self.topic_log_path,
+                today="2026-06-12",
+                pkos_note={"id": "PKOS/x", "title": "y", "excerpt": "z"},
+                vault_root=self.vault_root,
+                show_type="morning",
+                required_domains=["tech"],
+                ief_candidates=ief,
+            )
+        ief_log_path = os.path.join(self.tmp_dir.name, "ief_source_log.jsonl")
+        self.assertFalse(
+            os.path.exists(ief_log_path),
+            "run_check direct call must not create ief_source_log.jsonl",
+        )
 
 
 class SourceLogCLIRoundtripTests(unittest.TestCase):

@@ -147,6 +147,21 @@
         "serialized"
       ],
       "strict": true
+    },
+    {
+      "name": "podcast-studio",
+      "source": "./podcast-studio",
+      "description": "Self-contained podcast production: a Claude-driven 6-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, vendored prep orchestrator + unified TTS. Reads paths and credentials from ~/.podcast-studio/config.yaml.",
+      "version": "0.1.0",
+      "category": "audio",
+      "tags": [
+        "podcast",
+        "tts",
+        "audio",
+        "prep",
+        "dedup"
+      ],
+      "strict": true
     }
   ]
 }

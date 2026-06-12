@@ -1,0 +1,10 @@
+{
+  "Result": {
+    "UsageMonitoring": [
+      {
+        "UsageType": "text_words",
+        "Value": 3000
+      }
+    ]
+  }
+}

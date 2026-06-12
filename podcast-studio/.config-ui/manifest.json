@@ -1,0 +1,15 @@
+{
+  "id": "podcast-studio",
+  "title": "Podcast Studio",
+  "configPath": "~/.podcast-studio/config.yaml",
+  "schema": "config.schema.json",
+  "validate": "python3 -m lib.config --validate {file}",
+  "secrets": [
+    { "env": "VOLC_TTS_APPID", "label": "Volcengine TTS App ID" },
+    { "env": "VOLC_TTS_TOKEN", "label": "Volcengine TTS Token" },
+    { "env": "MINIMAX_API_KEY", "label": "MiniMax API Key" }
+  ],
+  "dynamicOptions": {
+    "tts.host_voice": "python3 tools/list_voices.py --provider {tts.provider}"
+  }
+}

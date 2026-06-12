@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "vault": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "format": "directory",
+          "description": "Obsidian/PKOS vault root — base for recall and the directory contract (<root>/99-System/10-Directory-Contract.md). Optional: when unset, recall falls back to subjective_dir."
+        },
+        "subjective_dir": {
+          "type": "string",
+          "format": "directory",
+          "description": "Your subjective notes / journal directory"
+        },
+        "news_dir": {
+          "type": "string",
+          "format": "directory",
+          "description": "News / domain feed inputs directory"
+        },
+        "output_dir": {
+          "type": "string",
+          "format": "directory",
+          "description": "Generated briefs and topic log live here"
+        }
+      },
+      "required": ["subjective_dir", "news_dir", "output_dir"]
+    },
+    "tts": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["volc", "minimax"],
+          "description": "TTS provider: volc (Volcengine / Doubao) or minimax (MiniMax)"
+        },
+        "host_voice": {
+          "type": "string",
+          "x-dynamic-from": "tts.provider",
+          "description": "Host voice id — must match the selected provider's voice catalog"
+        }
+      },
+      "required": ["provider", "host_voice"]
+    }
+  }
+}

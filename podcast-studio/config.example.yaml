@@ -1,0 +1,25 @@
+# podcast-studio config schema
+# Copy to ~/.podcast-studio/config.yaml and edit the paths below.
+
+# vault: where your podcast source notes and outputs live.
+# `root` is the Obsidian/PKOS vault root — the base for recall and the directory
+# contract (`<root>/99-System/10-Directory-Contract.md`). Optional: when unset, recall
+# falls back to subjective_dir. The three *_dir keys are required and must exist on
+# disk; the plugin fails-closed otherwise.
+vault:
+  root: ~/Obsidian/PKOS                                # Obsidian/PKOS vault root (recall + directory contract)
+  subjective_dir: ~/Obsidian/PKOS/30-Logs/30-Journal   # your subjective notes / journal
+  news_dir: ~/Obsidian/PKOS/40-Inputs/News             # news / domain feed inputs
+  output_dir: ~/Obsidian/PKOS/50-Outputs/podcast      # generated briefs and topic log live here
+
+# tts: which TTS provider + voice to use.
+# Provider is "volc" (Volcengine / Doubao) or "minimax" (MiniMax).
+# Voice must match the provider's voice catalog (see skills/podcast-studio-tts/references/).
+tts:
+  provider: volc
+  host_voice: BV001_streaming
+
+# TTS credentials are NOT stored in this file.
+# Set VOLC_TTS_APPID + VOLC_TTS_TOKEN (Volcengine) or MINIMAX_API_KEY (MiniMax) in
+# your shell env before running the tts scripts. The shim (lib/podcast-env.sh)
+# re-exports provider/voice; your existing credential env is passed through unchanged.

@@ -1,0 +1,8 @@
+{
+  "name": "podcast-studio",
+  "version": "0.1.0",
+  "description": "Self-contained podcast production. A Claude-driven 6-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, backed by a vendored prep orchestrator (topic dedup, angle rotation, MinHash) and unified TTS (Volcengine/MiniMax). Reads all paths and credentials from ~/.podcast-studio/config.yaml.",
+  "author": {
+    "name": "Norvyn"
+  }
+}

@@ -12,7 +12,6 @@ Automated knowledge compilation system for Obsidian vaults. Ingests, links, evol
 /pkos review           # Today's wiki changes
 /pkos lint             # Latest health report
 /pkos notion-links     # Audit Notion links back to Obsidian notes
-/podcast-transcript --type daily  # Create a deduped TTS-ready podcast transcript
 ```
 
 ## Required Configuration
@@ -44,7 +43,6 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/personal_os_config.py --get pkos.notion_da
 | `/harvest` | "harvest", "scan projects", "收割" | Import knowledge from ~/Code/Projects/\*/docs/ |
 | `/intel-sync` | Internal | Import insights from domain-intel IEF exports |
 | `/digest` | Internal (cron) | Generate daily/weekly digest reports |
-| `/podcast-transcript` | Manual or scheduled | Produces a TTS-ready transcript and owns its dedup state |
 | `/signal` | Internal (cron) | Cross-source signal aggregation for weekly review |
 | `/inbox` | Internal | Process captured items: classify, route, ripple |
 | `/ingest-exchange` | Internal | Convert `.exchange/` artifacts from producer plugins into canonical PKOS notes |
@@ -181,7 +179,6 @@ Note: Cron jobs auto-expire after 7 days. Recreate in new sessions.
 | Exchange ingest | `/pkos ingest-exchange` | Daily 08:30 | `{exchange_dir}/*/` | `~/Obsidian/PKOS/` canonical notes, `.state/exchange-ingest.yaml` |
 | Intel sync | `/intel-sync` | Daily 09:00 (after domain-intel/session-reflect export) | domain-intel + session-reflect IEF under `{exchange_dir}/` | `~/Obsidian/PKOS/.state/imported-insights.yaml`, vault notes |
 | Daily digest | `/digest [cron]` | Daily 09:00 | `~/Obsidian/PKOS/` recent notes | `~/Obsidian/PKOS/10-Knowledge/digests/` |
-| Podcast transcript | `/podcast-transcript --type daily` | Daily after exchange producers finish | `{exchange_dir}/domain-intel/`, `{exchange_dir}/session-reflect/`, `{exchange_dir}/product-lens/`, PKOS vault notes | `~/Obsidian/PKOS/60-Digests/Podcast/`, `~/Obsidian/PKOS/.state/podcast-transcript/` |
 | Weekly signals | `/signal [cron]` | Sundays 10:00 | `~/Obsidian/PKOS/` cross-source signals | `~/Obsidian/PKOS/10-Knowledge/signals/` |
 | Wiki lint | `/lint [cron]` | Sundays 11:00 | `~/Obsidian/PKOS/` wikilinks + frontmatter | `~/Obsidian/PKOS/` lint report |
 | Notion link audit | `/pkos notion-links` | Daily 23:00 | Notion PKOS Hub DBs, `~/Obsidian/PKOS/` | report only by default; `--apply` updates repairable Notion fields |

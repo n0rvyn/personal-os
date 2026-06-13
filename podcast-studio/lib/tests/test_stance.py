@@ -413,3 +413,19 @@ def test_resonance_rejects_number(tmp_path):
 
     # No card was written
     assert load_cards(str(tmp_path)) == []
+
+
+def test_stance_card_exists_preflight(tmp_path):
+    """stance_card_exists is the same-day re-run tripwire: False before the
+    slot is written, True after — lets the pipeline fail fast pre-publish."""
+    from lib.stance import stance_card_exists, write_card
+    assert stance_card_exists(tmp_path, "2026-06-13", "morning") is False
+    card = {
+        "episode": {"date": "2026-06-13", "show": "morning"},
+        "bets": [], "open_questions": [], "settles": [],
+        "named_concept": [], "topics": [],
+    }
+    write_card(tmp_path, "2026-06-13", "morning", card)
+    assert stance_card_exists(tmp_path, "2026-06-13", "morning") is True
+    # a different show in the same day is a different slot
+    assert stance_card_exists(tmp_path, "2026-06-13", "evening") is False

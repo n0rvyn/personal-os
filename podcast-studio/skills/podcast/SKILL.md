@@ -50,6 +50,22 @@ adjustable without a code change.
    text file) live there. Final artifacts are written at `vault.output_dir`
    root; scratch is cleaned on success — a failed run's dir is left in place as
    history.
+3a. **Same-day re-run guard (fail-fast, BEFORE any expensive work).** Call
+   `from lib.stance import stance_card_exists; stance_card_exists(output_dir,
+   date, show)`. If it returns True, the `{date}-{show}` stance slot already has
+   a published card — i.e. today already produced a canonical {show} episode.
+   The `.md` is title-named (so a re-run would NOT collide there and a SECOND
+   episode would publish), but the stance card slot is `{date}-{show}` and
+   append-only `write_card` will REFUSE it at step 16 — by then `.md` + `.mp3`
+   have already shipped, leaving an orphaned card-less episode invisible to the
+   next run's magnitude judge. So **STOP HERE** and tell the user verbatim-ish:
+   "{date} {show} 已有台账卡——今天已产出一期 canonical {show} 节目。这是重跑。
+   要重做（替换），先移除前一期的 `{date}-*.md` / `{date}-*.mp3` /
+   `{date}-{show}.stance.yaml`，再重跑；否则会出现两期争抢同一天的 {show} +
+   一张孤儿卡。已在发布前停止，未产出任何东西。" Do NOT proceed past this point.
+   (Scratch isolation from step 3 still holds — this guard is about the PUBLISHED
+   slot, not the working dir. It converts the old ship-then-orphan crash into an
+   early clean stop.)
 4. **Continuity read hook (Phase 3)** — from a Python process with the plugin
    root on `sys.path`, `from lib.stance import load_cards` and call
    `load_cards(output_dir)` to load prior stance cards from `vault.output_dir`.

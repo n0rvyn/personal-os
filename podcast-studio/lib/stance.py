@@ -299,6 +299,23 @@ def load_cards(output_dir: str | os.PathLike) -> list[dict[str, Any]]:
     return cards
 
 
+def stance_card_exists(output_dir: str | os.PathLike, date: str, show: str) -> bool:
+    """True iff `{date}-{show}.stance.yaml` already exists in `output_dir`.
+
+    Pre-flight guard for the SAME-DAY RE-RUN case. `write_card` refuses to
+    overwrite an existing slot (append-only), but it runs at the END of the
+    pipeline — by then the `.md` / `.mp3` have already shipped, so the refusal
+    leaves an ORPHANED episode (card-less, invisible to the next run's magnitude
+    judge). Calling this early (right after the scratch opens) lets the pipeline
+    fail FAST and CLEAN — before any expensive dispatch or publish — instead of
+    shipping-then-orphaning. The `.md` is title-named (no collision on re-run);
+    only the `{date}-{show}` stance slot collides, which is why this check is
+    the right early tripwire.
+    """
+    out = Path(os.path.realpath(str(output_dir)))
+    return stance_path(out, date, show).exists()
+
+
 def write_card(
     output_dir: str | os.PathLike,
     date: str,

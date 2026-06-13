@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.23.0"
+    "version": "0.23.1"
   },
   "plugins": [
     {
@@ -152,7 +152,7 @@
       "name": "podcast-studio",
       "source": "./podcast-studio",
       "description": "personal-os fleet-member podcast production: a Claude-driven 6-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, vendored prep orchestrator, and TTS synthesis via the personal-os fleet's tts skill. Reads paths and credentials from ~/.podcast-studio/config.yaml.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "audio",
       "tags": [
         "podcast",

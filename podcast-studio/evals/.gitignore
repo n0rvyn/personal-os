@@ -1,0 +1,5 @@
+# throwaway validation artifacts (judge_fixture.py is the keeper)
+_*.json
+_*.txt
+_*.md
+__pycache__/

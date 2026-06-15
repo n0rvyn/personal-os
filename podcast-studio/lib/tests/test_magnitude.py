@@ -75,14 +75,16 @@ def test_build_judge_input_windows_cards_by_date():
 
 def test_build_judge_input_carries_recent_bodies_for_anchor_extraction():
     """Anchors (1956苏伊士/1973石油) live in episode BODIES, not cards —
-    build_judge_input must pass body excerpts through so the judge can
-    surface recent_anchors. Without this the 达芬奇 anchor guard is a no-op."""
+    build_judge_input must pass body excerpts through so the covered-ground
+    distiller can catch new apparatus. Without this the cross-episode memory
+    is a no-op (DP-001=A: 量臣不再 surface recent_anchors, anchor 抽取移交
+    covered-ground post-publish distill)."""
     from lib.magnitude import build_judge_input
     bodies = [{"date": "2026-06-12", "show": "morning",
                "excerpt": "……1956年苏伊士运河危机……1973年石油禁运……"}]
     out = build_judge_input([], candidates=["X"], today="2026-06-13",
                             recent_bodies=bodies)
-    assert out["recent_bodies"], "body excerpts must be carried for anchor extraction"
+    assert out["recent_bodies"], "body excerpts must be carried for covered-ground"
     assert "苏伊士" in out["recent_bodies"][0]["excerpt"]
 
 
@@ -133,16 +135,17 @@ def test_parse_verdict_happy():
     v = parse_verdict(_raw([
         {"candidate": "霍尔木兹停火", "matches_prior": "2026-06-12-morning",
          "magnitude": "light", "what_moved": "只是又一轮交火，无赌注变动",
-         "recap_hook": "霍尔木兹昨天又打了一轮",
-         "recent_anchors": ["1956苏伊士", "1973石油"]},
+         "recap_hook": "霍尔木兹昨天又打了一轮"},
         {"candidate": "光子芯片", "matches_prior": None, "magnitude": "none",
-         "what_moved": "", "recap_hook": None, "recent_anchors": []},
+         "what_moved": "", "recap_hook": None},
     ]))
     by = {x["candidate"]: x for x in v}
     assert by["霍尔木兹停火"]["magnitude"] == "light"
     assert by["霍尔木兹停火"]["matches_prior"] == "2026-06-12-morning"
-    assert by["霍尔木兹停火"]["recent_anchors"] == ["1956苏伊士", "1973石油"]
+    # DP-001=A: 量臣不再产/校验 recent_anchors；避让记忆交给 covered-ground。
+    assert "recent_anchors" not in by["霍尔木兹停火"]
     assert by["光子芯片"]["magnitude"] == "none"
+    assert "recent_anchors" not in by["光子芯片"]
 
 def test_parse_verdict_accepts_json_string():
     from lib.magnitude import parse_verdict
@@ -165,7 +168,8 @@ def test_parse_verdict_defaults_optional_fields():
     from lib.magnitude import parse_verdict
     v = parse_verdict(_raw([{"candidate": "A", "magnitude": "heavy"}]))
     assert v[0]["matches_prior"] is None
-    assert v[0]["recent_anchors"] == []
+    # DP-001=A: 量臣 verdict 不再产 recent_anchors 键。
+    assert "recent_anchors" not in v[0]
     assert v[0]["what_moved"] == ""
     assert v[0]["recap_hook"] is None
 

@@ -13,10 +13,12 @@ This module holds only the deterministic glue around that LLM call:
   episode date and carries (a) each recent card's bets + open_questions
   (the concrete reference points: "did today move one?") and (b) recent
   episode BODY excerpts — the anchor source. Historical anchors
-  (1956苏伊士 / 1973石油) live in episode bodies, NOT in stance-card fields,
-  so the body excerpts are what let the judge surface `recent_anchors` for
-  the collector's anti-repeat guard. Pure: no filesystem IO (the caller
-  loads cards via `lib.stance.load_cards` and reads the bodies).
+  (1956苏伊士 / 1973石油) live in episode bodies, NOT in stance-card fields;
+  per DP-001=A the magnitude judge no longer surfaces `recent_anchors` —
+  anchor extraction moved to the covered-ground post-publish distiller
+  (Phase 2). The body excerpts are what feed the distiller. Pure: no
+  filesystem IO (the caller loads cards via `lib.stance.load_cards` and
+  reads the bodies).
 
 - `parse_verdict(raw)` validates the judge's JSON into a per-candidate list,
   fail-CLOSED (raises, names the field) — the same discipline as
@@ -73,11 +75,12 @@ def gather_recent_bodies(
     """Read recent published episode `.md` bodies — the anchor source.
 
     Historical anchors (1956苏伊士 / 1973石油) live in episode BODIES, not in
-    stance-card fields, so the judge needs the bodies to surface
-    `recent_anchors` for the collector's anti-repeat guard. Deterministic (in
-    lib, not Claude self-discipline) so the excerpt never silently truncates
-    before a later anchor — bodies can ship with literal `\\n` (kuaidao
-    double-escapes), which is normalized here.
+    stance-card fields. Per DP-001=A the magnitude judge no longer surfaces
+    `recent_anchors` — anchor extraction moved to the covered-ground
+    post-publish distiller (Phase 2), which reads these bodies to catch new
+    apparatus. Deterministic (in lib, not Claude self-discipline) so the
+    excerpt never silently truncates before a later anchor — bodies can ship
+    with literal `\\n` (kuaidao double-escapes), which is normalized here.
 
     Returns `[{date, excerpt}]` for episode files dated strictly BEFORE `today`
     and within `window_days`, most-recent first. Non-episode files
@@ -128,8 +131,9 @@ def build_judge_input(
     `cards` — prior stance cards (from `lib.stance.load_cards`).
     `candidates` — today's candidate topics (strings or dicts; passed through).
     `recent_bodies` — list of `{date, show, excerpt}` from recent published
-        episode `.md` bodies. The anchor source; without it the judge cannot
-        surface `recent_anchors` and the collector's anti-repeat guard no-ops.
+        episode `.md` bodies. Per DP-001=A the magnitude judge no longer
+        surfaces `recent_anchors`; the body excerpts are the input the
+        covered-ground post-publish distiller reads to catch new apparatus.
     """
     recent_cards: list[dict[str, Any]] = []
     for card in cards or []:
@@ -185,8 +189,9 @@ def parse_verdict(raw: Any) -> list[dict[str, Any]]:
     Accepts `{"verdicts": [ ... ]}` (dict) or its JSON string. Each entry:
         {candidate (str, required),
          magnitude (one of none/light/medium/heavy, required),
-         matches_prior (str|None), what_moved (str), recap_hook (str|None),
-         recent_anchors (list[str])}
+         matches_prior (str|None), what_moved (str), recap_hook (str|None)}
+    Per DP-001=A the magnitude judge no longer surfaces `recent_anchors` —
+    anchor extraction moved to the covered-ground post-publish distiller.
     Raises ValueError naming the offending field on any violation.
     """
     obj = _coerce_raw(raw)
@@ -210,9 +215,6 @@ def parse_verdict(raw: Any) -> list[dict[str, Any]]:
         matches_prior = item.get("matches_prior")
         if matches_prior is not None and not isinstance(matches_prior, str):
             raise ValueError(f"verdicts[{i}].matches_prior must be str or null")
-        anchors = item.get("recent_anchors", [])
-        if not isinstance(anchors, list):
-            raise ValueError(f"verdicts[{i}].recent_anchors must be a list")
         recap = item.get("recap_hook")
         if recap is not None and not isinstance(recap, str):
             raise ValueError(f"verdicts[{i}].recap_hook must be str or null")
@@ -222,7 +224,6 @@ def parse_verdict(raw: Any) -> list[dict[str, Any]]:
             "magnitude": magnitude,
             "what_moved": item.get("what_moved") or "",
             "recap_hook": recap,
-            "recent_anchors": [str(a) for a in anchors],
         })
     return out
 
@@ -247,7 +248,6 @@ def safe_parse_verdict(raw: Any, candidates: list[Any]) -> list[dict[str, Any]]:
                 "magnitude": "light",
                 "what_moved": "",
                 "recap_hook": None,
-                "recent_anchors": [],
                 "degraded": True,
             }
             for c in (candidates or [])

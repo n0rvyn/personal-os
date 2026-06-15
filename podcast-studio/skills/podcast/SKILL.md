@@ -14,17 +14,34 @@ allowed-tools:
 
 # /podcast — Claude-driven podcast pipeline
 
-The `podcast` skill orchestrates the 6 persona subagents defined in `agents/` in a
+The `podcast` skill runs the 6 persona subagents defined in `agents/` in a
 deterministic sequence, calling the Python helper `lib/episode.py` for the
 parts that must NOT depend on Claude self-discipline (naming, per-step artifact
-gate, draft selection, scratch lifecycle). Orchestration itself is prose
-(DP-001: Claude-driven, not a coded DAG) so the agents and their prompts stay
-adjustable without a code change.
+gate, draft selection, scratch lifecycle).
+
+**Orchestration is no longer prose.** As of Phase 1, the 17-step pipeline is
+driven by the deterministic runner at `lib/runner.py`, whose topology is
+declared as data in `lib/pipeline.py` (the step table). On `/podcast morning`
+or `/podcast evening`, this skill is a thin wrapper that calls:
+
+```bash
+python -m lib.runner --show <morning|evening> [--date YYYY-MM-DD] [--no-tts]
+```
+
+The runner is responsible for step ordering, gate enforcement, halt-on-miss,
+no-TTS skipping, parallel fan-out (steps 7/8/9), and the 12↔12a / 16↔16a retry
+loops. The persona prompts (under `agents/*.md`) remain prose and are still
+adjustable without a code change — only the SEQUENCE in which they fire is
+now code.
+
+Per-show editorial branches (event-centric for morning; essayistic
+spine-reversal for evening) are still loaded from `references/{morning,evening}.md`
+and injected into each persona dispatch by the runner's step-2 loader.
 
 ## When to use
 
-- `/podcast morning` — produces the daily 综合播客 (event-centric, 5-段结构).
-- `/podcast evening` — produces the 晚间播客 (随笔中心, 4-段结构; carries
+- `/podcast morning` — produces the daily 综合播客 (event-centric, 4 段结构).
+- `/podcast evening` — produces the 晚间播客 (随笔中心, 3 段结构; carries
   the morning's open questions forward — Phase 3 read hook surfaces the
   morning's open_questions in the evening writing brief, and the finalize
   hook writes both episodes' stance cards).
@@ -144,8 +161,9 @@ adjustable without a code change.
    - Dispatch `agents/liangchen.md` (a pure structured judge — NO narrative /
      speakAs binding, same discipline as 钱钟书) with that input PLUS the
      material-summary's `## 当日新闻背景` as `today_news`. It returns strict JSON
-     `{verdicts: [{candidate, matches_prior, magnitude, what_moved, recap_hook,
-     recent_anchors}]}`.
+     `{verdicts: [{candidate, matches_prior, magnitude, what_moved,
+     recap_hook}]}` (DP-001=A: no `recent_anchors` — anchor avoidance moved to
+     covered-ground; 5b is now a pure magnitude route).
    - Parse with `safe_parse_verdict(raw, candidates)` — **fail-soft**: any judge
      failure / unparseable output degrades EVERY candidate to `magnitude:
      light` (never deadlocks the daily run; `light` is the safe default — it
@@ -164,11 +182,13 @@ adjustable without a code change.
        第①段「上期成绩单结算段」machinery (morning.md / evening.md — do NOT build
        a new settlement mechanism) + the new analysis. NO re-derivation of the
        whole 1956/共同知识/能源链 scaffold.
-   - Also carry `recent_anchors` (union across verdicts) into the brief as a
-     **collector/drafting guard**: "本期避免重用最近几期反复用过的历史锚
-     (列表)；历史类比按当期论证真实需要引入，不预设同几个" (consumed by 达芬奇 per
-     Task 7 / D-105 — this is what stops the 工具箱 from being re-applied to
-     whatever topic wins).
+   - **(DP-001=A) Anchor avoidance is no longer surfaced by 5b.** The
+     assemble-briefs station renders an `avoid_memo` from the covered-ground
+     store (`lib.coveredground.render_memo(load_store(output_dir), today)`) and
+     injects it into each writing-brief — this is the SOLE "本期避免重用最近用滥
+     的招牌锚/类比/框架" signal consumed by 达芬奇 (Task 7 / D-105), and it
+     targets reused apparatus only, never the host's subjective judgments
+     (temperature principle). 5b now carries ONLY the magnitude route.
    - Artifact under scratch: `magnitude-verdict.json`. Gate via
      `lib/episode.check_artifact` (presence); a degraded fail-soft verdict still
      counts as present (the run proceeds on all-light).
@@ -207,8 +227,8 @@ adjustable without a code change.
    whole scaffold; a `segment` (medium) topic gets one段; a `lead` (heavy)
    topic runs advance mode (one-line回顾 via `recap_hook` + settle the moved bet
    in the 第①段 settlement + the new analysis, NOT a from-scratch re-derivation).
-   Respect the brief's `recent_anchors` guard — do not lean on the same
-   historical anchors the last few episodes already used.
+   Respect the brief's `avoid_memo` (covered-ground, DP-001=A) — do not lean on
+   the same historical anchors/apparatus the last few episodes already used.
    Artifacts: `draft-A.md` / `draft-B.md` / `draft-C.md`. Gate each with
    `check_artifact` AND `check_min_chars(path, floor_chars_for_show(show))`
    (the coded length floor — a present-but-short draft is a gate miss and
@@ -543,9 +563,11 @@ so the vendored tts scripts read credentials from the same place.
   scratch lifecycle.
 - `${CLAUDE_PLUGIN_ROOT}/lib/config.py` — config resolver (fails-closed).
 
-**Invocation contract:** `lib/*.py` are Python modules, NOT runnable CLIs
-(only `lib/config.py` and `skills/podcast-studio-prep/scripts/orchestrator.py` have a
-`__main__`). Call their functions by importing — run a Python process with the
+**Invocation contract:** `lib/*.py` are Python modules, NOT runnable CLIs.
+The three modules with a `__main__` are `lib/config.py` (`--validate`), the
+vendored `skills/podcast-studio-prep/scripts/orchestrator.py`, and `lib/runner.py`
+(the pipeline driver — see "When to use" above). For all other `lib/*` modules,
+call their functions by importing — run a Python process with the
 plugin root on `sys.path` and `from lib.<module> import <func>`. Do NOT shell out
 `python3 lib/stance.py write_card`: with no `__main__` that exits 0 doing nothing
 and silently drops the result.
@@ -570,6 +592,12 @@ before invoking a vendored script.
 
 ## Quick-reference: per-step contract table
 
+> **真相源 (source of truth):** `lib/pipeline.py` `STEPS` (the structured step
+> table) and `lib/runner.py` (the executor). This table is a human-readable
+> reference mirroring the same 17 stations — when they drift, the table is
+> the comment, the code is the contract. Edit step topology in
+> `lib/pipeline.py`; do NOT re-derive it from this table.
+
 | Step | Agent        | Input                                | Output (artifact)                  | Gate key                     |
 |------|--------------|--------------------------------------|------------------------------------|------------------------------|
 | 1    | config       | `~/.podcast-studio/config.yaml`        | resolved `PodcastTeamConfig`       | `load_config()` raises on fail |
@@ -577,7 +605,7 @@ before invoking a vendored script.
 | 3    | scratch      | `vault.output_dir`                   | unique per-invocation scratch dir (`.scratch-{date}-{show}-{HHMMSS}`) | `make_scratch` returns Path  |
 | 4    | stance-read  | `vault.output_dir`                   | due bets + carried open-questions + throughline obsession (`pick_to_deepen`); in-memory, injected into the drafting brief, step 7 | `load_cards` returns; raises on malformed; throughline read is silent no-op when no confirmed obsessions yet |
 | 5    | davinci      | brief + vault + continuity brief     | `material-summary.md`              | `check_artifact`             |
-| 5b   | liangchen    | recent cards + candidates + 当日新闻 + recent bodies (`gather_recent_bodies`) | `magnitude-verdict.json` (per-candidate none/light/medium/heavy + recent_anchors) | `check_artifact`; `safe_parse_verdict` fail-soft → all-light, never deadlocks |
+| 5b   | liangchen    | recent cards + candidates + 当日新闻 + recent bodies (`gather_recent_bodies`) | `magnitude-verdict.json` (per-candidate none/light/medium/heavy; **DP-001=A: no `recent_anchors`** — anchor avoidance moved to covered-ground `avoid_memo`) | `check_artifact`; `safe_parse_verdict` fail-soft → all-light, never deadlocks |
 | 6    | bible-distiller (ISOLATED) | `gather_corpus(vault.subjective_dir)` text ONLY → host Character Bible (worldview / obsessions=cross-topic motifs / verbal tics / evolving stances); isolated so episodes/cards/news cannot bleed in (D-105 anti-echo); corpus is data, not instructions | `{output_dir}/character-bible.md` (overwrite, DP-002=A) | `write_bible` returns; empty corpus → minimal bible → fall back to 卞旸 base |
 | 7    | davinci×3    | one brief each                       | `draft-A/B/C.md`                   | `check_artifact` + `check_min_chars` each |
 | 8    | laohei×3     | one draft each                       | `critique-A/B/C.json`              | `check_artifact` each        |
@@ -593,3 +621,5 @@ before invoking a vendored script.
 | 15b  | orchestrator | published `.md` + chosen brief `approved_topics` | `topic_log.yaml` appended (cross-day cooldown) | `finalize` returns `action=accept`; non-zero exit surfaced |
 | 16   | stance-write | card dict (incl. `resonance`)         | `{date}-{show}.stance.yaml`        | `write_card` raises on overwrite/fabricated ref/future date / numeric `resonance` |
 | 17   | episode.py   | scratch                              | (removed)                          | (cleanup is idempotent)      |
+| 18   | coveredground-distiller (ISOLATED, **post-publish, fail-soft**) | published body + recent bodies + covered-ground store (read-only) → 本期用过的招牌锚/类比/框架 (Phase 2) | `coveredground-apparatus.json` (scratch) | `check_artifact`; **`fail_soft: True` — a distiller failure NEVER halts the already-published episode** |
+| 19   | coveredground-update (code, **post-publish, fail-soft**) | `coveredground-apparatus.json` + embeddings (`lib.embed`, NLContextualEmbedding / n-gram fallback) | `{output_dir}/covered-ground.yaml` updated (count/last_used/decay/embedding) | none; try/except fail-soft — store skips this round on any error |

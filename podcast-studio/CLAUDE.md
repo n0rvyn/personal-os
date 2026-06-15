@@ -55,12 +55,18 @@ paths, so pytest is green regardless of invocation cwd.
 Four layers, deliberately separated by what may vs may not depend on Claude
 self-discipline:
 
-1. **`skills/podcast/` — the orchestrator skill.** `SKILL.md` is the 17-step
-   `/podcast morning|evening` pipeline. Orchestration is **prose, not a coded
-   DAG** (design decision DP-001) so persona prompts stay adjustable without a
-   code change. Per-show editorial branches load from
-   `references/{morning,evening}.md`. Read `SKILL.md` end-to-end before touching
-   the pipeline — it carries the per-step contract table and the landmines.
+1. **`skills/podcast/` — the orchestrator skill.** `SKILL.md` is a thin
+   wrapper that, on `/podcast morning|evening`, calls
+   `python -m lib.runner --show <morning|evening>`. The 17-step pipeline
+   itself is now a **coded DAG** in `lib/runner.py` driven by a step table
+   in `lib/pipeline.py` (design decision DP-001, revised in Phase 1: step
+   ORDER is code, persona PROMPTS are prose). The persona prompts under
+   `agents/*.md` stay adjustable without a code change. Per-show editorial
+   branches load from `references/{morning,evening}.md` and are injected
+   into each persona dispatch by the runner's step-2 loader. Read
+   `SKILL.md` end-to-end before touching the pipeline — it carries the
+   per-step contract table (a human-readable mirror of `lib/pipeline.py`)
+   and the landmines.
 
 2. **`agents/` — the persona subagents** the pipeline dispatches in
    sequence: davinci (collection + drafting), liangchen (量臣 — structured
@@ -100,12 +106,16 @@ touches credentials.
 
 ## Non-obvious invariants (violating these is a silent failure)
 
-- **`lib/*.py` are importable modules, NOT runnable CLIs.** Only `lib/config.py`
-  and `skills/podcast-studio-prep/scripts/orchestrator.py` have a `__main__`.
-  Call helper functions by running a Python process with the plugin root on
+- **`lib/*.py` are importable modules, NOT runnable CLIs.** Three modules
+  have a `__main__` and may be invoked directly: `lib/config.py`
+  (`--validate`), the vendored
+  `skills/podcast-studio-prep/scripts/orchestrator.py`, and `lib/runner.py`
+  (the Phase-1 pipeline driver — this is a planned exception, not a
+  precedent for adding more `__main__`s). All other `lib/*` modules must
+  be called by importing — run a Python process with the plugin root on
   `sys.path` and `from lib.<module> import <func>`. Shelling out
-  `python3 lib/stance.py write_card` exits 0 doing nothing and silently drops
-  the result.
+  `python3 lib/stance.py write_card` exits 0 doing nothing and silently
+  drops the result.
 
 - **Stance cards are append-only.** Never edit a past card. Settlement is a NEW
   card whose `settles[]` references the prior bet id. `lib/stance.write_card`
@@ -170,7 +180,27 @@ touches credentials.
   only a heavy-magnitude development reclaims the lead (advance mode = one-line
   recap + settle the moved bet in the 第①段 settlement + new analysis). davinci
   must not reflexively pull the same historical anchors (1956苏伊士/1973石油)
-  every episode; it respects the brief's `recent_anchors` guard.
+  every episode; it respects the brief's `avoid_memo` (covered-ground). The
+  magnitude judge (5b/liangchen) now produces ONLY the magnitude route
+  (none/light/medium/heavy) — its legacy `recent_anchors` avoid-list was retired
+  in Phase 2 (DP-001=A); `gather_recent_bodies` is KEPT (it now feeds the
+  covered-ground distiller, not anchor extraction).
+
+- **Cross-episode memory is covered-ground, push-injected, fail-soft (Phase 2).**
+  The sole anchor-avoidance signal is `avoid_memo`, rendered from a structured
+  store at `{output_dir}/covered-ground.yaml` (mirrors `lib.bible.bible_path` —
+  realpath-guarded; `load_cards`/`gather_recent_bodies` regexes both ignore it).
+  The store is refreshed by a POST-PUBLISH isolated distiller
+  (`agents/coveredground-distiller.md`, dispatched after step 17) plus a
+  `coveredground-update` code station — both `fail_soft: True`: a distiller
+  failure NEVER halts the already-published episode (an explicit exception to the
+  runner's "missing artifact → halt" invariant, gated by the `fail_soft` step
+  field). `avoid_memo` targets reused apparatus (anchors/analogies/frameworks)
+  ONLY — never the host's subjective judgments/bets (temperature principle: a
+  memo that makes davinci hedge an opinion is a regression). Anchor extraction
+  is authoritative from the post-finalize body (the distiller, catching novel
+  anchors), never davinci self-report — same discipline as `select_draft`
+  ignoring the LLM's `selected` flag.
 
 - **Never hard-code machine-absolute paths.** Use `${CLAUDE_PLUGIN_ROOT}` and
   config-injected vault paths. Never `cd` into a machine-specific dir before

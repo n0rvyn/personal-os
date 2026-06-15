@@ -11,7 +11,6 @@ situation we must get right:
 
 Expectation the judge MUST satisfy on this fixture:
   - 霍尔木兹 candidate  → magnitude == "light" (no bet moved; daily noise).
-  - recent_anchors      → includes 1956苏伊士 / 1973石油.
 
 Usage:
   python3 evals/judge_fixture.py build           # print assembled judge input JSON
@@ -123,20 +122,15 @@ def check(verdict_path: str) -> int:
         fails.append(f"霍尔木兹 magnitude={hormuz['magnitude']!r}, expected 'light' "
                      f"(no 6/12 bet moved). what_moved={hormuz['what_moved']!r}")
 
-    # 2. recent_anchors must surface the repeated historical anchors.
-    all_anchors = " ".join(a for v in verdicts for a in v.get("recent_anchors", []))
-    if not re.search(r"苏伊士|1956", all_anchors):
-        fails.append(f"recent_anchors missing 1956苏伊士; got {all_anchors!r}")
-    if not re.search(r"1973|石油|滞胀", all_anchors):  # accept the oil-crisis anchor however phrased
-        fails.append(f"recent_anchors missing 1973石油 (oil-crisis anchor); got {all_anchors!r}")
+    # DP-001=A: 量臣不再产 recent_anchors；anchor 抽取移交 covered-ground 蒸馏器。
+    # 此处不再断言 recent_anchors 字段（量臣 verdict dict 不应含该键）。
 
     if fails:
         print("FIXTURE FAIL:")
         for f in fails:
             print("  -", f)
         return 1
-    print("FIXTURE PASS — 霍尔木兹=light; anchors surfaced:",
-          sorted(set(a for v in verdicts for a in v.get("recent_anchors", []))))
+    print("FIXTURE PASS — 霍尔木兹=light")
     return 0
 
 

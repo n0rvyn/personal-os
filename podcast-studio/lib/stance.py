@@ -141,6 +141,25 @@ def _validate_card_shape(card: dict[str, Any]) -> None:
         raise ValueError("card.named_concept must be a list if present")
     if "topics" in card and not isinstance(card["topics"], list):
         raise ValueError("card.topics must be a list if present")
+    # `apparatus_used` (Phase 2, optional): the cross-episode covered-ground
+    # audit — which signature anchors / analogies / frames this episode used.
+    # Deterministically extracted at step-16 from the finalize body ∩ store
+    # anchors (post-publish LLM distiller is the authoritative source for new
+    # anchors; this field is the self-description audit trail). Temperature:
+    # only apparatus-shaped entries — never subjective opinions / bets.
+    if "apparatus_used" in card:
+        au = card["apparatus_used"]
+        if isinstance(au, bool) or not isinstance(au, list):
+            raise ValueError(
+                f"card.apparatus_used must be a list of strings, got "
+                f"{type(au).__name__}"
+            )
+        for i, item in enumerate(au):
+            if isinstance(item, bool) or not isinstance(item, str):
+                raise ValueError(
+                    f"card.apparatus_used[{i}] must be a string, got "
+                    f"{type(item).__name__}"
+                )
     # `resonance` (Phase 5, optional): the "would a listener forward /
     # re-listen?" self-critique answer. Free-text only — str or list
     # of str. No numeric confidence numbers (temperature principle:

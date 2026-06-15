@@ -429,3 +429,67 @@ def test_stance_card_exists_preflight(tmp_path):
     assert stance_card_exists(tmp_path, "2026-06-13", "morning") is True
     # a different show in the same day is a different slot
     assert stance_card_exists(tmp_path, "2026-06-13", "evening") is False
+
+
+# ---------- apparatus_used field (Phase 2: covered-ground audit) ----------
+
+def test_write_card_accepts_apparatus_used(tmp_path):
+    """A card with `apparatus_used: list[str]` is accepted by _validate_card_shape
+    and round-trips through load_cards (Phase 2: covered-ground cross-episode
+    memory audits which signature anchors/analogies/frames each episode used)."""
+    from lib.stance import load_cards
+    card = _card(
+        "2026-06-08", "morning",
+        apparatus_used=["1956苏伊士运河危机", "印刷术类比"],
+    )
+    _write_card(tmp_path, "2026-06-08", "morning", card)
+
+    loaded = load_cards(str(tmp_path))
+    assert len(loaded) == 1
+    assert loaded[0]["apparatus_used"] == ["1956苏伊士运河危机", "印刷术类比"]
+
+
+def test_apparatus_used_must_be_list(tmp_path):
+    """`apparatus_used` must be a list[str]. A non-list value (here a bare
+    string) is rejected by _validate_card_shape — naming the field in the
+    error so the writer can correct it."""
+    bad_string = _card("2026-06-08", "morning", apparatus_used="苏伊士")
+    with pytest.raises(Exception) as excinfo:
+        _write_card(tmp_path, "2026-06-08", "morning", bad_string)
+    assert "apparatus_used" in str(excinfo.value)
+
+
+def test_apparatus_used_optional(tmp_path):
+    """A card without `apparatus_used` is unaffected (backward-compat:
+    Phase 2 adds the field as optional; pre-Phase-2 cards stay valid)."""
+    from lib.stance import load_cards
+    # No apparatus_used in the card at all
+    card = _card("2026-06-08", "morning", bets=[_bet("bet-1")])
+    _write_card(tmp_path, "2026-06-08", "morning", card)
+
+    loaded = load_cards(str(tmp_path))
+    assert len(loaded) == 1
+    # apparatus_used absent → not in the loaded dict
+    assert "apparatus_used" not in loaded[0]
+
+
+def test_card_with_only_apparatus_not_placeholder(tmp_path):
+    """A card whose only non-`episode` content is `apparatus_used` is NOT
+    treated as an empty placeholder by _is_empty_card_placeholder — so it
+    loads and is visible to covered-ground. (A bare `{}` placeholder must
+    NOT block continuity; conversely, a card that records apparatus used
+    must not be silently dropped.)"""
+    from lib.stance import load_cards
+    # Minimal card: episode + apparatus_used only. The Phase-1 required
+    # keys (bets/open_questions) are present-empty.
+    card = {
+        "episode": {"date": "2026-06-08", "show": "morning"},
+        "bets": [],
+        "open_questions": [],
+        "apparatus_used": ["苏伊士类比"],
+    }
+    _write_card(tmp_path, "2026-06-08", "morning", card)
+
+    loaded = load_cards(str(tmp_path))
+    assert len(loaded) == 1
+    assert loaded[0]["apparatus_used"] == ["苏伊士类比"]

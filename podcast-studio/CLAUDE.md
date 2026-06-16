@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A **Claude Code marketplace** containing one plugin, `podcast-studio`. The repo
-root holds `.claude-plugin/marketplace.json`; the actual plugin lives in the
-`podcast-studio/` subdirectory (note the nested same-name path:
-`podcast-studio/podcast-studio/`). The plugin is a fleet-member podcast
-production team — a Claude-driven 6-persona pipeline that reads an Obsidian
-Vault and produces a script + mp3 + a continuity "stance card" per episode.
+A **Claude Code plugin**, `podcast-studio`, in the **`personal-os` marketplace**.
+The marketplace root (one level up) holds `.claude-plugin/marketplace.json`
+alongside the other fleet plugins; **this file sits at the plugin root**
+(`personal-os/podcast-studio/` — a flat layout, no nested same-name dir). The
+plugin is a fleet-member podcast production team — a Claude-driven multi-persona
+pipeline (the persona roster is the `agents/` dir + `lib/pipeline.py`
+`AGENT_WHITELIST`, not a fixed count) that reads an Obsidian Vault and produces a
+script + mp3 + a continuity "stance card" per episode.
 
 **podcast-studio is a personal-os fleet member.** Inputs arrive via the
 personal-os IEF exchange (Phase 5); TTS synthesis dispatches to the
@@ -103,6 +105,18 @@ missing file, a missing required key, or a nonexistent vault dir all raise
 `MINIMAX_API_KEY`, etc.). `lib/podcast-env.sh` re-exports config `tts.*` into
 the env the vendored tts scripts read — it never `eval`s config content or
 touches credentials.
+
+**Output layout (Phase 4).** `vault.output_dir` is split into three **derived**
+subdirs — `episodes/` (listener artifacts: `{date}-{title}.md`/`.mp3`,
+`{date}-{show}.stance.yaml`), `state/` (continuity: `covered-ground.yaml`,
+`character-bible.md`, `throughline.yaml`), `reports/` (`{date}-{show}.scorecard.md`).
+They are NOT YAML keys: `lib/config.py` computes them as `output_dir/{episodes,state,reports}`
+and `mkdir`s them AFTER the `output_dir` fail-closed check (so a missing
+`output_dir` still raises, never gets auto-created). `topic_log.yaml`,
+`source_log.jsonl`, and `.scratch-*` deliberately stay at `output_dir` root. The
+config file itself lives OUTSIDE `output_dir` (default `~/.podcast-studio/config.yaml`),
+not next to the artifacts. Migrate an existing flat vault with
+`tools/migrate-phase4-layout.sh`.
 
 ## Non-obvious invariants (violating these is a silent failure)
 
@@ -209,7 +223,9 @@ touches credentials.
 ## Scope (locked — do not expand or shrink without asking)
 
 Generation only: writes three co-named local artifacts (`{date}-{title}.md`,
-`{date}-{title}.mp3`, `{date}-{show}.stance.yaml`) to `vault.output_dir`. No
+`{date}-{title}.mp3`, `{date}-{show}.stance.yaml`) to `vault.output_dir/episodes/`
+(Phase 4 layout; continuity state → `state/`, scorecards → `reports/` — see
+§"Config is the single source of truth"). No
 delivery (no WeChat/email/any channel), no cron (cadence via Claude Code
 `/loop`), no news crawling (reads a Vault dir an external tool populates),
 no two-voice dialogue audio. See `docs/01-discovery/project-brief.md` for the

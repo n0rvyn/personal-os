@@ -14,15 +14,20 @@ allowed-tools:
 
 # /podcast — Claude-driven podcast pipeline
 
-The `podcast` skill runs the 6 persona subagents defined in `agents/` in a
-deterministic sequence, calling the Python helper `lib/episode.py` for the
-parts that must NOT depend on Claude self-discipline (naming, per-step artifact
-gate, draft selection, scratch lifecycle).
+The `podcast` skill runs the persona subagents defined in `agents/` (the roster
+is `lib/pipeline.py`'s `AGENT_WHITELIST`, not a fixed count), calling the Python
+helper `lib/episode.py` for the parts that must NOT depend on Claude
+self-discipline (naming, per-step artifact gate, draft selection, scratch
+lifecycle).
 
-**Orchestration is no longer prose.** As of Phase 1, the 17-step pipeline is
-driven by the deterministic runner at `lib/runner.py`, whose topology is
-declared as data in `lib/pipeline.py` (the step table). On `/podcast morning`
-or `/podcast evening`, this skill is a thin wrapper that calls:
+**Orchestration is no longer prose.** As of Phase 1, the pipeline is driven by
+the deterministic runner at `lib/runner.py`, whose station topology is declared
+as data in `lib/pipeline.py` (the step table is the authoritative station count;
+it grew past the original 17 with the Phase-2 covered-ground, Phase-3 scorecard
+13a, and Phase-4 layout stations). The runner is a coded DAG with parallel
+fan-out (drafts/critiques/polishes at 7/8/9) and gate-retry loops (12↔12a,
+16↔16a), NOT a linear sequence. On `/podcast morning` or `/podcast evening`,
+this skill is a thin wrapper that calls:
 
 ```bash
 python -m lib.runner --show <morning|evening> [--date YYYY-MM-DD] [--no-tts]
@@ -152,7 +157,7 @@ and injected into each persona dispatch by the runner's step-2 loader.
      magnitude_to_airtime, gather_recent_bodies` and reuse `lib.stance.load_cards`
      (the same cards loaded at step 4). Build the judge input:
      `build_judge_input(cards, candidates, today, window_days=14,
-     recent_bodies=gather_recent_bodies(output_dir, today))` where `candidates`
+     recent_bodies=gather_recent_bodies(episodes_dir, today))` where `candidates`
      are the brief `approved_topics` (the topic_tags 达芬奇 surfaced) and
      `recent_bodies` are the deterministic excerpts of recent published episode
      `.md` bodies — the **anchor source** (historical anchors like 1956苏伊士 /
@@ -213,7 +218,8 @@ and injected into each persona dispatch by the runner's step-2 loader.
    host SOUNDS and frames), never a content template every episode must redeploy**
    — downstream steps 12/13 use the bible to unify VOICE, not to dictate which
    concepts appear. Write the returned bible via `write_bible(...)` to
-   `{output_dir}/character-bible.md` (atomic overwrite, DP-002=A: re-distilled
+   `{output_dir}/state/character-bible.md` (Phase 4 layout — state/ holds
+   continuity; atomic overwrite, DP-002=A: re-distilled
    each run; a refreshed projection, not a log). Empty corpus → minimal bible →
    fall back to 卞旸's base persona, no crash.
 7. **Drafts A/B/C (达芬奇)** — three parallel `agents/davinci.md` dispatches,

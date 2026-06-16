@@ -122,6 +122,8 @@ confirmed_at: 2026-06-14T01:55:00
 <!-- section: phase-3 keywords: dedup, structural-lint, scorecard, eval, prompt-fix -->
 ## Phase 3: 工艺门 + 达标尺 — 质检与记分卡
 
+**Status:** ✅ Completed — 2026-06-15(6/6 acceptance 全绿。#1/#2/#4/#5/#6 确定性硬证:真实 06-14 fixture 喂 `build_scorecard`(judge=None)→ `passed=False`,六门逐项命中 sections(段数5≠4)/draft_marker/betting_section(⑤段)/duration(念稿5455<6570)/intra_dup(17.2万·占GDP 逐字)/cross_dup(苏伊士);clean+温度盾 fixture 全绿;304 pytest green。#3 真实 live no-TTS e2e:新生成 morning 发布「回读税-每一次点头都在欠账」(4段/无草稿头/无⑤段,structlint 独立复验绿),live 13a 记分卡 **总判:通过 ✓**(六硬门全绿 + 判官 qianzhongshu=19≥14 / factcheck flagged=0 / 有观点5 / 有温度5 / 不同质化4),无 mp3。⚠️ live run 诚信披露:Phase-1 factcheck 站正确拦下一处真实事实错误(草稿称「苹果付费买浏览器默认搜索权」方向颠倒——实为谷歌付苹果),按「门抓错→人工订正→门复验」外科订正该单句后 --resume,**真实 factcheck agent 复判 flagged=0**(非伪造判定);记分卡判的是真实干净 episode。该 factcheck 内容错属 Phase-1 生成站、与 Phase-3 记分卡正交。)
+
 **Goal:** 每次 e2e run 产出一张设计达标记分卡(硬门 + 判官维度);把真实 06-14 早间当回归样本必须判为不达标;并在源头修掉提示词矛盾。
 
 **Depends on:** Phase 1 + Phase 2
@@ -161,16 +163,16 @@ confirmed_at: 2026-06-14T01:55:00
 - 口播字/分钟率取值(实测语速 ~310 汉字 / ~365 非空白字 每分)。
 
 **Acceptance criteria:**
-- [ ] 真实 06-14 早间喂进记分卡 → 判定**不达标**,且具体命中:逐字重复段、草稿头、⑤ 段、时长不足、苏伊士过度复用。
-- [ ] 一份干净 fixture → 记分卡全绿通过。
-- [ ] kuaidao/davinci 提示词改后,新生成 morning 为 4 段、无草稿头、无 ⑤ 段(结构 lint 通过)。
-- [ ] dedup 检出 06-14 的 17.2万/GDP 逐字重复。
-- [ ] **温度回归盾:** 纯主观/观点 body 不被 dedup 或结构门误伤;温度原则不回归(沿用 factchecker plan 的温度盾测法)。
-- [ ] pytest:dedup(站内/跨期/回退)、结构 lint、记分卡组装 单测。
+- [x] 真实 06-14 早间喂进记分卡 → 判定**不达标**,且具体命中:逐字重复段、草稿头、⑤ 段、时长不足、苏伊士过度复用。 ✅ `build_scorecard(judge=None)` → `passed=False`,六门逐项红:sections/draft_marker/betting_section/duration/intra_dup/cross_dup(`test_06_14_regression_fails` + 直跑 fixture 复验)
+- [x] 一份干净 fixture → 记分卡全绿通过。 ✅ `test_clean_fixture_passes`
+- [x] kuaidao/davinci 提示词改后,新生成 morning 为 4 段、无草稿头、无 ⑤ 段(结构 lint 通过)。 ✅ live e2e 发布「回读税」4段/无草稿头/无⑤段,structlint 独立复验绿
+- [x] dedup 检出 06-14 的 17.2万/GDP 逐字重复。 ✅ intra_dup verbatim-run 命中「17.2万元…占GDP的比重约百分之三」
+- [x] **温度回归盾:** 纯主观/观点 body 不被 dedup 或结构门误伤;温度原则不回归(沿用 factchecker plan 的温度盾测法)。 ✅ `test_temperature_shield_passes`(intra_dup hits 为空)
+- [x] pytest:dedup(站内/跨期/回退)、结构 lint、记分卡组装 单测。 ✅ 304 passed
 
 **Review checklist:**
-- [ ] run-phase review step(自动 implementation-reviewer)
-- [ ] apple-dev reviewers — N/A
+- [x] run-phase review step(自动 implementation-reviewer)✅ `.claude/reviews/implementation-reviewer-2026-06-15-phase3-081032.md`(Pass-with-gaps:0 must-fix、2 should-fix 均已修)
+- [x] apple-dev reviewers — N/A(非 Apple UI 项目)
 <!-- /section -->
 
 ---
@@ -178,7 +180,7 @@ confirmed_at: 2026-06-14T01:55:00
 <!-- section: phase-4 keywords: directory-layout, artifacts, config, state, separation -->
 ## Phase 4: 目录归位 — 产物 / 配置 / 状态 分目录存放
 
-**Status:** 📋 Queued — scope 待确认(2026-06-15 用户口头加入;run via `/run-phase` after Phase 3 + e2e。下方 Scope 为 AI 转写草稿,Architecture decisions 的「需确认」项在 run 时 scope confirmation 解决,不在此预判)。
+**Status:** ✅ Completed — 2026-06-15(6/6 acceptance 满足,用户接受。scope 确认=full split episodes/state/reports + config→`~/.podcast-studio/config.yaml`,topic_log/scratch 留 root。plan-verifier APPROVED(2 cycles);implementation-reviewer **0 must-fix**、design-fidelity clean、每个 reader/writer 重指向确认;2 个 should-fix 均已修(SF-1 evals/judge_fixture + SKILL.md prose→episodes;SF-2 topic_log root-boundary 断言)。306 pytest green(含新 config 派生子目录测试 + runner 落盘断言)。迁移脚本 `tools/migrate-phase4-layout.sh` 在 sandbox 实跑:10 文件正确归位,topic_log+source_log 留 root,`load_cards(episodes_dir)` 找到 3 卡(连续性不孤立)。⚠️ 诚信披露:#5 的 live full-publish e2e(真实 LLM 跑到 publish 写 episodes/state/reports)被**正交的 MiniMax 基础设施故障**阻塞——qianzhongshu 评分站今早能跑(Phase-3 morning 已发布),今晚两次失败(超时 2400s,再 exit 1),与目录分离代码无关;**未伪造** score-verdict 强跑绿。#5 由「确定性真实-runner 落盘断言 + 11 站真实 live 读路径(迁移后 episodes/state)+ 迁移往返」验证,live-publish 写路径待 MiniMax 恢复后补跑(`python3 /tmp/p4_resume.py`)。)
 
 **Goal（用户原话）:** 把 artifacts 和 config 分开目录来存,不要都挤在一起。当前单一 `output_dir`(`Content/Podcasts/` 或 sandbox)把发布产物、连续性状态、记分卡报告、e2e 配置、scratch 全堆在一起;按种类拆到独立目录。
 
@@ -207,17 +209,17 @@ confirmed_at: 2026-06-14T01:55:00
 - **[需确认] 现有文件迁移**:一次性 `git mv`/脚本迁移 vs 双读兼容期(读旧位置 fallback)。
 - **[需确认] locked scope 边界**:把 state/reports 移出 `output_dir` 是否需更新 CLAUDE.md § Scope 的「three co-named artifacts to output_dir」表述。
 
-**Acceptance criteria（草稿 — 随 scope 定稿调整）:**
-- [ ] 配置文件不再与发布产物同目录。
-- [ ] (若纳入)连续性状态、记分卡报告各落独立目录;发布产物目录只剩用户要的产物。
-- [ ] `config.py` fail-closed 校验新目录,缺失目录报错命名 offending key。
-- [ ] 重构后全套 `pytest lib/tests/` green;路径相关单测覆盖新布局。
-- [ ] no-TTS e2e 一期 → 各产物落到正确分目录(真实路径验证,非仅单测)。
-- [ ] 现有文件按确认方案迁移/兼容,旧 run 不被孤立。
+**Acceptance criteria（scope 定稿=full split）:**
+- [x] 配置文件不再与发布产物同目录。 ✅ config 默认 `~/.podcast-studio/config.yaml`(out of output_dir);迁移脚本将 in-vault `config.yaml` 挪出;CLAUDE.md + config.example.yaml 已记
+- [x] 连续性状态、记分卡报告各落独立目录;发布产物目录只剩用户要的产物。 ✅ `state/`(covered-ground/character-bible/throughline)+ `reports/`(scorecard.md)分出;`episodes/` 只留听众产物(.md/.mp3/.stance.yaml);topic_log/source_log/scratch 留 root
+- [x] `config.py` fail-closed 校验新目录,缺失目录报错命名 offending key。 ✅ `test_output_dir_still_fail_closed`:subdir mkdir 在 output_dir 存在性校验**之后**,缺 output_dir 仍 raise 命名 `vault.output_dir` 且不创建子目录
+- [x] 重构后全套 `pytest lib/tests/` green;路径相关单测覆盖新布局。 ✅ 306 passed;新增 config 派生子目录测试 + runner 落盘断言(published→episodes/store→state/scorecard→reports)+ topic_log root 断言
+- [x] no-TTS e2e 一期 → 各产物落到正确分目录(真实路径验证,非仅单测)。 ⚠️ 部分(用户接受):确定性真实-runner 落盘断言(mock LLM 内容、真实路径代码)+ 11 站真实 live **读**路径(迁移后 episodes/state)+ 迁移往返(load_cards 找到 3 卡)。live full-publish **写**路径被正交 MiniMax 故障(qianzhongshu 站今晚超时+exit1,今早可用)阻塞,未伪造;待 MiniMax 恢复补跑
+- [x] 现有文件按确认方案迁移/兼容,旧 run 不被孤立。 ✅ `tools/migrate-phase4-layout.sh` sandbox 实跑 10 文件正确归位;`load_cards(episodes_dir)` 找到 3 卡(连续性 round-trip 不孤立);幂等 + 不删 + 不覆盖
 
 **Review checklist:**
-- [ ] run-phase review step(自动 implementation-reviewer)
-- [ ] apple-dev reviewers — N/A
+- [x] run-phase review step(自动 implementation-reviewer)✅ `.claude/reviews/implementation-reviewer-2026-06-15-181503.md`(0 must-fix、design-fidelity clean、每个 runtime reader/writer 重指向确认;2 should-fix 均已修)
+- [x] apple-dev reviewers — N/A(非 Apple UI 项目)
 <!-- /section -->
 
 ---

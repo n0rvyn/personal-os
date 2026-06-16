@@ -102,6 +102,28 @@ _RETRY_PARENT: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Phase 4: output_dir subdir resolver
+#
+# episodes/ (listener artifacts), state/ (continuity: covered-ground,
+# character-bible, obsessions), reports/ (scorecards) are derived subdirs of
+# output_dir (lib.config._validate_vault_paths creates them). run_pipeline
+# threads the resolved dirs into ctx; this helper reads them back with a
+# derive-from-output_dir fallback so a partial test ctx (or any caller that
+# only set output_dir) still resolves — and, crucially, never raises KeyError
+# inside a fail-soft try/except where a KeyError would be swallowed and
+# silently degrade to an empty store (the exact silent-failure class this
+# split guards against). topic_log + scratch deliberately stay at output_dir.
+# ---------------------------------------------------------------------------
+def _subdir(ctx: dict[str, Any], kind: str) -> str:
+    """Resolve the episodes/state/reports subdir from ctx; fall back to
+    `<output_dir>/<kind>` when the key is absent. Never raises KeyError."""
+    d = ctx.get(f"{kind}_dir")
+    if d:
+        return str(d)
+    return str(Path(str(ctx.get("output_dir", ""))) / kind)
+
+
+# ---------------------------------------------------------------------------
 # Default dispatch wrapper
 #
 # The real dispatch (lib.dispatch.dispatch_persona) does not accept a
@@ -282,7 +304,7 @@ def _call_gate(
             json_field=resolved_args.get("json_field"),
         )
     if gate_fn_name == "check_stance_card_absent":
-        return gate_fn(ctx["output_dir"], ctx["date"], ctx["show"])
+        return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"])
     if gate_fn_name == "check_factcheck":
         return gate_fn(ctx["scratch_dir"], ctx.get("material_summary_path"))
     if gate_fn_name == "check_resonance_present":
@@ -292,7 +314,7 @@ def _call_gate(
     if gate_fn_name == "check_topic_log_appended":
         return gate_fn(ctx.get("topic_log_path"))
     if gate_fn_name == "check_stance_card":
-        return gate_fn(ctx["output_dir"], ctx["date"], ctx["show"])
+        return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"])
     return {"ok": False, "reason": f"unknown gate fn: {gate_fn_name}"}
 
 
@@ -388,21 +410,22 @@ def _continuity_read(ctx: dict[str, Any]) -> dict[str, Any]:
     throughline obsession to deepen. Output is on-disk `continuity.json`
     (for the gate) plus an in-memory copy in `ctx` (for the runner to
     thread into the brief)."""
-    output_dir = ctx["output_dir"]
+    episodes_dir = _subdir(ctx, "episodes")
+    state_dir = _subdir(ctx, "state")
     date_str: str = ctx["date"]
     show: str = ctx["show"]
     scratch: Path = ctx["scratch_dir"]
 
-    if Path(str(output_dir)).exists():
-        cards = load_cards(output_dir)
+    if Path(str(episodes_dir)).exists():
+        cards = load_cards(episodes_dir)
     else:
         cards = []
 
     due = due_bets(cards, date_str)
     carried = carried_open_questions(cards, date_str, show)
 
-    if Path(str(output_dir)).exists():
-        obsessions = load_obsessions(output_dir)
+    if Path(str(state_dir)).exists():
+        obsessions = load_obsessions(state_dir)
     else:
         obsessions = []
     deepen = pick_to_deepen(obsessions, cards) if obsessions else None
@@ -483,11 +506,11 @@ def _assemble_briefs(ctx: dict[str, Any]) -> Path:
     # under `output_dir`; `load_store` is fail-soft (missing/corrupt file
     # → empty store) so a fresh vault or a corrupted store does not halt
     # the run.
-    output_dir = ctx.get("output_dir")
+    state_dir = _subdir(ctx, "state")
     avoid_memo = ""
-    if output_dir is not None:
+    if state_dir:
         try:
-            store = load_store(output_dir)
+            store = load_store(state_dir)
             avoid_memo = render_memo(store, ctx["date"])
         except Exception:
             avoid_memo = ""
@@ -577,7 +600,7 @@ def _publish_step(ctx: dict[str, Any]) -> Optional[dict[str, Path]]:
     scenario) does not halt the run — the publish is best-effort and
     the test only inspects the runner's dispatch ordering.
     """
-    output_dir = ctx["output_dir"]
+    episodes_dir = _subdir(ctx, "episodes")
     date_str: str = ctx["date"]
     show: str = ctx["show"]
     scratch: Path = ctx["scratch_dir"]
@@ -585,7 +608,7 @@ def _publish_step(ctx: dict[str, Any]) -> Optional[dict[str, Path]]:
     title = _read_finalize_title(scratch)
 
     try:
-        paths = episode_paths(output_dir, date_str, title, show)
+        paths = episode_paths(episodes_dir, date_str, title, show)
     except (FileNotFoundError, NotADirectoryError, ValueError, OSError):
         return None
 
@@ -719,7 +742,8 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
     self-description audit trail. fail-soft: any extraction error
     falls back to an empty list — the card still writes.
     """
-    output_dir = ctx["output_dir"]
+    episodes_dir = _subdir(ctx, "episodes")
+    state_dir = _subdir(ctx, "state")
     date_str: str = ctx["date"]
     show: str = ctx["show"]
     resonance = ctx.get("resonance", "")
@@ -728,7 +752,7 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
     try:
         from lib.coveredground import load_store
 
-        store = load_store(output_dir)
+        store = load_store(state_dir)
         anchors = list((store.get("anchors") or {}).keys())
 
         # Read the finalize body so we can intersect store anchors with
@@ -768,7 +792,7 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
         card["apparatus_used"] = apparatus_used
 
     try:
-        path = write_card(output_dir, date_str, show, card)
+        path = write_card(episodes_dir, date_str, show, card)
     except Exception:
         return None
     return path
@@ -1194,7 +1218,7 @@ def _run_code_step(
             update_store,
             write_store,
         )
-        output_dir = ctx.get("output_dir")
+        state_dir = _subdir(ctx, "state")
         date_str = ctx.get("date")
         show = ctx.get("show")
         apparatus_path = scratch / "coveredground-apparatus.json"
@@ -1206,11 +1230,11 @@ def _run_code_step(
             anchors = payload.get("anchors") or []
             if not anchors:
                 return None
-            store = load_store(output_dir)
+            store = load_store(state_dir)
             update_store(
                 store, anchors, date_str, {"date": date_str, "show": show},
             )
-            write_store(output_dir, store)
+            write_store(state_dir, store)
         except Exception as e:  # noqa: BLE001 — fail-soft post-publish
             print(
                 f"runner: coveredground-update failed (skipped): {e}",
@@ -1387,7 +1411,8 @@ def _scorecard_step(
     show = ctx["show"]
     date_str = ctx["date"]
     plugin_root = ctx["plugin_root"]
-    output_dir = Path(str(ctx.get("output_dir", "")))
+    state_dir = _subdir(ctx, "state")
+    reports_dir = Path(_subdir(ctx, "reports"))
     enforce = bool(ctx.get("enforce_scorecard", False))
 
     # --- deterministic hard-gate inputs (read from scratch, pre-cleanup) ---
@@ -1428,7 +1453,7 @@ def _scorecard_step(
 
     # PRE-update covered-ground store (step 19 hasn't run yet).
     try:
-        store = load_store(output_dir)
+        store = load_store(state_dir)
     except Exception:  # noqa: BLE001
         store = {"anchors": {}}
 
@@ -1490,11 +1515,11 @@ def _scorecard_step(
     except OSError as e:
         print(f"runner: scorecard verdict write failed: {e}", file=sys.stderr)
 
-    # Human-readable scorecard → output_dir (survives cleanup).
+    # Human-readable scorecard → reports/ (survives cleanup).
     try:
         md = _scorecard.render_scorecard_md(result)
-        if output_dir.exists():
-            (output_dir / f"{date_str}-{show}.scorecard.md").write_text(
+        if reports_dir.exists():
+            (reports_dir / f"{date_str}-{show}.scorecard.md").write_text(
                 md, encoding="utf-8",
             )
     except Exception as e:  # noqa: BLE001 — a render failure must not crash the run
@@ -1578,12 +1603,12 @@ def _build_step_prompt(
             # placeholder (the persona reads by glob anyway). The
             # distiller just needs a usable path on disk — the actual
             # filename pattern is {date}-{title}.md under output_dir.
-            output_dir = Path(str(ctx.get("output_dir", "")))
-            if output_dir.exists():
-                # Use the first matching .md in output_dir for the date.
+            episodes_dir = Path(_subdir(ctx, "episodes"))
+            if episodes_dir.exists():
+                # Use the first matching .md in episodes/ for the date.
                 # Fallback to the scratch-published mirror if no on-disk
                 # publish landed (test scenarios).
-                candidates = sorted(output_dir.glob(f"{ctx['date']}-*.md"))
+                candidates = sorted(episodes_dir.glob(f"{ctx['date']}-*.md"))
                 if candidates:
                     resolved_inputs.append(str(candidates[0]))
                 elif (scratch / "published.md").exists():
@@ -1591,10 +1616,23 @@ def _build_step_prompt(
             continue
         if name == "coveredground-distill" and inp == "covered-ground.yaml":
             from lib.coveredground import store_path as _cg_path
-            output_dir = Path(str(ctx.get("output_dir", "")))
-            sp = _cg_path(output_dir)
+            state_dir = Path(_subdir(ctx, "state"))
+            sp = _cg_path(state_dir)
             if sp.exists():
                 resolved_inputs.append(str(sp))
+            continue
+        if inp == "character-bible.md":
+            # Phase 4: the bible lives in state/ (SKILL.md spec — re-distilled
+            # each run, overwritten). Point finalize + broadcast-rewrite at the
+            # persistent state_dir bible when present; fall back to the scratch
+            # bare-filename otherwise (no bible distilled / pre-Phase-4 layout).
+            # Read-only input — the runner never writes it.
+            from lib.bible import bible_path as _bible_path
+            bp = _bible_path(_subdir(ctx, "state"))
+            if Path(str(bp)).exists():
+                resolved_inputs.append(str(bp))
+            else:
+                resolved_inputs.append(_apply_artifact_template(inp, tag=tag))
             continue
         resolved_inputs.append(_apply_artifact_template(inp, tag=tag))
     if resolved_inputs:
@@ -1697,6 +1735,13 @@ def run_pipeline(
         "no_tts": no_tts,
         "scratch_dir": scratch,
         "output_dir": output_dir,
+        # Phase 4: derived subdirs threaded from config (fail-closed-created in
+        # lib.config). episodes/ = listener artifacts, state/ = continuity,
+        # reports/ = scorecards. Fallback derives from output_dir for configs
+        # that predate Phase 4. topic_log + scratch stay at output_dir.
+        "episodes_dir": getattr(config.vault, "episodes_dir", None) or str(Path(str(output_dir)) / "episodes"),
+        "state_dir": getattr(config.vault, "state_dir", None) or str(Path(str(output_dir)) / "state"),
+        "reports_dir": getattr(config.vault, "reports_dir", None) or str(Path(str(output_dir)) / "reports"),
         "config": config,
         "plugin_root": plugin_root,
         "dispatch": dispatch,

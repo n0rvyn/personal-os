@@ -6,11 +6,19 @@
 # contract (`<root>/99-System/10-Directory-Contract.md`). Optional: when unset, recall
 # falls back to subjective_dir. The three *_dir keys are required and must exist on
 # disk; the plugin fails-closed otherwise.
+#
+# Phase 4 output layout: output_dir is split into three DERIVED subdirs
+# (auto-created, not YAML keys):
+#   <output_dir>/episodes/  → {date}-{title}.md / .mp3 / {date}-{show}.stance.yaml
+#   <output_dir>/state/     → covered-ground.yaml, character-bible.md, throughline.yaml
+#   <output_dir>/reports/   → {date}-{show}.scorecard.md
+# topic_log.yaml + source_log.jsonl + .scratch-* stay at output_dir root.
+# This config file lives OUTSIDE output_dir (default ~/.podcast-studio/config.yaml).
 vault:
   root: ~/Obsidian/PKOS                                # Obsidian/PKOS vault root (recall + directory contract)
   subjective_dir: ~/Obsidian/PKOS/30-Logs/30-Journal   # your subjective notes / journal
   news_dir: ~/Obsidian/PKOS/40-Inputs/News             # news / domain feed inputs
-  output_dir: ~/Obsidian/PKOS/50-Outputs/podcast      # generated briefs and topic log live here
+  output_dir: ~/Obsidian/PKOS/50-Outputs/podcast      # episodes/state/reports subdirs derived from here
 
 # tts: which TTS provider + voice to use.
 # Provider is "volc" (Volcengine / Doubao) or "minimax" (MiniMax).

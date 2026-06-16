@@ -204,11 +204,30 @@ def _make_gate_map() -> dict[str, Any]:
     }
 
 
+def _set_out(cfg, out) -> None:
+    """Phase 4: set output_dir + the derived episodes/state/reports subdirs on
+    a (MagicMock) config stub and create them on disk.
+
+    The runner now reads cfg.vault.episodes_dir/state_dir/reports_dir and wraps
+    them in Path(); a bare MagicMock auto-creates those as child MagicMocks,
+    and Path(MagicMock()) raises TypeError at runner entry. Setting real string
+    values + mkdir mirrors lib.config._validate_vault_paths so every
+    output_dir-assigning test exercises the real subdir layout.
+    """
+    out = Path(out)
+    cfg.vault.output_dir = str(out)
+    cfg.vault.episodes_dir = str(out / "episodes")
+    cfg.vault.state_dir = str(out / "state")
+    cfg.vault.reports_dir = str(out / "reports")
+    for d in (out, out / "episodes", out / "state", out / "reports"):
+        d.mkdir(parents=True, exist_ok=True)
+
+
 def _make_config_stub() -> MagicMock:
     """A minimal PodcastTeamConfig-shaped object the runner can read."""
     cfg = MagicMock()
     cfg.vault = MagicMock()
-    cfg.vault.output_dir = "/tmp/ief-podcast-studio-runner-test-output"
+    _set_out(cfg, "/tmp/ief-podcast-studio-runner-test-output")
     cfg.tts = MagicMock()
     return cfg
 
@@ -836,7 +855,8 @@ def test_assemble_briefs_hands_avoid_memo_to_step7_davinci(tmp_path):
             }
         }
     }
-    write_store(output_dir, store)
+    (output_dir / "state").mkdir(parents=True, exist_ok=True)
+    write_store(output_dir / "state", store)
 
     # Pre-stage a magnitude verdict WITHOUT a `recent_anchors` field —
     # the legacy channel is gone. magnitude=medium → airtime=segment,
@@ -883,7 +903,7 @@ def test_assemble_briefs_hands_avoid_memo_to_step7_davinci(tmp_path):
     fake.inspect_call = inspect
     gates = _make_gate_map()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
 
     result = run_pipeline(
         "morning",
@@ -973,7 +993,7 @@ def test_assemble_briefs_empty_memo_when_no_store(tmp_path):
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     # Sanity: no covered-ground.yaml exists on disk.
-    assert not cg_store_path(output_dir).exists()
+    assert not cg_store_path(output_dir / "state").exists()
 
     scratch = _bootstrap_scratch(tmp_path)
     (scratch / "magnitude-verdict.json").write_text(
@@ -991,7 +1011,7 @@ def test_assemble_briefs_empty_memo_when_no_store(tmp_path):
     fake = _FakeDispatch()
     gates = _make_gate_map()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
 
     result = run_pipeline(
         "morning",
@@ -1060,7 +1080,8 @@ def test_avoid_memo_does_not_suppress_opinions(tmp_path):
             }
         }
     }
-    write_store(output_dir, store)
+    (output_dir / "state").mkdir(parents=True, exist_ok=True)
+    write_store(output_dir / "state", store)
 
     (scratch / "magnitude-verdict.json").write_text(
         json.dumps({"verdicts": [
@@ -1076,7 +1097,7 @@ def test_avoid_memo_does_not_suppress_opinions(tmp_path):
     fake = _FakeDispatch()
     gates = _make_gate_map()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
 
     result = run_pipeline(
         "morning",
@@ -1340,7 +1361,7 @@ def test_production_gate_map_no_tts_reaches_publish(tmp_path):
 
     fake = _FakeDispatch()  # writes stubs only for not-yet-present artifacts
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -1359,7 +1380,7 @@ def test_production_gate_map_no_tts_reaches_publish(tmp_path):
         f"{result!r} — failed_step={result.get('failed_step')!r}"
     )
     # The reader .md must have been published from the finalize body.
-    published = list(output_dir.glob("2026-06-14-*.md"))
+    published = list((output_dir / "episodes").glob("2026-06-14-*.md"))
     assert published, f"no .md published to {output_dir}; result={result!r}"
 
 
@@ -1472,7 +1493,7 @@ def test_distiller_failure_does_not_halt(tmp_path):
     fake.fail_steps = {"coveredground-distill"}
 
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -1494,7 +1515,7 @@ def test_distiller_failure_does_not_halt(tmp_path):
     )
 
     # The published .md must exist on disk — the episode was preserved.
-    published = list(output_dir.glob("2026-06-14-*.md"))
+    published = list((output_dir / "episodes").glob("2026-06-14-*.md"))
     assert published, (
         f"published .md must exist even when the distiller fails; "
         f"result={result!r}; output_dir contents={list(output_dir.iterdir())!r}"
@@ -1502,7 +1523,7 @@ def test_distiller_failure_does_not_halt(tmp_path):
 
     # The stance card must exist on disk — the post-publish distiller
     # failure does not affect the card write.
-    stance_cards = list(output_dir.glob("2026-06-14-*.stance.yaml"))
+    stance_cards = list((output_dir / "episodes").glob("2026-06-14-*.stance.yaml"))
     assert stance_cards, (
         f"stance card must exist even when the distiller fails; "
         f"output_dir contents={list(output_dir.iterdir())!r}"
@@ -1534,7 +1555,7 @@ def test_failsoft_only_exempts_marked_station(tmp_path):
     fake.write_artifact = False
 
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -1635,11 +1656,11 @@ def test_coveredground_update_writes_store(tmp_path):
     fake.inspect_call = _inspect_distill
 
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     # Sanity precondition: no store file exists yet.
-    assert not cg_store_path(output_dir).exists()
+    assert not cg_store_path(output_dir / "state").exists()
 
     result = run_pipeline(
         "morning",
@@ -1657,17 +1678,27 @@ def test_coveredground_update_writes_store(tmp_path):
         f"got {result!r}"
     )
 
-    # The store must have been written to output_dir by the
+    # The store must have been written to state/ by the
     # coveredground-update station.
-    store_file = cg_store_path(output_dir)
+    store_file = cg_store_path(output_dir / "state")
     assert store_file.exists(), (
         f"coveredground-update must write covered-ground.yaml to "
-        f"{output_dir}, but the file does not exist. "
+        f"{output_dir}/state, but the file does not exist. "
         f"output_dir contents={list(output_dir.iterdir())!r}"
     )
 
+    # Phase 4 boundary (Task 2-tests step 3): topic_log.yaml stays at output_dir
+    # ROOT — the vendored podcast-studio-prep shares it, so it must NOT move into
+    # a subdir. Assert it stayed put AND did not leak into state/.
+    assert (output_dir / "topic_log.yaml").exists(), (
+        "topic_log.yaml must stay at output_dir root (vendored-prep boundary)"
+    )
+    assert not (output_dir / "state" / "topic_log.yaml").exists(), (
+        "topic_log.yaml must NOT move into state/ (it is not continuity-state the runner owns)"
+    )
+
     # The store must contain the apparatus anchors.
-    store = load_store(output_dir)
+    store = load_store(output_dir / "state")
     stored_anchors = set(store.get("anchors", {}).keys())
     for anchor in apparatus["anchors"]:
         assert anchor in stored_anchors, (
@@ -1709,7 +1740,8 @@ def test_stance_write_includes_apparatus_used(tmp_path):
             }
         }
     }
-    write_store(output_dir, store)
+    (output_dir / "state").mkdir(parents=True, exist_ok=True)
+    write_store(output_dir / "state", store)
 
     # The finalize body MUST contain the hot_anchor verbatim so the
     # deterministic extraction finds it. (The store-known anchors ∩
@@ -1755,7 +1787,7 @@ def test_stance_write_includes_apparatus_used(tmp_path):
 
     fake = _FakeDispatch()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -1775,7 +1807,7 @@ def test_stance_write_includes_apparatus_used(tmp_path):
 
     # The stance card must carry `apparatus_used` containing the
     # hot anchor that was both in the store AND in the finalize body.
-    cards = load_cards(output_dir)
+    cards = load_cards(output_dir / "episodes")
     matching = [c for c in cards if c.get("episode", {}).get("date") == today_str]
     assert matching, (
         f"stance card for {today_str} must exist; cards={cards!r}"
@@ -1916,7 +1948,7 @@ def test_scorecard_station_writes_verdict_and_md(tmp_path):
 
     fake = _FakeDispatch()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -1945,9 +1977,9 @@ def test_scorecard_station_writes_verdict_and_md(tmp_path):
         f"scorecard-verdict must carry `passed`; got keys={list(verdict.keys())!r}"
     )
 
-    # Human-readable scorecard lands in output_dir (cleanup preserves
+    # Human-readable scorecard lands in reports/ (cleanup preserves
     # output_dir — cleanup only nukes scratch).
-    md_path = output_dir / "2026-06-14-morning.scorecard.md"
+    md_path = output_dir / "reports" / "2026-06-14-morning.scorecard.md"
     assert md_path.exists() and md_path.stat().st_size > 0, (
         f"scorecard.md must be written to output_dir as "
         f"{{date}}-{{show}}.scorecard.md; "
@@ -2016,7 +2048,7 @@ def test_scorecard_advisory_does_not_halt_on_red(tmp_path):
 
     fake = _FakeDispatch()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -2038,7 +2070,7 @@ def test_scorecard_advisory_does_not_halt_on_red(tmp_path):
     )
 
     # Published .md still lands in output_dir (advisory preserves the run).
-    published = list(output_dir.glob("2026-06-14-*.md"))
+    published = list((output_dir / "episodes").glob("2026-06-14-*.md"))
     assert published, (
         f"advisory mode must preserve the published .md even on hard-gate "
         f"red; output_dir={list(output_dir.iterdir())!r}"
@@ -2100,7 +2132,7 @@ def test_scorecard_enforce_halts_on_red(tmp_path):
 
     fake = _FakeDispatch()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -2170,7 +2202,8 @@ def test_scorecard_reads_preupdate_store(tmp_path):
             }
         }
     }
-    write_store(output_dir, store)
+    (output_dir / "state").mkdir(parents=True, exist_ok=True)
+    write_store(output_dir / "state", store)
 
     # Build a clean finalize body (no verbatim repeat), but bake the
     # hot_anchor into the broadcast script so cross-period fires.
@@ -2189,7 +2222,7 @@ def test_scorecard_reads_preupdate_store(tmp_path):
 
     fake = _FakeDispatch()
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(
@@ -2258,7 +2291,7 @@ def test_scorecard_judge_failure_advisory(tmp_path):
     fake.fail_steps = {"scorecard"}
 
     config = _make_config_stub()
-    config.vault.output_dir = str(output_dir)
+    _set_out(config, output_dir)
     plugin_root = Path(__file__).resolve().parent.parent.parent
 
     result = run_pipeline(

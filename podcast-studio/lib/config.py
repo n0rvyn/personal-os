@@ -36,6 +36,14 @@ class VaultConfig:
     subjective_dir: str
     news_dir: str
     output_dir: str
+    # Phase 4: derived subdirs of output_dir (NOT YAML keys). episodes/ holds
+    # listener artifacts (.md/.mp3/.stance.yaml), state/ holds continuity
+    # (covered-ground.yaml/character-bible.md/throughline), reports/ holds
+    # scorecards. Computed + auto-created in _validate_vault_paths AFTER the
+    # output_dir fail-closed existence check. Non-default — must precede `root`.
+    episodes_dir: str
+    state_dir: str
+    reports_dir: str
     # Optional Obsidian/PKOS vault root — the base for recall + the directory
     # contract (`<root>/99-System/10-Directory-Contract.md`). Distinct from
     # subjective_dir. When unset, recall falls back to subjective_dir.
@@ -211,6 +219,16 @@ def _validate_vault_paths(vault_raw: dict[str, str]) -> VaultConfig:
         if not path.is_dir():
             raise ConfigError(f"vault.{key} is not a directory: {path}")
         resolved[key] = str(path)
+
+    # Phase 4: derive episodes/state/reports subdirs from the now-validated
+    # output_dir and auto-create them. This MUST run AFTER the existence loop
+    # above — mkdir(parents=True) on output_dir/<sub> would otherwise create a
+    # missing output_dir and defeat the fail-closed contract.
+    out_path = Path(resolved["output_dir"])
+    for sub in ("episodes", "state", "reports"):
+        d = out_path / sub
+        d.mkdir(parents=True, exist_ok=True)
+        resolved[f"{sub}_dir"] = str(d)
 
     # Optional vault.root — type-validated when present, but NOT existence-checked:
     # recall degrades gracefully (empty) on a missing root, so this stays lenient.

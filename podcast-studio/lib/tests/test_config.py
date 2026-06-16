@@ -67,6 +67,59 @@ def test_valid_config_resolves(tmp_path, monkeypatch):
     assert cfg.tts.host_voice == "BV001_streaming"
 
 
+def test_vault_subdirs_derived_and_created(tmp_path, monkeypatch):
+    """Phase 4: a loaded config exposes episodes_dir/state_dir/reports_dir,
+    each resolving to <output_dir>/episodes|state|reports and existing on disk
+    after load (derived + auto-created — NOT a new YAML key)."""
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+
+    out = Path(dirs['output_dir'])
+    assert cfg.vault.episodes_dir == str(out / "episodes")
+    assert cfg.vault.state_dir == str(out / "state")
+    assert cfg.vault.reports_dir == str(out / "reports")
+    for d in (cfg.vault.episodes_dir, cfg.vault.state_dir, cfg.vault.reports_dir):
+        assert Path(d).exists() and Path(d).is_dir(), f"subdir not created: {d}"
+
+
+def test_output_dir_still_fail_closed(tmp_path, monkeypatch):
+    """Phase 4 regression: deriving subdirs must NOT weaken the output_dir
+    fail-closed contract. A missing output_dir still raises naming
+    vault.output_dir, and the subdir mkdir must NOT create the missing
+    output_dir (mkdir runs AFTER existence validation)."""
+    cfg_path = tmp_path / "config.yaml"
+    subj = tmp_path / "subjective"; subj.mkdir()
+    news = tmp_path / "news"; news.mkdir()
+    missing_out = tmp_path / "no-such-output"  # deliberately not created
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {subj}
+          news_dir: {news}
+          output_dir: {missing_out}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "output_dir" in str(exc.value)
+    assert not missing_out.exists(), "fail-closed violated: output_dir was created by subdir mkdir"
+
+
 def test_missing_file_raises(tmp_path, monkeypatch):
     missing = tmp_path / "does-not-exist.yaml"
     monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(missing))

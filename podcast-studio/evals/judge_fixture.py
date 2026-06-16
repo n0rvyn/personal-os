@@ -34,6 +34,11 @@ from lib.magnitude import (                 # noqa: E402
 )
 
 OUTPUT_DIR = "/Users/norvyn/Code/Content/Podcasts"
+# Phase 4: episode bodies + stance cards live in the episodes/ subdir
+# (load_cards / gather_recent_bodies read episode artifacts, which migrated
+# out of the flat root). Reading OUTPUT_DIR root post-migration silently
+# returns [] — point both readers at episodes/.
+EPISODES_DIR = str(Path(OUTPUT_DIR) / "episodes")
 TODAY = "2026-06-13"
 
 # The 5 candidates 达芬奇 surfaced on 6/13 (from brief-A approved_topics).
@@ -58,7 +63,7 @@ TODAY_NEWS = """- 美伊停火崩溃边缘：美国再次空袭伊朗南部军�
 def _prior_cards() -> list[dict]:
     """All stance cards strictly BEFORE today (the 6/13 card doesn't exist at
     judge time in the real pipeline; exclude it for the fixture)."""
-    return [c for c in load_cards(OUTPUT_DIR)
+    return [c for c in load_cards(EPISODES_DIR)
             if (c.get("episode", {}) or {}).get("date", "") < TODAY]
 
 
@@ -77,7 +82,7 @@ def build(variant: str = "baseline") -> dict:
         candidates=CANDIDATES,
         today=TODAY,
         window_days=14,
-        recent_bodies=gather_recent_bodies(OUTPUT_DIR, TODAY, window_days=14),
+        recent_bodies=gather_recent_bodies(EPISODES_DIR, TODAY, window_days=14),
     )
     judge_in["today_news"] = (
         TODAY_NEWS_BREAKTHROUGH if variant == "breakthrough" else TODAY_NEWS

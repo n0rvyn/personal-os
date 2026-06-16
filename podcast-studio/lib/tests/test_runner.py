@@ -2569,3 +2569,75 @@ def test_finalize_broadcast_resolver_prefers_state_bible_when_present(tmp_path):
             f"{step_name} must resolve the real state/character-bible.md when "
             f"present (voice-unification consumption); prompt lacked {state_bible}"
         )
+
+
+# ---------- regression pins: 2026-06-16 audit fixes (L2 dispatch / L4 continuity) ----------
+
+def test_dispatcherror_becomes_structured_halt_not_crash(tmp_path):
+    """L2 regression: a DispatchError raised by the dispatch primitive
+    (non-whitelisted agent / artifact path-traversal / missing plugin_root)
+    must be converted to a structured {status:halted, failed_step} envelope,
+    NOT propagate and crash the run. Pre-fix `_run_dispatch` caught only
+    TypeError, so DispatchError escaped to an unstructured CLI exit. Routed
+    through the SERIAL `collect` station (step 5) so the serial _run_agent_step
+    ok-check path is exercised, not just the parallel fan-out path."""
+    from lib.runner import run_pipeline
+    from lib.dispatch import DispatchError
+
+    def raising_dispatch(agent_name, user_prompt, scratch_dir, expected_artifact, **kwargs):
+        step_name = str(kwargs.get("step_name") or expected_artifact)
+        if "collect" in step_name:
+            raise DispatchError(f"agent {agent_name!r} not in whitelist")
+        p = Path(str(scratch_dir)) / expected_artifact
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("stub body", encoding="utf-8")
+        return {"ok": True, "reason": "stub", "artifact_path": str(p)}
+
+    scratch = _bootstrap_scratch(tmp_path)
+    gates = _make_gate_map()
+    config = _make_config_stub()
+
+    # Must RETURN a halt dict (not raise). Pre-fix this call raised DispatchError.
+    result = run_pipeline(
+        "morning", date="2026-06-14",
+        dispatch=raising_dispatch, gates=gates, config=config, scratch_dir=scratch,
+    )
+    assert isinstance(result, dict)
+    assert result.get("status") == "halted", f"DispatchError must halt, got {result!r}"
+    assert result.get("failed_step") == "collect", (
+        f"halt must name the serial station, got {result.get('failed_step')!r}"
+    )
+    assert "refused" in result.get("reason", ""), result
+
+
+def test_continuity_read_corrupt_card_halts_not_crash(tmp_path):
+    """L4 regression: a corrupt stance-card YAML must make the continuity-read
+    code bridge HALT with failed_step='continuity-read', NOT crash the runner
+    with an unhandled exception. Pre-fix `_run_code_step` ran `_continuity_read`
+    unguarded, so the ValueError load_cards raises on malformed YAML escaped."""
+    from lib.runner import run_pipeline
+
+    config = _make_config_stub()
+    _set_out(config, tmp_path / "out")
+    scratch = _bootstrap_scratch(tmp_path)
+
+    # Stage a syntactically-broken stance card. Past date so the step-3a
+    # same-day tripwire for 2026-06-14 does not fire first. Tab-indent is
+    # invalid YAML → load_cards raises ValueError naming the file.
+    episodes = Path(config.vault.episodes_dir)
+    (episodes / "2026-06-10-morning.stance.yaml").write_text(
+        "date: 2026-06-10\nbets:\n\t- broken tab indent is invalid yaml\n",
+        encoding="utf-8",
+    )
+
+    fake = _FakeDispatch()
+    gates = _make_gate_map()
+    result = run_pipeline(
+        "morning", date="2026-06-14",
+        dispatch=fake, gates=gates, config=config, scratch_dir=scratch,
+    )
+    assert isinstance(result, dict)
+    assert result.get("status") == "halted", f"corrupt card must halt, got {result!r}"
+    assert result.get("failed_step") == "continuity-read", (
+        f"halt must name continuity-read, got {result.get('failed_step')!r}"
+    )

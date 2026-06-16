@@ -1042,21 +1042,9 @@ def _run_dispatch(
     if tag:
         step_name = f"{step_name}:{tag}"
 
+    from lib.dispatch import DispatchError  # leaf import (mirrors _default_dispatch)
+
     try:
-        result = dispatch_fn(
-            step["agent"],
-            user_prompt,
-            scratch,
-            artifact_name,
-            step_name=step_name,
-            plugin_root=plugin_root,
-            timeout=timeout,
-        )
-    except TypeError as e:
-        # Some test fakes don't accept `plugin_root=`/`timeout=`/`step_name=`.
-        # Retry with just the positionals + step_name, then just the
-        # positionals. The real dispatch is `_default_dispatch`, which
-        # accepts all kwargs, so only narrow-signature test fakes hit these.
         try:
             result = dispatch_fn(
                 step["agent"],
@@ -1064,14 +1052,43 @@ def _run_dispatch(
                 scratch,
                 artifact_name,
                 step_name=step_name,
+                plugin_root=plugin_root,
+                timeout=timeout,
             )
-        except TypeError:
-            result = dispatch_fn(
-                step["agent"],
-                user_prompt,
-                scratch,
-                artifact_name,
-            )
+        except TypeError as e:
+            # Some test fakes don't accept `plugin_root=`/`timeout=`/`step_name=`.
+            # Retry with just the positionals + step_name, then just the
+            # positionals. The real dispatch is `_default_dispatch`, which
+            # accepts all kwargs, so only narrow-signature test fakes hit these.
+            try:
+                result = dispatch_fn(
+                    step["agent"],
+                    user_prompt,
+                    scratch,
+                    artifact_name,
+                    step_name=step_name,
+                )
+            except TypeError:
+                result = dispatch_fn(
+                    step["agent"],
+                    user_prompt,
+                    scratch,
+                    artifact_name,
+                )
+    except DispatchError as e:
+        # Guard failure (non-whitelisted agent / artifact path-traversal /
+        # missing plugin_root): dispatch_persona RAISES rather than returning
+        # {ok:False}. Convert to the same failure-dict shape the timeout /
+        # non-zero-exit paths return, so it flows through the runner's halt
+        # path with a named failed_step instead of crashing the whole run
+        # (plan threat model: a dispatch guard failure → deny-default halt,
+        # not an unstructured CLI exit 2).
+        artifact_path = Path(str(scratch)) / artifact_name
+        return {
+            "ok": False,
+            "reason": f"dispatch refused for persona {step.get('agent')!r}: {e}",
+            "artifact_path": str(artifact_path),
+        }
     return result
 
 
@@ -1217,7 +1234,23 @@ def _run_code_step(
         return None  # the gate itself is the tripwire
 
     if name == "continuity-read":
-        continuity = _continuity_read(ctx)
+        # Corrupt stance-card / throughline YAML makes load_cards /
+        # load_obsessions raise (CLAUDE.md: malformed cards raise, never
+        # fake-success). Without this guard the raw exception escapes the
+        # runner as an unstructured crash; convert it to the standard halt
+        # envelope with a named failed_step. NOT fail-soft — silently
+        # degrading to empty continuity would drop a due bet's settlement,
+        # so the user must fix the corrupt file before the run proceeds.
+        try:
+            continuity = _continuity_read(ctx)
+        except Exception as e:  # noqa: BLE001 — surface as a named halt, not a crash
+            return {
+                "status": "halted",
+                "failed_step": "continuity-read",
+                "reason": (
+                    f"continuity read failed (corrupt stance/throughline data?): {e}"
+                ),
+            }
         ctx["continuity"] = continuity
         return scratch / "continuity.json"
 

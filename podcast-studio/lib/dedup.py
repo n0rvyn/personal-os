@@ -409,11 +409,25 @@ def check_cross_dup(
     if not hot:
         return {"ok": True, "reason": "no hot anchors", "score": 0.0, "hits": []}
 
-    # Substring in-script check. Use a single combined scan rather
-    # than per-anchor `name in script` — the latter is O(n*anchors)
-    # string scans; the former is one linear pass with a small set
-    # of needles.
-    hits = [name for name in hot if name in script]
+    # Whitespace-insensitive in-script presence check. The store's anchor
+    # NAMES are canonical (distiller-normalized, typically space-free CJK);
+    # the broadcast script can re-introduce spaces/newlines inside the same
+    # anchor ("1956 苏伊士 运河" vs the "1956苏伊士运河" key), which a raw
+    # `name in script` substring miss let slip through. Collapse ALL
+    # whitespace on both sides before comparing — CJK carries no word
+    # spacing, so this only closes the spacing/formatting gap.
+    #
+    # It does NOT add semantic matching: a genuine synonym/paraphrase of an
+    # anchor is DELIBERATELY out of scope. cross-dup is a LITERAL apparatus-
+    # presence check; fuzzy/embedding matching here would risk the
+    # temperature shield (CLAUDE.md: avoid_memo「targets reused apparatus …
+    # never the host's subjective judgments/bets」). The hit list reports the
+    # ORIGINAL (un-normalized) anchor name for the scorecard reader.
+    script_nows = re.sub(r"\s+", "", script)
+    hits = [
+        name for name in hot
+        if (nm := re.sub(r"\s+", "", name)) and nm in script_nows
+    ]
 
     score = len(hits) / len(hot) if hot else 0.0
     ok = not hits

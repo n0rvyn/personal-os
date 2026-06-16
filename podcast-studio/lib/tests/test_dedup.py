@@ -259,3 +259,32 @@ def test_temperature_shield_repeated_opinion_not_dup():
         "wording must NOT be flagged as intra-dup"
     )
     assert result["hits"] == []
+
+
+# ---------- regression pin: 2026-06-16 audit fix (L3 cross-dup whitespace) ----------
+
+def test_cross_hot_anchor_spaced_in_script_flagged():
+    """L3 regression: a hot anchor whose canonical store key is space-free
+    ('1956苏伊士运河') must still be caught when the broadcast script re-introduces
+    spaces inside it ('1956 苏伊士 运河'). The pre-fix raw `name in script`
+    substring missed this; whitespace is collapsed on both sides before the
+    check. Reported hit is the ORIGINAL (un-normalized) key. Fails on old code."""
+    from lib.dedup import check_cross_dup
+    store = {
+        "anchors": {
+            "1956苏伊士运河": {
+                "first_used": "2026-06-10", "last_used": "2026-06-13", "count": 3,
+                "episodes": [
+                    {"date": "2026-06-10", "show": "morning"},
+                    {"date": "2026-06-12", "show": "evening"},
+                    {"date": "2026-06-13", "show": "morning"},
+                ],
+            },
+        }
+    }
+    spaced = check_cross_dup("回看 1956 苏伊士 运河 当年的危机", store, "2026-06-13")
+    assert spaced["ok"] is False, "spaced hot anchor must flag"
+    assert "1956苏伊士运河" in spaced["hits"], "hit must report the original key"
+    # An anchor genuinely absent from the script must still pass.
+    absent = check_cross_dup("今天聊一个与历史完全无关的全新话题", store, "2026-06-13")
+    assert absent["ok"] is True

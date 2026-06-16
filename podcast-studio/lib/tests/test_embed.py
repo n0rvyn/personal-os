@@ -178,3 +178,49 @@ def test_macos_detection_false_when_helper_missing(tmp_path):
     # tmp_path has no tools/embed.swift → helper is unavailable
     result = embed._helper_available(plugin_root=str(tmp_path))
     assert result is False
+
+
+# ---------- regression pins: 2026-06-16 audit fix (L5 silent-degradation visibility) ----------
+
+def test_resolved_helper_failure_warns_once(tmp_path):
+    """L5 regression: when a helper binary RESOLVES on disk but fails to exec
+    (the arm64-host case: the committed x86_64 tools/embed passes os.access(X_OK)
+    but the kernel rejects the exec), embed_text returns None and similarity
+    degrades to n-gram — surface that ONCE via RuntimeWarning instead of silently.
+    Pre-fix code swallowed the failure with no signal."""
+    import stat
+    import warnings as _w
+    from lib import embed
+
+    embed._FALLBACK_WARNED = False  # reset module-level once-guard
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    fake = tools / "embed"
+    fake.write_text("#!not-a-real-interpreter\n")  # bad shebang → exec fails
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        out1 = embed.embed_text("测试文本", plugin_root=str(tmp_path))
+        out2 = embed.embed_text("第二次调用", plugin_root=str(tmp_path))  # must NOT warn again
+
+    assert out1 is None and out2 is None, "a failed helper exec must return None"
+    runtime = [w for w in caught if issubclass(w.category, RuntimeWarning) and "n-gram" in str(w.message)]
+    assert len(runtime) == 1, f"resolved-but-failed helper must warn exactly once, got {len(runtime)}"
+
+
+def test_no_helper_present_is_silent(tmp_path):
+    """L5: the EXPECTED-absence path (no helper on disk at all) must stay silent —
+    only a RESOLVED-but-failed helper warns. tmp_path has no tools/embed[.swift]."""
+    import warnings as _w
+    from lib import embed
+
+    embed._FALLBACK_WARNED = False
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        out = embed.embed_text("测试", plugin_root=str(tmp_path))
+
+    assert out is None
+    assert not [w for w in caught if issubclass(w.category, RuntimeWarning)], (
+        "absent helper is expected, not a surprise — must not warn"
+    )

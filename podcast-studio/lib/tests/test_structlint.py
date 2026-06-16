@@ -224,6 +224,35 @@ def test_woven_judgment_not_flagged_as_betting():
     assert result.get("hits", []) == []
 
 
+# ---------- regression pins: 2026-06-16 audit fixes (B1 draft / L1 betting) ----------
+
+def test_draft_header_no_space_cjk_flagged():
+    """B1 regression: `# 草稿A` (no space before the label) must be flagged.
+    The pre-fix regex used an ASCII `\\b`, which does NOT fire between two Han
+    chars, so a no-space draft label leaked through. Fails on the old regex."""
+    from lib.structlint import check_no_draft_marker
+    assert check_no_draft_marker("# 草稿A\n正文")["ok"] is False, "no-space 草稿A must flag"
+    assert check_no_draft_marker("# 草稿B — 今日\n正文")["ok"] is False
+
+
+def test_genuine_caogao_title_not_false_flagged():
+    """B1: a genuine H1 that contains 草稿 followed by another Han char
+    (`# 草稿的来历`) must NOT be flagged — the negative lookahead only fires on
+    the working-label forms (草稿 + non-Han / space / end-of-line)."""
+    from lib.structlint import check_no_draft_marker
+    assert check_no_draft_marker("# 草稿的来历\n一篇随笔")["ok"] is True
+
+
+def test_betting_section_single_hash_h1_flagged():
+    """L1 regression: a single-`#` H1 betting heading (`# 我下注`) must be
+    flagged. The pre-fix `^##` required two hashes and missed the H1 level;
+    `^#+` covers H1–H6. Fails on the old regex (which never matched single-#)."""
+    from lib.structlint import check_no_betting_section
+    assert check_no_betting_section("# 我下注什么\nx")["ok"] is False, "single-# H1 我下注 must flag"
+    # A 我下注 heading at ANY level is a banned betting section (CLAUDE.md).
+    assert check_no_betting_section("### ⑤ 我下注什么\nx")["ok"] is False
+
+
 # ---------- check_duration: measures 念稿, not .md ----------
 
 def test_duration_measures_script_not_md():

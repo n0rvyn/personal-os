@@ -49,16 +49,21 @@ BROADCAST_MIN_CHARS: int = SPOKEN_CHARS_PER_MIN * MIN_BROADCAST_MINUTES
 # Raw string with backslash-s so `re.MULTILINE` lines are matched.
 _SECTION_HEADER_RE = re.compile(r"^##\s*[①②③④⑤]", re.MULTILINE)
 
-# 草稿头: H1 标题里出现 `草稿` 字样的所有形式 (`# 草稿 C — …`, `# 草稿 A …`)。
+# 草稿头: H1 标题里出现 `草稿` 工作标签的所有形式 (`# 草稿 C — …`, `# 草稿A`, `# 草稿`)。
 # This catches the LLM-tendency to leak its own working label into the body.
-_DRAFT_HEADER_RE = re.compile(r"^#\s*草稿\b", re.MULTILINE)
+# CJK-correct token boundary: ASCII `\b` does NOT fire between two Han chars,
+# so `# 草稿A` (no space) slipped through. A negative lookahead "not followed
+# by another Han char" is the Unicode equivalent — it still ignores a genuine
+# `# 草稿的来历` essay title (的 is Han) while catching 草稿A / 草稿<space> / 草稿<EOL>.
+_DRAFT_HEADER_RE = re.compile(r"^#\s*草稿(?![一-鿿])", re.MULTILINE)
 
-# 下注段: H2 段标题里出现 `我下注`(`## ⑤ 我下注什么` / `## 我下注`)。
-# 只禁**独立标题段**;织入正文里的可证伪判断(`我的判断是…`)不在此命中。
-# Note: \b is ASCII-only — for CJK we just match `我下注` as a substring on the
-# section header line. Bodies with no `## …我下注…` line still pass (no false
-# positives on woven judgments, which use `我的判断是…`).
-_BETTING_SECTION_RE = re.compile(r"^##\s*.*我下注", re.MULTILINE)
+# 下注段: ATX 段标题里出现 `我下注`(`## ⑤ 我下注什么` / `### 我下注` / `## 我下注`)。
+# 只禁**独立标题段**(任意 ATX 层级);织入正文里的可证伪判断(`我的判断是…`,
+# 无标题)不在此命中。`^#+` 覆盖 H1–H6:一个 `### 我下注` 子标题同样是 CLAUDE.md
+# 明令禁止的独立下注段(「No 我下注 section … woven into the body」),旧的 `^##`
+# 既漏判单 `#` 的 H1,语义上也无理由放过更深层级的下注标题。Bodies with no
+# `#…我下注…` heading still pass (woven judgments use `我的判断是…` → no match).
+_BETTING_SECTION_RE = re.compile(r"^#+\s*.*我下注", re.MULTILINE)
 
 
 # ---- Gates ----

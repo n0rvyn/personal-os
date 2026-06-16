@@ -33,6 +33,7 @@ import os
 import platform
 import shutil
 import subprocess  # noqa: F401  (referenced via exception below)
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
 
@@ -40,6 +41,43 @@ from typing import Any, Callable, Optional, Sequence, Union
 # The default subprocess runner. Used to detect "test injected a fake"
 # so we skip the on-disk helper check in that case.
 _DEFAULT_RUNNER = subprocess.run
+
+
+# One-time fallback-warning guard. When a helper binary/source RESOLVES on disk
+# but fails to produce a vector at exec time — the classic case being the
+# committed x86_64 `tools/embed` binary on an arm64 host without Rosetta, which
+# passes `os.access(X_OK)` but raises OSError "Bad CPU type in executable" —
+# `embed_text` returns None and `similarity` silently degrades to n-gram
+# Jaccard. The covered-ground store then records weaker (literal-bigram)
+# signals indefinitely with no operator signal. Warn ONCE per process so the
+# degradation is visible without spamming (similarity calls embed_text twice
+# per pair, and the store calls similarity many times per run).
+_FALLBACK_WARNED = False
+
+
+def _warn_embed_fallback(helper: str) -> None:
+    """Emit a one-time RuntimeWarning when a RESOLVED helper fails to run.
+
+    Only fires on the production path when a helper was found on disk but
+    `_invoke_runner` returned None (arch mismatch / missing swift / timeout /
+    non-zero exit / malformed JSON). The "no helper at all" path returns
+    earlier WITHOUT warning — that absence is expected (non-macOS / unbuilt),
+    not a silent surprise.
+    """
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    warnings.warn(
+        f"embed: helper resolved ({helper}) but produced no vector — falling "
+        f"back to n-gram Jaccard for ALL similarity this run. Likely an "
+        f"architecture mismatch (e.g. the committed x86_64 tools/embed on an "
+        f"arm64 host without Rosetta). Rebuild for this host with "
+        f"`swiftc tools/embed.swift -o tools/embed` to restore the "
+        f"NLContextualEmbedding path.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -50,20 +88,21 @@ _DEFAULT_RUNNER = subprocess.run
 # overlap without a tokenizer). 3-grams over-segment short phrases.
 _NGRAM_N = 2
 
-# Reskin detection threshold: a candidate anchor is folded into an existing
-# one when their similarity is at or above this value. Documentation mirror —
-# the operative constant is `lib.coveredground._RESKIN_THRESHOLD`.
+# Reskin detection threshold lives in ONE place: `lib.coveredground._RESKIN_THRESHOLD`.
+# This module intentionally does NOT define its own copy — an earlier dead
+# `_RESKIN_THRESHOLD = 0.93` here was unused (no reader inside embed.py, no
+# importer elsewhere) and had drifted from BOTH the plan's 0.82 and the
+# operative coveredground value; removed to keep a single source of truth.
 #
-# Raised to 0.93 after Phase-2 e2e measurement (2026-06-14): at 0.82,
-# distinct same-family historical anchors FALSE-MERGED — cos(1956苏伊士运河危机,
-# 1973石油危机)=0.891 wrongly collapsed two anchors, deleting 石油 as a
-# trackable anchor. Critically, a genuine reskin (印刷术/活字印刷术=0.884)
-# scores LOWER than that false-merge — so NO single threshold separates
-# "reskin of same anchor" from "different anchor, same family" at phrase
-# level. Resolution: merge only near-identical (exact match = 1.0 still
-# merges); the distiller's consistent anchor naming + count-based staleness
-# carry the dedup. Phrase-level embedding reskin is a known-weak refinement.
-_RESKIN_THRESHOLD = 0.93
+# Rationale for the operative value (Phase-2 e2e measurement, 2026-06-14):
+# 0.82 FALSE-MERGED distinct same-family historical anchors — cos(1956苏伊士
+# 运河危机, 1973石油危机)=0.891 wrongly collapsed two anchors, deleting 石油 as a
+# trackable anchor. Critically, a genuine reskin (印刷术/活字印刷术=0.884) scores
+# LOWER than that false-merge — so NO single threshold separates "reskin of same
+# anchor" from "different anchor, same family" at phrase level. Resolution: merge
+# only near-identical (exact match = 1.0 still merges); the distiller's consistent
+# anchor naming + count-based staleness carry the dedup. Phrase-level embedding
+# reskin is a known-weak refinement.
 
 # Default subprocess timeout for the Swift helper. A short Chinese text
 # embeds in well under a second; 30s covers cold asset load on first run.
@@ -240,7 +279,13 @@ def embed_text(
     else:
         argv = [helper]
 
-    return _invoke_runner(runner, argv, text, timeout)
+    result = _invoke_runner(runner, argv, text, timeout)
+    if result is None:
+        # A helper RESOLVED on disk but produced no vector — surface the
+        # silent degradation once (the "helper is None" branch above already
+        # returned for the expected no-helper case, without warning).
+        _warn_embed_fallback(helper)
+    return result
 
 
 def _invoke_runner(

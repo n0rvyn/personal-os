@@ -217,7 +217,7 @@ Expected: 收集到且全 FAIL(缺模块),无语法错。
 1. `store_path(output_dir)` → `output_dir/covered-ground.yaml`,realpath 断言越界 raise(照抄 `bible.bible_path`,改文件名)。
 2. `_STORE_FILENAME="covered-ground.yaml"`;`load_store(output_dir)`:缺/空文件 → `{"anchors":{}}`;`yaml.safe_load`,解析失败 → `{"anchors":{}}`(fail-soft)。
 3. `write_store(output_dir, store)`:原子 temp+`os.replace`+错误删 temp(照抄 `bible.write_bible`,`yaml.safe_dump(allow_unicode=True, sort_keys=False)`)。
-4. `is_stale(entry, today, *, window_days=14)`:解析 `episodes` 的日期;`count_in_window>=3` OR `distinct_episodes_in_last_3>=2` → True。最近 3 期按 episodes 排序的末 3 个 episode 日期界定。
+4. `is_stale(entry, today, *, window_days=14)`:解析 `episodes` 的日期;`count_in_window>=3` OR `distinct_episodes_in_last_3>=2` → True。最近 3 期按 episodes 排序的末 3 个 episode 日期界定。**实现补强(2026-06-14,plan 回填同步):recency 谓词额外要求 last-3 日期全部落在 window 内、且最近一期在 `_RECENCY_LOOKBACK_DAYS=1` 天内 —— 堵住字面规则把「半年前用过两次」误判为本期热锚的漏洞(count 谓词已自带 window;recency 谓词是『频繁 AND 最近』守卫)。代码 docstring `lib/coveredground.is_stale` 为权威。**
 5. `update_store(store, anchors, date, episode, *, similarity_fn=None)`:对每个 anchor,先用 `similarity_fn`(默认 `lib.embed.similarity`)对比 store 既有 key,>v1 阈值(`_RESKIN_THRESHOLD=0.82`)→ 并入既有锚(count+1、last_used、episodes 追加);否则新建 `{first_used=date,last_used=date,count=1,episodes=[episode]}`。同 episode 不重复计数。
 6. `render_memo(store, today)`:筛 `is_stale` 的锚 → 输出人话避让备忘(列锚 + 「最近反复用过,本期能不用就不用、要用换个新的」);无过热 → 返回空串。**只列 apparatus 锚,绝不输出针对主观观点/下注的避让措辞(温度原则)。**
 7. 跑 Task 2-tests 转 PASS。

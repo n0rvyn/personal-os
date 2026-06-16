@@ -15,7 +15,7 @@ Multi-plugin marketplace for Personal OS data plugins: health intelligence, sess
 | tts-toolkit | audio | Unified TTS across Volcengine (Doubao) and MiniMax: voice-prefix routing, cross-vendor catalog, chunk+concat for long-form audio |
 | podcast-prep | intelligence | Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker |
 | novel-forge | writing | 中文网文连载创作引擎:立项→分卷章纲→逐章写→多镜头评审,故事圣经防连续性漂移,rubric 按定位调权;支持新写/续写/扩写/卡文/拆书等 8 模式 |
-| podcast-studio | audio | Claude 驱动的 6 人格播客生产管线(/podcast morning\|evening):达芬奇采集起草→老黑批判→快刀青衣润色定稿→钱钟书评分→卞旸口播→周杰伦 TTS,stance-card 连续性 + 每期 Character Bible,内含 vendored prep + TTS |
+| podcast-studio | audio | Claude 驱动的多人格播客生产管线(/podcast morning\|evening):达芬奇采集起草→量臣分量→老黑批判→快刀青衣润色定稿→钱钟书评分→工艺记分卡→卞旸口播,stance-card 连续性 + 每期 Character Bible + 跨期 covered-ground 去重;内含 vendored prep,TTS 走 personal-os fleet 的 tts skill |
 
 See [personal-os-spec.md](./docs/personal-os-spec.md) for the shared config contract and IEF exchange conventions.
 

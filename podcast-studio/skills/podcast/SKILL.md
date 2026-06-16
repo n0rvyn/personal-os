@@ -313,7 +313,7 @@ and injected into each persona dispatch by the runner's step-2 loader.
     `scores.total`, tiebreak higher `洞察`, then candidate order `稿-A < 稿-B <
     稿-C`.
 12. **定稿 (快刀青衣)** — dispatch `agents/kuaidao.md` consuming the chosen
-    polish + the verdict + the Character Bible (`{output_dir}/character-bible.md`).
+    polish + the verdict + the Character Bible (`{output_dir}/state/character-bible.md`).
     The bible is the **voice-unification reference**: the finalized script
     must speak in one consistent host voice that matches the bible's
     worldview / obsessions / verbal tics / evolving stances — regardless
@@ -365,7 +365,7 @@ and injected into each persona dispatch by the runner's step-2 loader.
 13. **口播稿 (卞旸)** — dispatch `agents/bianyang.md` consuming the finalize
     body via `lib/episode.load_finalize_body(finalize_json)` (NOT raw
     `body` — same double-escaped-newline normalization as step 15) + the Character Bible
-    (`{output_dir}/character-bible.md`). The bible is the voice reference:
+    (`{output_dir}/state/character-bible.md`). The bible is the voice reference:
     the spoken version must match the bible's verbal tics + rhythm
     (whatever wins in step 12 must sound like the same host in the ear).
     Output: a **plain-text** version of `body` — no markdown, no 裸编号,

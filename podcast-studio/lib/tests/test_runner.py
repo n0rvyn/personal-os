@@ -263,6 +263,18 @@ def test_runner_executes_steps_in_pipeline_order(monkeypatch, tmp_path):
     gates = _make_gate_map()
     config = _make_config_stub()
 
+    # B1: bible-distill (step 6) is a kind=="agent" station that dispatches
+    # ONLY when the corpus is non-empty (empty corpus → deterministic
+    # MINIMAL_BIBLE, no dispatch). Give it a real subjective_dir + corpus so
+    # it exercises the dispatch path and takes its place in the agent-station
+    # order (matching production, where the host's journal exists).
+    subjective = tmp_path / "subjective"
+    subjective.mkdir()
+    (subjective / "note.md").write_text(
+        "宿主的一条笔记：我反复在想系统是如何失效的。", encoding="utf-8"
+    )
+    config.vault.subjective_dir = str(subjective)
+
     result = run_pipeline(
         "morning",
         date="2026-06-14",
@@ -278,8 +290,8 @@ def test_runner_executes_steps_in_pipeline_order(monkeypatch, tmp_path):
         f"clean run must not halt, got {result!r}"
     )
 
-    # The agent steps (5, 5b, 7×3, 8×3, 9×3, 10, 12, 12a, 13, 14, 16a, 16)
-    # must all have been dispatched, in pipeline order. The runner's design
+    # The agent steps (5, 5b, 6 bible-distill, 7×3, 8×3, 9×3, 10, 12, 12a,
+    # 13, 14, 16a, 16) must all have been dispatched, in pipeline order. The runner's design
     # separates "agent" stations (dispatch) from "code" stations (no dispatch),
     # so the dispatch call sequence = the agent-station sequence.
     pipeline_steps = load_pipeline("morning")
@@ -2334,3 +2346,226 @@ def test_scorecard_judge_failure_advisory(tmp_path):
         f"verdict must carry hard_gates even when judge dispatch fails "
         f"(hard gates are deterministic); verdict={verdict!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# B1: bible-distill (step 6) — ISOLATED Character Bible distiller
+#
+# The custom executor (_bible_distill_step) gathers vault.subjective_dir,
+# dispatches bible-distiller fed ONLY the corpus, and writes the result to
+# state_dir/character-bible.md. fail-soft + always-lands: empty corpus /
+# dispatch failure / empty artifact all land a deterministic MINIMAL_BIBLE.
+# ---------------------------------------------------------------------------
+
+def _bible_step_dict() -> dict[str, Any]:
+    """The bible-distill step dict from the real pipeline (agent=bible-distiller)."""
+    from lib.pipeline import load_pipeline
+
+    return next(
+        s for s in load_pipeline("morning") if s["name"] == "bible-distill"
+    )
+
+
+def _bible_ctx(tmp_path: Path, *, corpus_text: str | None) -> tuple[dict[str, Any], Path, Path]:
+    """Minimal ctx for _bible_distill_step. state_dir + scratch exist on disk.
+    corpus_text=None → subjective_dir is a nonexistent path (empty corpus);
+    a string → a one-file corpus dir holding that text."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    state = tmp_path / "out" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+
+    cfg = MagicMock()
+    cfg.vault = MagicMock()
+    if corpus_text is None:
+        cfg.vault.subjective_dir = str(tmp_path / "no-such-subjective")
+    else:
+        subj = tmp_path / "subjective"
+        subj.mkdir(parents=True, exist_ok=True)
+        (subj / "note.md").write_text(corpus_text, encoding="utf-8")
+        cfg.vault.subjective_dir = str(subj)
+
+    ctx: dict[str, Any] = {
+        "scratch_dir": scratch,
+        "state_dir": str(state),
+        "output_dir": str(tmp_path / "out"),
+        "config": cfg,
+        "plugin_root": str(PLUGIN_ROOT),
+        "show": "morning",
+        "date": "2026-06-14",
+    }
+    return ctx, scratch, state
+
+
+def test_bible_distill_lands_distilled_bible_in_state_dir(tmp_path):
+    """A run WITH a corpus dispatches the distiller and writes the persona's
+    output to state_dir/character-bible.md (NOT the minimal fallback)."""
+    from lib.runner import _bible_distill_step, MINIMAL_BIBLE
+    from lib.bible import bible_path
+
+    ctx, scratch, state = _bible_ctx(tmp_path, corpus_text="宿主笔记：系统如何失效。")
+    fake = _FakeDispatch()  # writes "stub body" to scratch/character-bible.md
+
+    out = _bible_distill_step(_bible_step_dict(), ctx, fake)
+
+    assert out is None, "bible-distill is fail-soft; it must never return a halt"
+    # Exactly one dispatch, to the isolated distiller persona.
+    assert len(fake.calls) == 1 and fake.calls[0]["agent"] == "bible-distiller"
+    bp = bible_path(str(state))
+    assert bp.exists(), f"bible must land in state_dir: {bp}"
+    landed = bp.read_text(encoding="utf-8")
+    assert landed == "stub body", "must persist the distiller's output, not minimal"
+    assert landed != MINIMAL_BIBLE
+
+
+def test_bible_distill_isolation_prompt_is_corpus_only(tmp_path):
+    """ISOLATION (D-105 anti-echo): the dispatched bible-distiller prompt
+    contains the corpus AND NOT any episode / news / card content — even
+    when such content is staged in scratch / episodes where a leaky resolver
+    might pick it up. The negative assertion is the point of the station."""
+    from lib.runner import _bible_distill_step
+
+    corpus_sentinel = "CORPUS_SENTINEL_工具与主体性"
+    episode_sentinel = "EPISODE_SENTINEL_霍尔木兹封锁第三天"
+    card_sentinel = "CARD_SENTINEL_我下注油价回落"
+    news_sentinel = "NEWS_SENTINEL_苏伊士运河货轮搁浅"
+
+    ctx, scratch, state = _bible_ctx(tmp_path, corpus_text=f"宿主笔记：{corpus_sentinel}。")
+    # Stage episode / card / news content the distiller must NEVER see.
+    (scratch / "published.md").write_text(episode_sentinel, encoding="utf-8")
+    (scratch / "draft-A.md").write_text(episode_sentinel, encoding="utf-8")
+    episodes = tmp_path / "out" / "episodes"
+    episodes.mkdir(parents=True, exist_ok=True)
+    (episodes / "2026-06-13-prior.md").write_text(card_sentinel + news_sentinel, encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    def _capture(agent_name, user_prompt, *a, **kw):
+        if agent_name == "bible-distiller":
+            captured["prompt"] = user_prompt
+
+    fake = _FakeDispatch()
+    fake.inspect_call = _capture
+
+    _bible_distill_step(_bible_step_dict(), ctx, fake)
+
+    prompt = captured.get("prompt", "")
+    assert corpus_sentinel in prompt, "corpus must be in the distiller prompt"
+    for leaked in (episode_sentinel, card_sentinel, news_sentinel):
+        assert leaked not in prompt, (
+            f"ISOLATION BREACH: {leaked!r} leaked into the bible-distiller prompt"
+        )
+
+
+def test_bible_distill_failsoft_lands_minimal_on_dispatch_failure(tmp_path):
+    """A dispatch failure (corpus present) lands the deterministic
+    MINIMAL_BIBLE — the artifact is NEVER fully missing, and the run does
+    NOT halt (returns None)."""
+    from lib.runner import _bible_distill_step, MINIMAL_BIBLE
+    from lib.bible import bible_path
+
+    ctx, scratch, state = _bible_ctx(tmp_path, corpus_text="宿主笔记：理性的限度。")
+    fake = _FakeDispatch()
+    fake.fail_steps = {"bible-distill"}  # dispatch returns ok:False, no artifact
+
+    out = _bible_distill_step(_bible_step_dict(), ctx, fake)
+
+    assert out is None, "a dispatch failure must NOT halt (fail-soft station)"
+    bp = bible_path(str(state))
+    assert bp.exists(), "minimal bible must still land on dispatch failure"
+    assert bp.read_text(encoding="utf-8") == MINIMAL_BIBLE
+
+
+def test_bible_distill_empty_corpus_skips_dispatch_lands_minimal(tmp_path):
+    """An empty / missing corpus writes MINIMAL_BIBLE deterministically with
+    NO dispatch (no wasted M3 call, no fabrication risk)."""
+    from lib.runner import _bible_distill_step, MINIMAL_BIBLE
+    from lib.bible import bible_path
+
+    ctx, scratch, state = _bible_ctx(tmp_path, corpus_text=None)  # nonexistent subjective_dir
+    fake = _FakeDispatch()
+
+    out = _bible_distill_step(_bible_step_dict(), ctx, fake)
+
+    assert out is None
+    assert len(fake.calls) == 0, "empty corpus must NOT dispatch the distiller"
+    bp = bible_path(str(state))
+    assert bp.exists() and bp.read_text(encoding="utf-8") == MINIMAL_BIBLE
+
+
+def test_bible_distill_integration_lands_in_state_dir_via_run_pipeline(tmp_path):
+    """END-TO-END (mocked dispatch): a full run_pipeline routes step 6 through
+    the _execute_step dispatch branch and lands state/character-bible.md — the
+    exact path the step-12 finalize / step-13 broadcast resolver reads
+    (runner.py character-bible.md → bible_path(state_dir)). Proves the
+    consumer is wired, not just the unit executor."""
+    from lib.runner import run_pipeline
+    from lib.bible import bible_path
+
+    scratch = _bootstrap_scratch(tmp_path)
+    fake = _FakeDispatch()
+    gates = _make_gate_map()
+    config = _make_config_stub()
+    # Isolate output to tmp_path (the shared stub uses a fixed /tmp path) so
+    # the state-dir assertion is hermetic.
+    _set_out(config, tmp_path / "out")
+    subjective = tmp_path / "subjective"
+    subjective.mkdir()
+    (subjective / "note.md").write_text("宿主笔记：工具与主体性。", encoding="utf-8")
+    config.vault.subjective_dir = str(subjective)
+
+    result = run_pipeline(
+        "morning", date="2026-06-14", dispatch=fake, gates=gates,
+        config=config, scratch_dir=scratch,
+    )
+
+    assert result.get("status") != "halted", f"clean run must not halt: {result!r}"
+    bp = bible_path(str(Path(tmp_path / "out") / "state"))
+    assert bp.exists(), (
+        f"run_pipeline must land the bible in state_dir (where 12/13 read it): {bp}"
+    )
+    assert bp.stat().st_size > 0, "landed bible must be non-empty"
+
+
+def test_finalize_broadcast_resolver_prefers_state_bible_when_present(tmp_path):
+    """CONSUMPTION link (the OTHER head of the original bug): steps 12/13
+    must READ the produced bible. The input resolver points the persona at
+    state/character-bible.md when it exists (else the bare scratch fallback).
+    With the landing test above, this closes the produce→consume chain end
+    to end — voice-unification is restored, not just the artifact."""
+    from lib.runner import _build_step_prompt
+    from lib.pipeline import load_pipeline
+    from lib.bible import write_bible, bible_path
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    state = tmp_path / "out" / "state"
+    state.mkdir(parents=True)
+    ctx: dict[str, Any] = {
+        "scratch_dir": scratch,
+        "state_dir": str(state),
+        "output_dir": str(tmp_path / "out"),
+        "show": "morning",
+        "date": "2026-06-14",
+    }
+    state_bible = str(bible_path(str(state)))
+
+    steps = {s["name"]: s for s in load_pipeline("morning")}
+    for step_name in ("finalize", "broadcast-rewrite"):
+        step = steps[step_name]
+        assert "character-bible.md" in (step.get("inputs") or []), (
+            f"precondition: {step_name} must declare character-bible.md as input"
+        )
+        # Bible absent → resolver does NOT point at the state path.
+        assert state_bible not in _build_step_prompt(step, ctx, None), (
+            f"{step_name}: state bible must not resolve before it exists"
+        )
+
+    # Bible present in state/ → both consumers resolve the real state path.
+    write_bible(str(state), "# Character Bible\n声音参考")
+    for step_name in ("finalize", "broadcast-rewrite"):
+        prompt = _build_step_prompt(steps[step_name], ctx, None)
+        assert state_bible in prompt, (
+            f"{step_name} must resolve the real state/character-bible.md when "
+            f"present (voice-unification consumption); prompt lacked {state_bible}"
+        )

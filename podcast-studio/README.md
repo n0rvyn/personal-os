@@ -1,10 +1,11 @@
 # podcast-studio
 
 personal-os fleet-member podcast production plugin. The headline is a
-Claude-driven 6-persona pipeline (`/podcast morning` / `/podcast evening`) that
-reads your Vault, runs prep, dispatches six persona subagents in sequence, and
-produces a reader-facing script + mp3 with stance-card continuity across
-episodes. It is backed by a vendored `prep` skill (topic dedup, angle rotation,
+Claude-driven multi-persona pipeline (`/podcast morning` / `/podcast evening`)
+that reads your Vault, runs prep, dispatches its persona subagents (the roster
+is the `agents/` dir + `lib/pipeline.py` `AGENT_WHITELIST`, not a fixed count)
+in sequence, and produces a reader-facing script + mp3 with stance-card
+continuity across episodes. It is backed by a vendored `prep` skill (topic dedup, angle rotation,
 MinHash, cross-domain / self-past vault pulls); TTS is dispatched to the
 personal-os fleet's `tts` skill (Volcengine + MiniMax unified, with
 chunk/merge). Inputs arrive via the personal-os IEF exchange. Wired together
@@ -85,11 +86,17 @@ carries the morning's open questions forward):
 - `skills/podcast/` — the orchestrator skill: the 17-step `/podcast morning|evening`
   pipeline (config → continuity read → collection → drafts A/B/C → critique →
   polish → score → finalize → broadcast script → TTS → stance card).
-- `agents/` — the seven persona subagents the pipeline dispatches in sequence:
-  达芬奇/davinci (collection + drafting), 老黑/laohei (critique), 快刀青衣/kuaidao
-  (polish + finalize), 钱钟书/qianzhongshu (structured scoring), 质检员/zhijianyuan
-  (structured-only data fact-check gate between 定稿 and 口播稿), 卞旸/bianyang
-  (broadcast-script rewrite), 周杰伦/jay (TTS).
+- `agents/` — the persona subagents the pipeline dispatches (the roster is the
+  `agents/` dir + `lib/pipeline.py` `AGENT_WHITELIST`, not a fixed count):
+  达芬奇/davinci (collection + drafting), 量臣/liangchen (structured magnitude
+  judge, recurrence routing, step 5b), bible-distiller (ISOLATED Character Bible
+  distiller, step 6), 老黑/laohei (critique), 快刀青衣/kuaidao (polish + finalize),
+  钱钟书/qianzhongshu (structured scoring), 质检员/zhijianyuan (structured-only data
+  fact-check gate between 定稿 and 口播稿), 卞旸/bianyang (broadcast-script rewrite),
+  周杰伦/jay (TTS), scorecard (craft-gate quality scorecard judge, step 13a),
+  coveredground-distiller (ISOLATED post-publish covered-ground distiller).
+  liangchen / qianzhongshu / scorecard are pure structured judges — no
+  narrative/voice binding.
 - `lib/episode.py`, `lib/stance.py`, `lib/bible.py`, `lib/throughline.py`,
   `lib/factcheck.py` — pipeline helpers (naming + artifact gate + draft
   selection; stance-card continuity; Character Bible; throughline obsession;

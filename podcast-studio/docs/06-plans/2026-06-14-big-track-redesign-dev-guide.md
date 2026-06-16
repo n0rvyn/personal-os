@@ -62,7 +62,7 @@ confirmed_at: 2026-06-14T01:55:00
 **Acceptance criteria:**
 - [x] 无-TTS e2e dry run 跑通一期(morning 或 evening),产出 `.md` + 口播稿 + stance 卡,无 mp3。 ✅ run6:22/22 站,发布 7926 字
 - [x] 删除/改名任一 station 的必产 artifact → runner halt 并报出缺失 station 名(不静默前进)。 ✅ 单测 test_runner halt-on-missing
-- [x] 一次正常 run 后,`magnitude-verdict.json` 与 bible/`corpus` artifact 必然存在(06-14 缺失场景结构上不可能再现)。 ✅
+- [x] 一次正常 run 后,`magnitude-verdict.json` 与 bible/`corpus` artifact 必然存在(06-14 缺失场景结构上不可能再现)。 ✅ ⚠️ 更正(2026-06-16,B1):此项一度 **false-green** —— `magnitude-verdict.json` 一直在产,但 `character-bible.md` 的产出站在 prose→coded DAG 迁移中丢失(`bible-distiller` 仅在 whitelist + 作为 12/13 的 input,无产出 station),所以 bible 实际**从不产出**,12/13 静默回退 base persona。B1 补回 step 6 `bible-distill` 自定义执行器(`_bible_distill_step`:`gather_corpus`→隔离 dispatch→`write_bible(state_dir)`,fail-soft 总落最小 bible),现真绿:`test_bible_distill_*`(落盘/隔离/fail-soft/空-corpus)+ 310 pytest green。
 - [x] persona 产出与现行 SKILL.md 路径等价 —— 口径:同输入(同日 vault 快照 + 同 brief)下,产出的 **artifact 集合、产出顺序、各 gate 通过结果** 一致;正文文本差异(来自 LLM 抽样)不算回归。 ✅
 - [x] `lib/tests/` pytest 全绿 + runner 新增单测(step 表解析、halt-on-missing、no-TTS 跳过 step14)。 ✅ 216 passed
 

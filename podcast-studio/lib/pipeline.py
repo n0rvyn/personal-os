@@ -282,6 +282,38 @@ def _build_steps() -> list[dict[str, Any]]:
             "skip_when": None,
             "fail_soft": None,
         },
+        # --- step 6: bible-distill (ISOLATED Character Bible distiller) ----
+        # Produces the host Character Bible — the voice-unification source
+        # that finalize(12) + broadcast-rewrite(13) read to make every
+        # committee draft sound like the same person. CUSTOM executor
+        # (_bible_distill_step); the generic agent path will NOT work:
+        #   (a) the input is gather_corpus(vault.subjective_dir) — OUTSIDE
+        #       scratch — so the generic input-resolver (which points the
+        #       persona at scratch) can't supply it;
+        #   (b) ISOLATION (D-105 anti-echo) requires feeding the persona
+        #       ONLY the corpus — never episodes/news/cards (a leaky distill
+        #       once made "obsessions" = episode topics 霍尔木兹/苏伊士 and
+        #       homogenized every show);
+        #   (c) the artifact must land in state_dir (persistent continuity),
+        #       not scratch.
+        # `inputs: ["corpus"]` is CONCEPTUAL (the executor gathers it from
+        # config) — NOT a scratch file the resolver should look up.
+        # fail_soft=True: a distiller miss writes a MINIMAL_BIBLE (base
+        # persona 卞旸) so the artifact ALWAYS lands — the daily run never
+        # halts on a bible miss (downstream 12/13 then unify against the
+        # minimal voice instead of falling back to the bare base persona).
+        {
+            "name": "bible-distill",
+            "kind": "agent",
+            "agent": "bible-distiller",
+            "inputs": ["corpus"],
+            "artifact": "character-bible.md",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": True,
+        },
         # --- step 7: 3-way davinci drafting (parallel) --------------------
         # Each of the 3 dispatches consumes its corresponding
         # writing-brief-X.json (the routing + covered-ground avoid_memo the

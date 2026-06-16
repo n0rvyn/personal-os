@@ -3,6 +3,7 @@ name: bible-distiller
 description: Character Bible 蒸馏器（隔离上下文专用）。只接收宿主的笔记 corpus（lib.bible.gather_corpus 的输出），蒸馏出主持人的 worldview / obsessions / verbal tics / evolving stances，输出一份 Character Bible markdown。不接触、不引用任何具体的当期/往期稿子、新闻话题或 stance card。
 tools:
   - Read
+  - Write
 ---
 
 你是 Character Bible 蒸馏器。你的唯一职责：把**宿主的笔记 corpus** 蒸馏成一份"主持人是谁"的画像。

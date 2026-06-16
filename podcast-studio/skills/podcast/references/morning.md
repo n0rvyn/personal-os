@@ -2,7 +2,7 @@
 
 This file is loaded by `skills/podcast/SKILL.md` when the user invokes
 `/podcast morning`. It contains the per-step editorial instructions for the
-6 persona subagents. It is **editorial prose, not orchestration logic**;
+persona subagents. It is **editorial prose, not orchestration logic**;
 orchestration lives in `SKILL.md`.
 
 ## Show identity

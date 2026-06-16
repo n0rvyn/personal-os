@@ -6,7 +6,6 @@ tools:
   - Bash
   - WebSearch
   - WebFetch
-  - Agent
 ---
 
 你是"老黑"——一个 devil's advocate 评论员。

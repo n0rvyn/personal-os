@@ -167,6 +167,93 @@ def test_nonexistent_vault_dir_raises(tmp_path, monkeypatch):
     assert "subjective_dir" in str(exc.value)
 
 
+# ---------- vault.voice_corpus_dir (optional bible voice-corpus override) ----------
+
+def test_voice_corpus_dir_resolved_when_present(tmp_path, monkeypatch):
+    """An existing voice_corpus_dir is resolved onto VaultConfig."""
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    voice = tmp_path / "voice-corpus"
+    voice.mkdir()
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+          voice_corpus_dir: {voice}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+    assert cfg.vault.voice_corpus_dir == str(voice)
+
+
+def test_voice_corpus_dir_none_when_absent(tmp_path, monkeypatch):
+    """No voice_corpus_dir key → None (legacy configs unaffected)."""
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+    assert cfg.vault.voice_corpus_dir is None
+
+
+def test_voice_corpus_dir_missing_path_raises(tmp_path, monkeypatch):
+    """A present-but-nonexistent voice_corpus_dir fails closed naming the key
+    (mirrors config.py's 'never a silent default' contract; forces seed-first)."""
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+          voice_corpus_dir: {tmp_path / 'no-such-voice'}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "voice_corpus_dir" in str(exc.value)
+
+
+def test_voice_corpus_dir_empty_string_raises(tmp_path, monkeypatch):
+    """A whitespace-only voice_corpus_dir is rejected as non-empty-string."""
+    pytest.importorskip("yaml")
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f'''
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+          voice_corpus_dir: "   "
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    ''')
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "voice_corpus_dir" in str(exc.value)
+
+
 def test_tts_settings_resolve(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.yaml"
     dirs = _make_vault_dirs(tmp_path)

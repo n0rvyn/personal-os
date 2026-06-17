@@ -173,8 +173,11 @@ not next to the artifacts. Migrate an existing flat vault with
   one-liner; a wrong `heavy` lets a no-news topic take the whole episode).
 
 - **The Character Bible distiller (step 6) MUST be isolated.** Dispatch
-  `agents/bible-distiller.md` fed ONLY the `gather_corpus(subjective_dir)` text;
-  it must NOT see episodes / cards / news / material. History: the main-context
+  `agents/bible-distiller.md` fed ONLY the voice-corpus text
+  (`gather_corpus(vault.voice_corpus_dir)`, falling back to `vault.subjective_dir`
+  when the key is unset — runner resolves via `_bible_corpus_dir`). The voice
+  corpus is the host's dev-log: a VOICE reference for HOW he sounds, NEVER a
+  CONTENT/topic source. It must NOT see episodes / cards / news / material. History: the main-context
   distill bled the day's episode into the bible (it self-reported `Corpus:
   morning episode + prior stance cards`), so "obsessions" became episode topics
   (霍尔木兹/苏伊士) and the same apparatus got re-applied every show

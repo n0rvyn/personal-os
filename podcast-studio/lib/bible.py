@@ -1,8 +1,10 @@
 """podcast-studio character-bible mechanics.
 
 Owns the per-run host Character Bible — a refreshed projection of the
-user's private corpus (`vault.subjective_dir`) that the SKILL.md distill
-step fills with worldview / obsessions / verbal tics / evolving stances.
+user's voice corpus (`vault.voice_corpus_dir`, falling back to
+`vault.subjective_dir`; the host's dev-log as a VOICE reference, not a
+CONTENT/topic source) that the SKILL.md distill step fills with worldview /
+obsessions / verbal tics / evolving stances.
 
 - `bible_path(output_dir)`: fixed filename under output_dir, realpath-asserted
 - `gather_corpus(subjective_dir, *, byte_cap, max_files)`: walks regular

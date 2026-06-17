@@ -1505,6 +1505,17 @@ def _land_minimal_bible(state_dir: Any, *, reason: str) -> None:
         )
 
 
+def _bible_corpus_dir(config) -> Optional[str]:
+    """Resolve the bible's voice-corpus dir: prefer `vault.voice_corpus_dir`
+    (the host's dev-log VOICE reference), fall back to `vault.subjective_dir`.
+    Returns None when neither (or no vault) is set."""
+    vault = getattr(config, "vault", None)
+    return (
+        getattr(vault, "voice_corpus_dir", None)
+        or getattr(vault, "subjective_dir", None)
+    )
+
+
 def _bible_distill_step(
     step: dict[str, Any],
     ctx: dict[str, Any],
@@ -1512,9 +1523,10 @@ def _bible_distill_step(
 ) -> Optional[dict[str, Any]]:
     """Step 6 — ISOLATED Character Bible distiller (custom executor).
 
-    Gathers the host's private corpus (`vault.subjective_dir`), dispatches
-    `bible-distiller` fed ONLY that corpus (isolation — never episodes /
-    news / cards / material), and writes the result to
+    Gathers the host's voice corpus (`vault.voice_corpus_dir`, falling back to
+    `vault.subjective_dir`), dispatches `bible-distiller` fed ONLY that corpus
+    (isolation — never episodes / news / cards / material; the corpus source is
+    a VOICE reference, not a CONTENT/topic source), and writes the result to
     `state_dir/character-bible.md` (persistent continuity, Phase-4 layout).
 
     fail-soft + always-lands. Three paths land the deterministic
@@ -1533,17 +1545,15 @@ def _bible_distill_step(
     config = ctx.get("config")
     state_dir = _subdir(ctx, "state")
 
-    subjective_dir = getattr(
-        getattr(config, "vault", None), "subjective_dir", None
-    )
+    corpus_dir = _bible_corpus_dir(config)
 
-    # --- gather the corpus (isolation source: ONLY the subjective notes) ---
+    # --- gather the corpus (isolation source: ONLY the voice-corpus dir) ---
     corpus_text = ""
-    if subjective_dir:
+    if corpus_dir:
         try:
             corpus_text = (
                 gather_corpus(
-                    subjective_dir,
+                    corpus_dir,
                     byte_cap=_BIBLE_CORPUS_BYTE_CAP,
                     max_files=_BIBLE_CORPUS_MAX_FILES,
                 ).get("text", "")

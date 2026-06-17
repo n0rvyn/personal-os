@@ -48,6 +48,11 @@ class VaultConfig:
     # contract (`<root>/99-System/10-Directory-Contract.md`). Distinct from
     # subjective_dir. When unset, recall falls back to subjective_dir.
     root: str | None = None
+    # Optional bible voice-corpus override. When set, the bible-distill step
+    # reads its corpus from here instead of subjective_dir (the host's dev-log
+    # as a VOICE reference, not a CONTENT/topic source). When unset, the bible
+    # falls back to subjective_dir. Existence-checked (fail-closed) when present.
+    voice_corpus_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -239,7 +244,26 @@ def _validate_vault_paths(vault_raw: dict[str, str]) -> VaultConfig:
             raise ConfigError("vault.root must be a non-empty string when set")
         root_resolved = str(Path(os.path.expanduser(root_raw)))
 
-    return VaultConfig(root=root_resolved, **resolved)
+    # Optional vault.voice_corpus_dir — fail-closed existence check when present
+    # (unlike root, which is lenient): a typo'd voice corpus must HALT, not
+    # silently degrade the bible to subjective_dir. This also forces the
+    # seed-first order (run tools/sync-voice-corpus.py before adding the key).
+    voice_raw = vault_raw.get("voice_corpus_dir")
+    voice_resolved: str | None = None
+    if voice_raw is not None:
+        if not isinstance(voice_raw, str) or not voice_raw.strip():
+            raise ConfigError("vault.voice_corpus_dir must be a non-empty string when set")
+        vpath = Path(os.path.expanduser(voice_raw))
+        if not vpath.exists():
+            raise ConfigError(
+                f"vault.voice_corpus_dir does not exist: {vpath} "
+                f"(run tools/sync_voice_corpus.py to seed it)"
+            )
+        if not vpath.is_dir():
+            raise ConfigError(f"vault.voice_corpus_dir is not a directory: {vpath}")
+        voice_resolved = str(vpath)
+
+    return VaultConfig(root=root_resolved, voice_corpus_dir=voice_resolved, **resolved)
 
 
 def _validate_tts(tts_raw: dict[str, Any]) -> TtsConfig:
@@ -319,6 +343,7 @@ if __name__ == "__main__":
     print(f"vault.subjective_dir = {c.vault.subjective_dir}")
     print(f"vault.news_dir       = {c.vault.news_dir}")
     print(f"vault.output_dir     = {c.vault.output_dir}")
+    print(f"vault.voice_corpus_dir = {c.vault.voice_corpus_dir}")
     print(f"tts.provider         = {c.tts.provider}")
     print(f"tts.host_voice       = {c.tts.host_voice}")
     if c.exchange_dir is not None:

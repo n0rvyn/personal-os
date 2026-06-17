@@ -228,6 +228,11 @@ def _make_config_stub() -> MagicMock:
     cfg = MagicMock()
     cfg.vault = MagicMock()
     _set_out(cfg, "/tmp/ief-podcast-studio-runner-test-output")
+    # Mirror the real PodcastTeamConfig default (None). Without this, the bare
+    # MagicMock auto-creates a TRUTHY child attr, so _bible_corpus_dir would
+    # pick it over subjective_dir and gather_corpus(MagicMock) → empty corpus
+    # → bible-distill skips its dispatch (same class as the _set_out fix above).
+    cfg.vault.voice_corpus_dir = None
     cfg.tts = MagicMock()
     return cfg
 
@@ -2366,10 +2371,13 @@ def _bible_step_dict() -> dict[str, Any]:
     )
 
 
-def _bible_ctx(tmp_path: Path, *, corpus_text: str | None) -> tuple[dict[str, Any], Path, Path]:
+def _bible_ctx(tmp_path: Path, *, corpus_text: str | None, voice_text: str | None = None) -> tuple[dict[str, Any], Path, Path]:
     """Minimal ctx for _bible_distill_step. state_dir + scratch exist on disk.
     corpus_text=None → subjective_dir is a nonexistent path (empty corpus);
-    a string → a one-file corpus dir holding that text."""
+    a string → a one-file corpus dir holding that text.
+    voice_text=None → no voice_corpus_dir override (bible falls back to
+    subjective_dir); a string → a one-file voice-corpus dir set as
+    vault.voice_corpus_dir (the dev-log voice swap)."""
     scratch = tmp_path / "scratch"
     scratch.mkdir(parents=True, exist_ok=True)
     state = tmp_path / "out" / "state"
@@ -2384,6 +2392,16 @@ def _bible_ctx(tmp_path: Path, *, corpus_text: str | None) -> tuple[dict[str, An
         subj.mkdir(parents=True, exist_ok=True)
         (subj / "note.md").write_text(corpus_text, encoding="utf-8")
         cfg.vault.subjective_dir = str(subj)
+    # New optional voice-corpus override. Explicit None (not a MagicMock
+    # auto-attr) so the bible's fallback-to-subjective_dir path is exercised
+    # by every existing caller; a string sets a real voice_corpus_dir.
+    if voice_text is None:
+        cfg.vault.voice_corpus_dir = None
+    else:
+        voice = tmp_path / "voice-corpus"
+        voice.mkdir(parents=True, exist_ok=True)
+        (voice / "devlog.md").write_text(voice_text, encoding="utf-8")
+        cfg.vault.voice_corpus_dir = str(voice)
 
     ctx: dict[str, Any] = {
         "scratch_dir": scratch,
@@ -2416,6 +2434,52 @@ def test_bible_distill_lands_distilled_bible_in_state_dir(tmp_path):
     landed = bp.read_text(encoding="utf-8")
     assert landed == "stub body", "must persist the distiller's output, not minimal"
     assert landed != MINIMAL_BIBLE
+
+
+def test_bible_corpus_dir_prefers_voice_then_subjective():
+    """The corpus-source resolver prefers voice_corpus_dir, falls back to
+    subjective_dir, and returns None when neither (or no vault) is set."""
+    from types import SimpleNamespace
+    from lib.runner import _bible_corpus_dir
+
+    cfg_voice = SimpleNamespace(vault=SimpleNamespace(voice_corpus_dir="/voice", subjective_dir="/subj"))
+    assert _bible_corpus_dir(cfg_voice) == "/voice"
+
+    cfg_fallback = SimpleNamespace(vault=SimpleNamespace(voice_corpus_dir=None, subjective_dir="/subj"))
+    assert _bible_corpus_dir(cfg_fallback) == "/subj"
+
+    cfg_no_vault = SimpleNamespace(vault=None)
+    assert _bible_corpus_dir(cfg_no_vault) is None
+
+
+def test_bible_distill_reads_voice_corpus_dir_over_subjective(tmp_path):
+    """When voice_corpus_dir is set, the distiller corpus comes from it, NOT
+    subjective_dir (the dev-log voice swap; guards against silent fallback to
+    the stale subjective well — this repo's documented failure class)."""
+    from lib.runner import _bible_distill_step
+
+    voice_sentinel = "VOICE_SENTINEL_我做了你听便是"
+    subj_sentinel = "SUBJ_SENTINEL_旧笔记井内容"
+    ctx, scratch, state = _bible_ctx(
+        tmp_path,
+        corpus_text=f"宿主旧笔记：{subj_sentinel}。",
+        voice_text=f"开发日志：{voice_sentinel}。",
+    )
+
+    captured: dict[str, str] = {}
+
+    def _capture(agent_name, user_prompt, *a, **kw):
+        if agent_name == "bible-distiller":
+            captured["prompt"] = user_prompt
+
+    fake = _FakeDispatch()
+    fake.inspect_call = _capture
+
+    _bible_distill_step(_bible_step_dict(), ctx, fake)
+
+    prompt = captured.get("prompt", "")
+    assert voice_sentinel in prompt, "voice_corpus_dir content must feed the distiller"
+    assert subj_sentinel not in prompt, "subjective_dir must NOT leak when voice_corpus_dir is set"
 
 
 def test_bible_distill_isolation_prompt_is_corpus_only(tmp_path):

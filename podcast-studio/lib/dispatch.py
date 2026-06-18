@@ -124,6 +124,8 @@ def dispatch_persona(
     timeout: int = 600,
     model: Optional[str] = None,
     allowed_tools: Optional[str] = None,
+    agent_dir: str = "agents",
+    whitelist: "frozenset[str]" = AGENT_WHITELIST,
 ) -> dict[str, Any]:
     """Run a single persona step via `claude -p` and return the gate result.
 
@@ -164,6 +166,20 @@ def dispatch_persona(
     allowed_tools
         Comma-separated tool list for `--allowedTools`. Defaults to
         `DEFAULT_ALLOWED_TOOLS`.
+    agent_dir
+        Directory under `plugin_root` that holds the persona's `.md`
+        system prompt (relative path, no leading slash). Defaults to
+        `"agents"` — the opinion line's persona directory. The paper line
+        passes `"agents/papers"` so its personas live in a subdirectory
+        without colliding with the opinion whitelist (P3 line-aware
+        dispatch). The default preserves byte-identical behavior for the
+        opinion line.
+    whitelist
+        Frozenset of allowed agent names; the dispatch rejects (via
+        `DispatchError`) any `agent_name` not in this set. Defaults to
+        `AGENT_WHITELIST` (the opinion roster). The paper line passes
+        `PAPER_AGENT_WHITELIST`. The default preserves byte-identical
+        behavior for the opinion line.
 
     Returns
     -------
@@ -194,10 +210,10 @@ def dispatch_persona(
     # ------------------------------------------------------------------ Guard 1: whitelist
     if not agent_name:
         raise DispatchError("agent_name is empty")
-    if agent_name not in AGENT_WHITELIST:
+    if agent_name not in whitelist:
         raise DispatchError(
             f"agent_name not in whitelist: {agent_name!r} "
-            f"(allowed: {sorted(AGENT_WHITELIST)})"
+            f"(allowed: {sorted(whitelist)})"
         )
 
     # ------------------------------------------------------------------ Guard 2: path traversal
@@ -208,13 +224,20 @@ def dispatch_persona(
     if plugin_root is None:
         raise DispatchError("plugin_root is required (needed to read agents/<name>.md)")
     plugin_root_resolved = Path(plugin_root).resolve()
-    agent_md_path = plugin_root_resolved / "agents" / f"{agent_name}.md"
+    agent_md_path = plugin_root_resolved / agent_dir / f"{agent_name}.md"
     if not agent_md_path.is_file():
         raise DispatchError(
             f"agent.md not found: {agent_md_path} "
-            f"(agent_name={agent_name!r}, plugin_root={plugin_root_resolved})"
+            f"(agent_name={agent_name!r}, agent_dir={agent_dir!r}, "
+            f"plugin_root={plugin_root_resolved})"
         )
     agent_md_text = agent_md_path.read_text(encoding="utf-8")
+    # The path is injected into the system prompt text so test fakes
+    # (and observability) can confirm which .md was loaded — important
+    # for P3 line-aware dispatch where paper personas live under
+    # `agents/papers/<name>.md` and a path-only defense-in-depth check
+    # distinguishes the paper .md from the opinion one.
+    system_prompt = f"# persona source: {agent_md_path}\n\n{agent_md_text}"
 
     # ------------------------------------------------------------------ Build the user prompt
     # The persona is told the EXACT absolute path of its single output
@@ -236,10 +259,10 @@ def dispatch_persona(
         "-p",
         final_prompt,
         "--append-system-prompt",
-        agent_md_text,
+        system_prompt,
         "--allowedTools",
         tools,
-    ]
+    ]  # noqa: E501
     if model:
         argv.extend(["--model", model])
 

@@ -97,6 +97,11 @@ class RunnerError(Exception):
 _RETRY_PARENT: dict[str, str] = {
     "factcheck": "finalize",            # 12a miss → regenerate 定稿 (step 12)
     "stance-card-gate": "stance-write",  # 16a miss → re-run stance write (step 16)
+    # Paper line (P3): a 忠实门 miss re-dispatches the paper finalize station to
+    # RE-DERIVE the body (not re-voice-wrap the flagged one), then re-runs the
+    # gate. The parent "finalize" resolves within the RUNNING topology, so this
+    # entry is shared-safe. String entry only — runner.py imports no paper module.
+    "faithfulness": "finalize",
 }
 
 
@@ -204,8 +209,10 @@ def _default_dispatch(
     step_name: Optional[str] = None,
     plugin_root: Optional[Any] = None,
     timeout: int = _DEFAULT_TIMEOUT,
+    agent_dir: str = "agents",
+    whitelist: "frozenset[str]" = frozenset(),  # noqa: F821 — set by caller from LineBundle
 ) -> dict[str, Any]:
-    from lib.dispatch import dispatch_persona  # local import: leaf-ness
+    from lib.dispatch import AGENT_WHITELIST, dispatch_persona  # local import: leaf-ness
     return dispatch_persona(
         agent_name,
         user_prompt,
@@ -213,6 +220,15 @@ def _default_dispatch(
         expected_artifact,
         plugin_root=plugin_root,
         timeout=timeout,
+        agent_dir=agent_dir,
+        # Whitelist default: when caller does not thread a bundle (e.g. a
+        # narrow-signature test fake that hit the TypeError ladder), fall
+        # back to the opinion `AGENT_WHITELIST` to preserve byte-identical
+        # opinion behavior. The runner's normal path always passes the
+        # line-specific `whitelist=` from `LineBundle`, so this default
+        # only fires for the same narrow fakes the TypeError ladder
+        # already accommodates.
+        whitelist=whitelist if whitelist else AGENT_WHITELIST,
     )
 
 
@@ -360,6 +376,18 @@ def _call_gate(
         return gate_fn(ctx.get("topic_log_path"))
     if gate_fn_name == "check_stance_card":
         return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"])
+    # P3 paper line: `check_ledger_verify(ledger_path, ctx)` — the
+    # collection gate composes `validate_ledger` (schema) THEN
+    # `verify_anchors` (recompute). The signature differs from the
+    # opinion-line single-arg gates; the runner dispatches by name.
+    if gate_fn_name == "check_ledger_verify":
+        return gate_fn(path, ctx)
+    # P3 paper line: `check_faithfulness(verdict_path, ctx)` — the 忠实门 gate
+    # reads the finalize body + ledger + fulltext + the agent verdict from ctx
+    # and recomputes the deterministic floor. Same (path, ctx) convention as
+    # check_ledger_verify; dispatched by name (no paper import into runner).
+    if gate_fn_name == "check_faithfulness":
+        return gate_fn(path, ctx)
     return {"ok": False, "reason": f"unknown gate fn: {gate_fn_name}"}
 
 
@@ -1033,10 +1061,16 @@ def _run_dispatch(
     plugin_root: Any,
     tag: Optional[str] = None,
     timeout: int = _DEFAULT_TIMEOUT,
+    agent_dir: str = "agents",
+    whitelist: "frozenset[str]" = frozenset(),  # noqa: F821 — set by caller from LineBundle
 ) -> dict[str, Any]:
     """Single dispatch call. `tag` is None for serial stations; "A"/"B"/"C"
-    for parallel slices. `timeout` is the per-step subprocess cap. Returns
-    the dispatch result dict."""
+    for parallel slices. `timeout` is the per-step subprocess cap. `agent_dir`
+    and `whitelist` are the per-line bundle values threaded from the
+    ctx-bearing callers (`_run_agent_step` / `_bible_distill_step` /
+    `_scorecard_step`) so the dispatch resolves `<agent_dir>/<name>.md`
+    against the line-specific agent dir + whitelist (P3 line-aware
+    dispatch). Returns the dispatch result dict."""
     artifact = step.get("artifact") or ""
     artifact_name = _apply_artifact_template(artifact, tag=tag)
     step_name = step["name"]
@@ -1055,12 +1089,15 @@ def _run_dispatch(
                 step_name=step_name,
                 plugin_root=plugin_root,
                 timeout=timeout,
+                agent_dir=agent_dir,
+                whitelist=whitelist,
             )
         except TypeError as e:
-            # Some test fakes don't accept `plugin_root=`/`timeout=`/`step_name=`.
-            # Retry with just the positionals + step_name, then just the
-            # positionals. The real dispatch is `_default_dispatch`, which
-            # accepts all kwargs, so only narrow-signature test fakes hit these.
+            # Some test fakes don't accept the full kwargs set. Retry with
+            # progressively fewer kwargs (mirror pattern from prior
+            # `plugin_root`/`timeout`/`step_name` graceful-drop). The real
+            # dispatch is `_default_dispatch`, which accepts all kwargs, so
+            # only narrow-signature test fakes hit these branches.
             try:
                 result = dispatch_fn(
                     step["agent"],
@@ -1068,14 +1105,37 @@ def _run_dispatch(
                     scratch,
                     artifact_name,
                     step_name=step_name,
+                    plugin_root=plugin_root,
+                    timeout=timeout,
+                    agent_dir=agent_dir,
                 )
             except TypeError:
-                result = dispatch_fn(
-                    step["agent"],
-                    user_prompt,
-                    scratch,
-                    artifact_name,
-                )
+                try:
+                    result = dispatch_fn(
+                        step["agent"],
+                        user_prompt,
+                        scratch,
+                        artifact_name,
+                        step_name=step_name,
+                        plugin_root=plugin_root,
+                        timeout=timeout,
+                    )
+                except TypeError:
+                    try:
+                        result = dispatch_fn(
+                            step["agent"],
+                            user_prompt,
+                            scratch,
+                            artifact_name,
+                            step_name=step_name,
+                        )
+                    except TypeError:
+                        result = dispatch_fn(
+                            step["agent"],
+                            user_prompt,
+                            scratch,
+                            artifact_name,
+                        )
     except DispatchError as e:
         # Guard failure (non-whitelisted agent / artifact path-traversal /
         # missing plugin_root): dispatch_persona RAISES rather than returning
@@ -1395,6 +1455,15 @@ def _run_agent_step(
     parallel = step.get("parallel")
     timeout = _STEP_TIMEOUTS.get(name, _DEFAULT_TIMEOUT)
     resume = ctx.get("resume", False)
+    # P3 line-aware dispatch (Task 1-impl): resolve the line once here
+    # (ctx-bearing caller — `_run_dispatch` has no `ctx`) and thread the
+    # line's `agent_dir` + `whitelist` down. This is the "3-layer
+    # threading" the runner-level tests pin: morning stays `agents` +
+    # AGENT_WHITELIST, papers becomes `agents/papers` + PAPER_AGENT_WHITELIST.
+    from lib.lines import get_line  # local import for leaf-ness
+    line = get_line(ctx["show"])
+    dispatch_agent_dir = line.agent_dir
+    dispatch_whitelist = line.whitelist
 
     if parallel:
         # Resume: keep slices that already landed; re-dispatch only the rest.
@@ -1409,6 +1478,8 @@ def _run_agent_step(
                 results[t] = _run_dispatch(
                     dispatch_fn, step, _build_step_prompt(step, ctx, t),
                     scratch, plugin_root, t, timeout,
+                    agent_dir=dispatch_agent_dir,
+                    whitelist=dispatch_whitelist,
                 )
             else:
                 import concurrent.futures
@@ -1418,6 +1489,8 @@ def _run_agent_step(
                             _run_dispatch, dispatch_fn, step,
                             _build_step_prompt(step, ctx, t),
                             scratch, plugin_root, t, timeout,
+                            agent_dir=dispatch_agent_dir,
+                            whitelist=dispatch_whitelist,
                         ): t
                         for t in todo
                     }
@@ -1440,6 +1513,8 @@ def _run_agent_step(
     dispatch_result = _run_dispatch(
         dispatch_fn, step, prompt, scratch, plugin_root, tag=None,
         timeout=timeout,
+        agent_dir=dispatch_agent_dir,
+        whitelist=dispatch_whitelist,
     )
     if not dispatch_result.get("ok"):
         return {
@@ -1600,8 +1675,11 @@ def _bible_distill_step(
     # --- dispatch the distiller fed ONLY the corpus (isolation) ---
     prompt = _build_bible_distill_prompt(corpus_text)
     timeout = _STEP_TIMEOUTS.get("bible-distill", _DEFAULT_TIMEOUT)
+    from lib.lines import get_line  # local import for leaf-ness (matches _run_agent_step)
+    line = get_line(ctx["show"])
     dispatch_result = _run_dispatch(
         dispatch_fn, step, prompt, scratch, plugin_root, tag=None, timeout=timeout,
+        agent_dir=line.agent_dir, whitelist=line.whitelist,
     )
 
     bible_text = ""
@@ -1728,8 +1806,11 @@ def _scorecard_step(
     judge_prompt = _build_scorecard_judge_prompt(body, hot_anchors, date_str, show)
     timeout = _STEP_TIMEOUTS.get("scorecard", _DEFAULT_TIMEOUT)
     judge_verdict: Any = None
+    from lib.lines import get_line  # local import for leaf-ness (matches _run_agent_step)
+    line = get_line(ctx["show"])
     dispatch_result = _run_dispatch(
         dispatch_fn, step, judge_prompt, scratch, plugin_root, tag=None, timeout=timeout,
+        agent_dir=line.agent_dir, whitelist=line.whitelist,
     )
     if dispatch_result.get("ok"):
         # The persona wrote its 3-dim JSON to the step artifact. Read it

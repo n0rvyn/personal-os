@@ -643,3 +643,176 @@ def test_dispatch_agent_whitelist_contains_scorecard():
         f"dispatch.AGENT_WHITELIST must include 'scorecard', "
         f"got {sorted(AGENT_WHITELIST)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — line-aware dispatch: agent_dir + whitelist kwargs (Task 1-tests).
+#
+# Per task 1-tests (P3 paper line engine-wire):
+# - `dispatch_persona` accepts `agent_dir="agents/papers"` and a custom
+#   `whitelist=` (PAPER_AGENT_WHITELIST), reads `agents/papers/<name>.md`,
+#   accepts `curator`/`ledger-writer`.
+# - The DEFAULT call (no agent_dir / whitelist) is byte-identical to today:
+#   reads `agents/<name>.md` + AGENT_WHITELIST, rejects a non-opinion agent.
+#
+# These are FAIL-first pins: Task 1-impl will add the two kwargs.
+# ---------------------------------------------------------------------------
+
+PAPER_AGENT_WHITELIST = frozenset({
+    "curator",
+    "ledger-writer",
+})
+
+
+def test_dispatch_paper_agent_dir_and_whitelist(tmp_path):
+    """When called with `agent_dir="agents/papers"` and
+    `whitelist=PAPER_AGENT_WHITELIST`, dispatch_persona must:
+      1. Read the persona system prompt from `agents/papers/<name>.md`
+         (NOT the opinion `agents/<name>.md`).
+      2. Accept `curator` (a paper persona, NOT in opinion AGENT_WHITELIST).
+      3. Run the subprocess (call_count == 1).
+
+    The argv must reference the paper agent.md (either the literal body or
+    the path), proving the thread took effect."""
+    from lib.dispatch import dispatch_persona
+
+    # Create both `agents/` (opinion) and `agents/papers/` (paper) with
+    # distinct text so we can tell which one the dispatch loaded.
+    agents = tmp_path / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "curator.md").write_text(
+        "OPINION-CURATOR — must NOT be loaded", encoding="utf-8"
+    )
+    papers_agents = tmp_path / "agents" / "papers"
+    papers_agents.mkdir(parents=True, exist_ok=True)
+    paper_curator_text = "PAPER-CURATOR — the paper-line 选题判官 persona"
+    (papers_agents / "curator.md").write_text(paper_curator_text, encoding="utf-8")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    fake = _FakeRunner(returncode=0, write_artifact=True)
+    fake._expected_artifact = scratch / "candidates.json"
+
+    result = dispatch_persona(
+        agent_name="curator",
+        user_prompt="select papers",
+        scratch_dir=scratch,
+        expected_artifact="candidates.json",
+        runner=fake,
+        plugin_root=tmp_path,
+        agent_dir="agents/papers",
+        whitelist=PAPER_AGENT_WHITELIST,
+    )
+
+    # 1. Subprocess was invoked exactly once.
+    assert fake.call_count == 1, (
+        f"paper path must invoke the runner once, got call_count="
+        f"{fake.call_count}"
+    )
+    # 2. The dispatch resolved the paper agent.md (NOT the opinion one).
+    argv_str = " ".join(str(a) for a in fake.last_argv)
+    paper_md_path = papers_agents / "curator.md"
+    opinion_md_path = agents / "curator.md"
+    assert paper_curator_text in argv_str, (
+        f"argv must include the paper-line agent.md body; got argv="
+        f"{argv_str!r}"
+    )
+    assert "OPINION-CURATOR" not in argv_str, (
+        f"argv must NOT include the opinion agent.md body; got argv="
+        f"{argv_str!r}"
+    )
+    # The path to the paper md must appear (defense-in-depth).
+    assert str(paper_md_path) in argv_str, (
+        f"argv must reference the paper agent.md path {paper_md_path}; "
+        f"got argv={argv_str!r}"
+    )
+    # 3. The dispatch result is success.
+    assert isinstance(result, dict)
+    assert result.get("ok") is True, (
+        f"paper-path dispatch must succeed; got result={result!r}"
+    )
+
+
+def test_dispatch_default_is_opinion_byte_identical(tmp_path):
+    """The DEFAULT call (no agent_dir / whitelist kwargs) must be
+    byte-identical to today:
+      1. Reads `agents/<name>.md` (NOT `agents/papers/<name>.md`).
+      2. Validates against `AGENT_WHITELIST` (NOT a paper whitelist).
+      3. Rejects `curator` — a paper persona NOT in opinion AGENT_WHITELIST.
+
+    This is the "default preserves opinion" pin: a caller who doesn't
+    pass the new kwargs gets exactly the same behavior as before Task 1-impl.
+    """
+    from lib.dispatch import dispatch_persona, AGENT_WHITELIST
+
+    agents = tmp_path / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "curator.md").write_text(
+        "OPINION-CURATOR — must NOT be loaded by default", encoding="utf-8"
+    )
+    papers_agents = tmp_path / "agents" / "papers"
+    papers_agents.mkdir(parents=True, exist_ok=True)
+    (papers_agents / "curator.md").write_text(
+        "PAPER-CURATOR — must NOT be loaded by default", encoding="utf-8"
+    )
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    fake = _FakeRunner(returncode=0, write_artifact=True)
+    fake._expected_artifact = scratch / "out.txt"
+
+    # 1. Default call rejects `curator` (paper name, not in AGENT_WHITELIST).
+    raised = False
+    try:
+        dispatch_persona(
+            agent_name="curator",
+            user_prompt="hello",
+            scratch_dir=scratch,
+            expected_artifact="out.txt",
+            runner=fake,
+            plugin_root=tmp_path,
+            # NO agent_dir, NO whitelist — defaults must preserve opinion.
+        )
+    except ValueError as e:
+        raised = True
+        assert "curator" in str(e), (
+            f"rejection must name the offending agent 'curator', got: {e}"
+        )
+
+    assert raised, (
+        "default dispatch must reject 'curator' (paper persona not in "
+        "AGENT_WHITELIST) — got no ValueError"
+    )
+    assert fake.call_count == 0, (
+        f"default rejection must NOT invoke the runner, got call_count="
+        f"{fake.call_count}"
+    )
+
+    # 2. Default call accepts a whitelisted opinion agent, reads the opinion
+    #    agent.md (NOT the paper one).
+    opinion_text = "OPINION-BIANYANG — the opinion-line broadcast rewriter"
+    (agents / "bianyang.md").write_text(opinion_text, encoding="utf-8")
+
+    fake2 = _FakeRunner(returncode=0, write_artifact=True)
+    fake2._expected_artifact = scratch / "broadcast.txt"
+
+    result = dispatch_persona(
+        agent_name="bianyang",
+        user_prompt="rewrite",
+        scratch_dir=scratch,
+        expected_artifact="broadcast.txt",
+        runner=fake2,
+        plugin_root=tmp_path,
+    )
+    assert result.get("ok") is True, f"default dispatch of opinion agent must succeed; got {result!r}"
+    argv_str = " ".join(str(a) for a in fake2.last_argv)
+    assert opinion_text in argv_str, (
+        f"default dispatch must load opinion agent.md; argv={argv_str!r}"
+    )
+    assert "PAPER-CURATOR" not in argv_str, (
+        f"default dispatch must NOT load the paper agent.md; argv={argv_str!r}"
+    )
+    # Sanity: the AGENT_WHITELIST is the opinion one (bianyang ∈ AGENT_WHITELIST).
+    assert "bianyang" in AGENT_WHITELIST

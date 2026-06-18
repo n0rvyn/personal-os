@@ -29,6 +29,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+# Per-line whitelists the runner threads into dispatch_persona (P3). Opinion
+# imports the leaf dispatch module directly (no cycle: dispatch is a leaf,
+# lines is a registry, dispatch does not import lines). Paper single-sources
+# from lib.pipeline_papers (the registry bridge — runner does NOT import
+# paperline; pipeline_papers is the one legitimate cross-line import).
+from lib.dispatch import AGENT_WHITELIST
+from lib.pipeline_papers import PAPER_AGENT_WHITELIST  # noqa: E402, F401
+
 
 @dataclass(frozen=True)
 class LineBundle:
@@ -42,6 +50,10 @@ class LineBundle:
       return shaping), not just a helper call.
     - `editorial_loader(show, plugin_root)` → the per-show editorial text.
     - `agent_dir` → the directory dispatch_persona reads `<name>.md` from.
+    - `whitelist` → the per-line agent whitelist the runner threads into
+      `dispatch_persona` (P3 line-aware dispatch). Defaults are byte-faithful:
+      OPINION_LINE carries the opinion `AGENT_WHITELIST`, PAPER_LINE carries
+      `PAPER_AGENT_WHITELIST` from `lib.pipeline_papers` (single-sourced).
     - `floor_fn(show)` → the per-show min-chars length floor.
     """
 
@@ -51,6 +63,7 @@ class LineBundle:
     executor_map: Callable[[], dict]
     editorial_loader: Callable[[str, Any], str]
     agent_dir: str
+    whitelist: "frozenset[str]"
     floor_fn: Callable[[str], int]
 
 
@@ -101,6 +114,7 @@ OPINION_LINE = LineBundle(
     executor_map=_opinion_executor_map,
     editorial_loader=_opinion_editorial_loader,
     agent_dir="agents",
+    whitelist=AGENT_WHITELIST,
     floor_fn=_opinion_floor,
 )
 
@@ -115,48 +129,63 @@ def _paper_topology(show: str) -> list:
 
 
 def _paper_gate_map() -> dict:
-    """Paper-line gate map.
+    """Paper-line gate map — delegates to `lib.paperline.executors`.
 
-    Wired in the executor-dispatch task (P3+). For now, returns an empty
-    dict so the bundle shape stays complete and the engine can resolve the
-    paper show without raising. Code stations in the paper collection
-    topology (config / scratch / discovery / fetch / ledger-verify) need
-    their gate fns only after the P3 generation stations land; the
-    ledger-verify station will use a `check_ledger_verify` gate wired
-    here once `lib.paperline.ledger` is invoked from the runner (P3+).
+    The paper-line gate map carries `check_ledger_verify` (the
+    `ledger-verify` station's `gate[0].fn` per `lib.pipeline_papers`).
+    The implementation lives in `lib.paperline.executors` (P3 Task 2-impl)
+    — `lib.lines` is the registry, NOT the executor surface, so it lazy-
+    delegates to keep the import graph clean (the registry bridge may
+    not import executor implementations at import time).
     """
-    return {}
+    from lib.paperline.executors import paper_gate_map  # lazy: registry bridge
+
+    return paper_gate_map()
 
 
 def _paper_executor_map() -> dict:
-    """Paper-line executor map.
+    """Paper-line executor map — delegates to `lib.paperline.executors`.
 
-    Wired in the executor-dispatch task (P3+). Returns an empty dict for
-    now — the collection code stations will be implemented in P3 once the
-    generation half of the paper line lands. The topology shape itself is
-    pinned now (Task 6-impl) so the engine can resolve the paper show and
-    the line registry stays the single source of truth.
+    Each value is a `(ctx) -> Any` callable wired in
+    `lib.paperline.executors.paper_executor_map()`. Lazy delegate so
+    importing `lib.lines` does not import the executor module (the
+    executor module imports `lib.paperline.*` siblings + lazy runner /
+    config helpers — would create a needless import chain at registry
+    load time).
     """
-    return {}
+    from lib.paperline.executors import paper_executor_map  # lazy: registry bridge
+
+    return paper_executor_map()
 
 
 def _paper_editorial_loader(show: str, plugin_root: Any) -> str:
     """Paper-line editorial loader.
 
-    The paper line has no editorial branch in v1 (P2 collection only).
-    Return empty string — the persona prompts (Task 5) carry their own
-    discipline and the runner has nothing to thread in. Byte-equivalent to
-    the opinion line's OSError→"" behavior for a missing reference file.
+    Reads `skills/podcast/references/papers.md` (the 4-段 editorial:
+    问题→方法→结果→意义+局限 + 讲解者 register + committee 差异
+    discipline). Mirrors the opinion line's OSError→"" behavior — a
+    missing file yields empty string, never a raise (the runner's
+    editorial path is fail-soft for the loader itself).
     """
-    return ""
+    try:
+        return (
+            Path(str(plugin_root)) / "skills" / "podcast" / "references" / "papers.md"
+        ).read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def _paper_floor(show: str) -> int:
-    """Paper-line floor (no character floor in v1 — collection only).
+    """Paper-line floor — committee draft min-chars gate.
 
-    Returns 0 because no minimum-chars gate runs on collection stations.
+    Returns 4500 (≈13 min @ ~350 non-ws chars/min, calibrated off the
+    opinion 6500 ≈18 min ratio for a focused single-paper digest). The
+    committee-lite 2-3 drafts pass through per-slice gate G2 against
+    this floor; below the floor the slice halts and re-runs. Opinion
+    floor stays in `_opinion_floor` → `lib.episode.floor_chars_for_show`
+    (byte-identical for morning/evening).
     """
-    return 0
+    return 4500
 
 
 PAPER_LINE = LineBundle(
@@ -166,6 +195,7 @@ PAPER_LINE = LineBundle(
     executor_map=_paper_executor_map,
     editorial_loader=_paper_editorial_loader,
     agent_dir="agents/papers",
+    whitelist=PAPER_AGENT_WHITELIST,
     floor_fn=_paper_floor,
 )
 

@@ -43,6 +43,7 @@ PAPER_AGENT_WHITELIST = {"curator", "ledger-writer"}
 # fetch (full text) -> ledger (persona writes the fact-ledger) ->
 # ledger-verify (code: validate_ledger + verify_anchors gate).
 EXPECTED_STATION_ORDER = [
+    # collection half (P2)
     "config",
     "scratch",
     "discovery",
@@ -50,6 +51,12 @@ EXPECTED_STATION_ORDER = [
     "fetch",
     "ledger-write",
     "ledger-verify",
+    # generation half (P3) — downstream of the verified ledger
+    "committee",
+    "digest-score",
+    "digest-select",
+    "finalize",
+    "faithfulness",
 ]
 
 
@@ -103,9 +110,10 @@ def test_topology_station_order():
 
 
 def test_topology_has_expected_kind_distribution():
-    """Two agent stations (curator, ledger-write) + five code stations
-    (config, scratch, discovery, fetch, ledger-verify). The validator's
-    kind check must accept every step."""
+    """Collection (P2): agents curator + ledger-write; code config/scratch/
+    discovery/fetch/ledger-verify. Generation (P3): agents committee/digest-score/
+    finalize/faithfulness; code digest-select. The validator's kind check must
+    accept every step."""
     from lib.pipeline_papers import _build_paper_steps
 
     steps = _build_paper_steps()
@@ -113,15 +121,19 @@ def test_topology_has_expected_kind_distribution():
     assert "code" in kinds, "expected at least one code station"
     assert "agent" in kinds, "expected at least one agent station"
 
-    # Two agents: curator + ledger-write. Five code: the rest.
     agent_names = [s["name"] for s in steps if s["kind"] == "agent"]
     code_names = [s["name"] for s in steps if s["kind"] == "code"]
-    assert set(agent_names) == {"curator", "ledger-write"}, (
-        f"agent stations must be curator + ledger-write, got {agent_names}"
+    assert set(agent_names) == {
+        "curator", "ledger-write",                       # collection
+        "committee", "digest-score", "finalize", "faithfulness",  # generation
+    }, (
+        f"agent stations must be the 2 collection + 4 generation personas, got {agent_names}"
     )
-    assert set(code_names) == {"config", "scratch", "discovery", "fetch", "ledger-verify"}, (
-        f"code stations must be config + scratch + discovery + fetch + ledger-verify, "
-        f"got {code_names}"
+    assert set(code_names) == {
+        "config", "scratch", "discovery", "fetch", "ledger-verify",  # collection
+        "digest-select",                                              # generation
+    }, (
+        f"code stations must be the 5 collection + digest-select, got {code_names}"
     )
 
 

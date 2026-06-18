@@ -40,8 +40,14 @@ from lib.pipeline import validate_pipeline
 # Distinct from the opinion-line AGENT_WHITELIST in lib.pipeline.py.
 # ---------------------------------------------------------------------------
 PAPER_AGENT_WHITELIST = frozenset({
+    # collection (P2)
     "curator",
     "ledger-writer",
+    # generation (P3): committee drafts, 科普 scorer, 讲解者 finalize, 忠实门 judge
+    "digest-writer",
+    "digest-scorer",
+    "finalizer",
+    "faithfulness-judge",
 })
 
 
@@ -168,6 +174,90 @@ def _build_paper_steps() -> list[dict[str, Any]]:
             "gate": [{"fn": "check_ledger_verify"}],
             "parallel": None,
             "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # ===================================================================
+        # GENERATION HALF (P3) — committee → score → select → finalize → 忠实门
+        # (downstream of the VERIFIED ledger; produces the 科普 解读稿.md).
+        # ===================================================================
+        # --- step 8: committee-lite (agent parallel fan-out) --------------
+        # Fan out digest-writer across 稿-A/稿-B/稿-C from the verified ledger
+        # (变讲法不变观点, no host opinion). Per-slice floor gate (过长度门, G2).
+        {
+            "name": "committee",
+            "kind": "agent",
+            "agent": "digest-writer",
+            "inputs": ["paper-ledger.json", "papers.md"],
+            # Slices use the ASCII A/B/C convention so `_apply_artifact_template`
+            # (regex `-([A-C])$`) substitutes cleanly → draft-A.md/draft-B.md/
+            # draft-C.md. (CJK 稿-A tags double-append: draft-稿-A + tag 稿-A →
+            # draft-稿-稿-A — caught in the live e2e.) The 科普 candidate_id
+            # 稿-A/稿-B/稿-C maps by position (A→稿-A) at digest-select.
+            "artifact": "draft-A.md",
+            # "floor" sentinel → runner resolves get_line("papers").floor_fn = 4500
+            # (过长度门, single-sourced from _paper_floor; G2 per-slice gating).
+            "gate": [{"fn": "check_min_chars", "args": {"min_chars": "floor"}}],
+            "parallel": ["A", "B", "C"],
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 9: digest-score (agent — 科普 4-维 structured scorer) ----
+        {
+            "name": "digest-score",
+            "kind": "agent",
+            "agent": "digest-scorer",
+            "inputs": ["draft-A.md", "draft-B.md", "draft-C.md"],
+            "artifact": "digest-score-verdict.json",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 10: digest-select (code — deterministic select_digest) --
+        {
+            "name": "digest-select",
+            "kind": "code",
+            "agent": None,
+            "inputs": ["digest-score-verdict.json"],
+            "artifact": "digest-selected.json",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 11: finalize (agent — 讲解者 voice unify) ----------------
+        # The _RETRY_PARENT target for the 忠实门 retry (re-derives body content).
+        {
+            "name": "finalize",
+            "kind": "agent",
+            "agent": "finalizer",
+            "inputs": ["digest-selected.json", "papers-voice.md"],
+            "artifact": "finalize-result.json",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 12: 忠实门 (agent extract + code gate, blocking retry=1) --
+        # faithfulness-judge extracts per-claim signals; the check_faithfulness
+        # gate RECOMPUTES the deterministic floor (traceability + 夸大 + 局限)
+        # and merges agent ADD-only flags. A miss re-dispatches `finalize`
+        # (_RETRY_PARENT) to re-derive the body; a second miss HALTS — no
+        # 解读稿.md is published (D-009: never a half-product).
+        {
+            "name": "faithfulness",
+            "kind": "agent",
+            "agent": "faithfulness-judge",
+            "inputs": ["finalize-result.json", "paper-ledger.json", "fulltext.txt"],
+            "artifact": "faithfulness-verdict.json",
+            "gate": [{"fn": "check_faithfulness"}],
+            "parallel": None,
+            "retry": 1,
             "skip_when": None,
             "fail_soft": None,
         },

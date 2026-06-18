@@ -155,3 +155,63 @@ def test_bundle_exposes_contract():
     assert callable(b.gate_map)
     assert callable(b.editorial_loader)
     assert callable(b.floor_fn)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — LineBundle.whitelist field (Task 1-tests).
+#
+# The bundle gains a `whitelist` field carrying the per-line agent
+# whitelist the runner threads into dispatch_persona. Opinion must
+# carry AGENT_WHITELIST (byte-identical to today); paper must carry
+# PAPER_AGENT_WHITELIST.
+# ---------------------------------------------------------------------------
+
+def test_bundle_has_whitelist_field():
+    """LineBundle must expose a `whitelist` field.
+
+    Opinion (morning/evening) → AGENT_WHITELIST (byte-identical to pre-P3).
+    Paper (papers) → PAPER_AGENT_WHITELIST (curator/ledger-writer).
+
+    The `whitelist` field is the per-line agent whitelist the runner
+    threads into dispatch_persona via the `whitelist=` kwarg. Defaults
+    must preserve opinion behavior byte-identically (per the
+    "byte-identical despite the edit" obligation).
+    """
+    from lib.dispatch import AGENT_WHITELIST
+    from lib.pipeline_papers import PAPER_AGENT_WHITELIST
+
+    # Morning + evening share ONE line → one whitelist.
+    opinion_m = get_line("morning")
+    opinion_e = get_line("evening")
+    paper = get_line("papers")
+
+    # 1. The field exists on all bundles.
+    for b, label in ((opinion_m, "opinion(morning)"), (opinion_e, "opinion(evening)"), (paper, "paper")):
+        assert hasattr(b, "whitelist"), f"{label} bundle missing `whitelist` field"
+        assert b.whitelist is not None, (
+            f"{label} bundle.whitelist must be set, got None"
+        )
+
+    # 2. Opinion bundles carry AGENT_WHITELIST (the existing opinion
+    #    whitelist) — byte-identical to pre-P3 behavior.
+    assert opinion_m.whitelist == AGENT_WHITELIST, (
+        f"opinion morning whitelist must equal dispatch.AGENT_WHITELIST; "
+        f"got {sorted(opinion_m.whitelist)}"
+    )
+    assert opinion_e.whitelist == AGENT_WHITELIST, (
+        f"opinion evening whitelist must equal dispatch.AGENT_WHITELIST; "
+        f"got {sorted(opinion_e.whitelist)}"
+    )
+
+    # 3. Paper bundle carries PAPER_AGENT_WHITELIST (curator/ledger-writer).
+    assert paper.whitelist == PAPER_AGENT_WHITELIST, (
+        f"paper whitelist must equal PAPER_AGENT_WHITELIST; "
+        f"got {sorted(paper.whitelist)}"
+    )
+
+    # 4. Opinion and paper whitelists are distinct objects (no shared
+    #    mutable state across lines — the firewall half).
+    assert opinion_m.whitelist is not paper.whitelist, (
+        "opinion and paper whitelists must be distinct objects "
+        "(no shared mutable state)"
+    )

@@ -741,6 +741,251 @@ def test_retry_succeeds_on_second_attempt(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Engine-level 忠实门 retry test (P3 Task 6 MF#3).
+#
+# The unit-level tests in `test_paperline_faithfulness.py` pin the gate's
+# verdict shape (PASS / FLAGGED). The engine-level test below pins the
+# retry-then-stop behavior at the runner level:
+#
+#   1. A faithfulness gate miss on the first attempt must RE-DISPATCH the
+#      finalize parent (via the `_RETRY_PARENT` entry faithfulness→finalize),
+#      then re-run the gate.
+#   2. A second-attempt miss must HALT the run with no .md written
+#      (the no-publish discipline — D-009 / Threat Model §2).
+#
+# Without this engine-level test, the retry wiring could be broken (the
+# `_RETRY_PARENT` entry absent, or the entry's target wrong) while the
+# unit tests still pass — the P2 vacuous-firewall lesson ("looks wired,
+# isn't").
+#
+# Test topology (paper-line shaped; mirrors `_build_paper_steps` end state):
+#     finalize → faithfulness
+# `finalize` is a code station that writes finalize-result.json + body.md
+# (mutating body content each call so the second gate-miss sees a fresh
+# body — the retry re-derives body content, not just re-voice-wraps).
+# `faithfulness` is a code station with `gate: check_faithfulness`,
+# `retry: 1`, fail-closed.
+#
+# NOTE: This test deliberately drives the runner with a MINIMAL injected
+# topology (NOT the real `load_papers_pipeline`) because:
+#   - the paper-line topology is gated by `_FORBIDDEN_IN_PAPER` / whitelist
+#     validation in P3 Task 5-impl + 6-impl (not yet landed in this task),
+#   - the engine's retry mechanism is the runner primitive we want to pin,
+#     not the paper topology's specific station shapes,
+#   - driving a minimal topology keeps the test focused on the load-bearing
+#     retry behavior (`_RETRY_PARENT` resolves + the parent re-runs + the
+#     gate re-checks + second fail halts).
+# ---------------------------------------------------------------------------
+
+def test_faithfulness_gate_retry_redispatches_finalize_then_halts(tmp_path, monkeypatch):
+    """P3 Task 6 MF#3: the 忠实门 gate's `retry: 1` MUST re-dispatch the
+    finalize parent (via `_RETRY_PARENT[<faithfulness>] = "finalize"`),
+    then re-run the gate. A second-attempt fail HALTs with no .md written.
+
+    Drives the runner with an injected 2-station topology
+    (finalize → faithfulness) and a fake dispatch / gate that always fail
+    the faithfulness check — the gate never accepts a body, so the cap
+    exhausts and the run halts.
+
+    What this pins (must all be true for the test to pass):
+      (a) `_RETRY_PARENT` carries an entry mapping the faithfulness gate
+          station name → the paper finalize station name. Without this
+          entry, the retry just re-runs the gate on the unchanged body
+          (= inert; would still fail twice and halt, but the
+          parent-re-dispatch half would not happen).
+      (b) `finalize` is dispatched the initial count + 1 retry count = 2
+          times (the parent's body-derivation must actually re-run, NOT
+          be skipped — mirrors the existing `test_retry_dispatches_twice_
+          then_halts_on_cap` discipline for the opinion `factcheck` gate).
+      (c) No `解读稿.md` is written on the twice-failing run (the
+          no-publish discipline: a faithful gate is the only path to
+          the .md; a failing run stops at the gate).
+
+    Pinning (a)+(b) together proves the wiring is real (per the P2
+    vacuous-firewall lesson). Pinning (c) proves the no-publish discipline.
+    """
+    from lib import runner as runner_mod
+    from lib.runner import _RETRY_PARENT, run_pipeline
+
+    # --- (a) _RETRY_PARENT must carry an entry for the faithfulness gate ---
+    # The faithfulness gate station name is locked by Task 6-impl (a code
+    # station named after the 忠实门, e.g. `faithfulness` or `faithfulness-gate`).
+    # The KEY family is: any entry whose KEY looks like a faithfulness gate
+    # (i.e. contains "faithful" or "忠实") AND whose VALUE points at a
+    # finalize-like parent. The KEY-pin matches the silent-divergence rule
+    # (don't pick up unrelated `_RETRY_PARENT` entries like `factcheck` —
+    # which is opinion's 12a gate, not paper's 忠实门).
+    faithfulness_targets = {
+        name: parent for name, parent in _RETRY_PARENT.items()
+        if "finalize" in parent.lower()
+        and ("faithful" in name.lower() or "faithfulness" in name.lower())
+    }
+    assert faithfulness_targets, (
+        f"_RETRY_PARENT must carry at least one entry whose KEY is a "
+        f"faithfulness gate (e.g. 'faithfulness' / 'faithfulness-gate') "
+        f"AND whose VALUE is a finalize-like parent (the 忠实门 retry must "
+        f"re-dispatch the paper finalize parent to re-derive body content); "
+        f"got {_RETRY_PARENT!r}"
+    )
+
+    # --- (b)+(c) drive the runner with an injected minimal topology ---
+    # The injected topology names the gate station the same way the
+    # `_RETRY_PARENT` entry expects (use the key from the entry).
+    gate_station_name, parent_station_name = next(iter(faithfulness_targets.items()))
+
+    def _finalize_executor(ctx: dict[str, Any]) -> Any:
+        """Finalize executor — writes finalize-result.json + body.md.
+        Mutates the body content on each call (so the gate re-check sees
+        a fresh body — the discipline is 'retry re-derives body CONTENT',
+        not 're-voice-wrap the same body' per Task 6 plan)."""
+        scratch: Path = ctx["scratch_dir"]
+        body_path = scratch / "body.md"
+        # Tag each generation so we can assert two distinct bodies.
+        counter_attr = "_finalize_call_n"
+        body_tag = str(ctx.get(counter_attr, 0))
+        ctx[counter_attr] = int(body_tag) + 1
+        body_text = f"finalize body generation {body_tag}\n"
+        body_path.write_text(body_text, encoding="utf-8")
+        # The finalize-result.json mirrors the opinion runner's shape
+        # (lib.episode.load_finalize_body reads this file).
+        (scratch / "finalize-result.json").write_text(
+            json.dumps({"title": "test", "body": body_text}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return body_path
+
+    def _faithfulness_gate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Faithfulness gate — ALWAYS fails (so the retry exhausts). The
+        `_run_gate` shape accepts `(gates, gate_item, path, show, ctx)`.
+        We return ok=False to drive a halt."""
+        return {
+            "ok": False,
+            "reason": "fake faithfulness miss",
+            "flagged": [{"reason": "fake 夸大", "source": "deterministic"}],
+        }
+
+    injected_topology = [
+        {
+            "name": parent_station_name,
+            "kind": "code",
+            "agent": None,
+            "inputs": [],
+            "artifact": None,
+            "gate": None,
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        {
+            "name": gate_station_name,
+            "kind": "code",
+            "agent": None,
+            "inputs": ["body.md"],
+            "artifact": "body.md",
+            "gate": [{"fn": "check_faithfulness"}],
+            "parallel": None,
+            "retry": 1,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+    ]
+
+    scratch = _bootstrap_scratch(tmp_path)
+
+    class _StubLine:
+        line_id = "stub"
+        def topology(self, show: str) -> list:
+            return [dict(s) for s in injected_topology]
+        def gate_map(self) -> dict:
+            return {}
+        def executor_map(self) -> dict:
+            return {
+                parent_station_name: _finalize_executor,
+            }
+        def editorial_loader(self, show: str, plugin_root: Any) -> str:
+            return ""
+        agent_dir = "agents"
+        whitelist = frozenset()
+        def floor_fn(self, show: str) -> int:
+            return 0
+
+    # Override `get_line` to return our stub (so the runner resolves
+    # `get_line(ctx["show"]).topology(...)` to the injected topology).
+    monkeypatch.setattr("lib.lines.get_line", lambda show: _StubLine())
+    # Also stub the engine-level gate map (the runner reads gates from
+    # the injected `gates` arg; this just supplies our fail-everything gate).
+    gates = {
+        "check_faithfulness": _faithfulness_gate,
+        "check_artifact": lambda *a, **kw: {"ok": True, "reason": "ok (default)"},
+    }
+
+    fake = _FakeDispatch()
+    config = _make_config_stub()
+
+    result = run_pipeline(
+        "morning",  # show name doesn't matter; _StubLine returns our topology
+        date="2026-06-18",
+        dispatch=fake,
+        gates=gates,
+        config=config,
+        scratch_dir=scratch,
+    )
+
+    # (b1) The run halted at the faithfulness gate.
+    assert result.get("status") == "halted", (
+        f"twice-failing faithfulness gate must HALT; got {result!r}"
+    )
+    assert gate_station_name in str(result.get("failed_step", "")).lower(), (
+        f"halt must name the faithfulness gate; got {result!r}"
+    )
+
+    # (b2) finalize ran twice (initial + retry). The retry must have
+    # re-dispatched the parent; without the `_RETRY_PARENT` entry the
+    # count would be 1 (only the initial pass).
+    body_path = scratch / "body.md"
+    assert body_path.exists(), (
+        f"finalize must have written body.md at least once; "
+        f"scratch contents: {sorted(p.name for p in scratch.iterdir())}"
+    )
+    body_text = body_path.read_text(encoding="utf-8")
+    assert "generation 1" in body_text, (
+        f"finalize must have re-run on the retry (body content must be "
+        f"the SECOND generation, not the first — proves the retry "
+        f"re-derives body CONTENT, not just re-voice-wraps); "
+        f"got body {body_text!r}"
+    )
+
+    # (c) No `解读稿.md` written on the twice-failing run. The
+    # engine-level discipline is "a faithful gate is the only path to the
+    # .md" — the gate-failing run stops at the gate with the body in
+    # scratch, no published artifact.
+    #
+    # In this minimal topology there's no `publish` station wired (the
+    # paper-line publish station lands in P4). So the discipline pin is:
+    # `run_pipeline` halted (above), and `body.md` stays in scratch
+    # (never moved to `episodes/`). The episodes_dir may have pre-existing
+    # data from prior runs — we filter by THIS run's date so we only assert
+    # on what THIS run produced.
+    today = "2026-06-18"
+    out_episodes = str(getattr(config.vault, "episodes_dir", "")) or str(
+        Path(str(getattr(config.vault, "output_dir", "/tmp/ief")))
+        / "episodes"
+    )
+    episodes_dir = Path(str(out_episodes))
+    if episodes_dir.exists():
+        # Only flag artifacts dated for THIS run (today's date prefix).
+        stray = sorted(
+            p.name for p in episodes_dir.iterdir()
+            if p.name.startswith(today)
+        )
+        assert not stray, (
+            f"twice-failing run must NOT publish a body to episodes/ "
+            f"for date {today}; found: {stray}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 7) 5b degradation vs missing — runner distinguishes
 # ---------------------------------------------------------------------------
 
@@ -2705,3 +2950,240 @@ def test_continuity_read_corrupt_card_halts_not_crash(tmp_path):
     assert result.get("failed_step") == "continuity-read", (
         f"halt must name continuity-read, got {result.get('failed_step')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — line-aware dispatch threading through the runner (Task 1-tests).
+#
+# Per task 1-tests:
+# - "runner-level: a morning agent step, run through `_run_dispatch` with a
+#   capturing fake, receives `agent_dir='agents'` + `whitelist=AGENT_WHITELIST`
+#   (proves the threading didn't change opinion behavior) — AND a papers
+#   agent step receives `agent_dir='agents/papers'` + `PAPER_AGENT_WHITELIST`
+#   (proves the paper path actually threads, per the P2 vacuous-firewall
+#   lesson 'looks wired, isn't')."
+#
+# These are FAIL-first pins: Task 1-impl will thread the new kwargs from
+# `_run_dispatch` / `_default_dispatch` all the way down to `dispatch_persona`.
+# The fake captures the kwargs each dispatch receives; we assert
+# `agent_dir` + `whitelist` arrive on BOTH the opinion (morning) and the
+# paper (papers) paths.
+# ---------------------------------------------------------------------------
+
+class _KwargCapturingDispatch:
+    """Capture every dispatch kwarg the runner threads through.
+
+    Records each call's full kwargs dict so the runner-level test can
+    assert `agent_dir=` and `whitelist=` actually arrived (proving the
+    3-layer threading — `_run_agent_step` → `_run_dispatch` →
+    `dispatch_persona` — wired the line's bundle values).
+    """
+    def __init__(self):
+        self.calls: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
+
+    def __call__(
+        self,
+        agent_name: str,
+        user_prompt: str,
+        scratch_dir: Any,
+        expected_artifact: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        with self._lock:
+            self.calls.append({
+                "agent": agent_name,
+                "user_prompt": user_prompt,
+                "scratch_dir": str(scratch_dir),
+                "expected_artifact": expected_artifact,
+                "kwargs": dict(kwargs),
+            })
+        # Mimic the real dispatch contract on success. The paper
+        # collection topology's `curator` artifact is JSON
+        # (`chosen-arxiv-id.json`) consumed by the `fetch` code executor;
+        # write a real JSON stub so the executor's `json.loads(...)` call
+        # succeeds. `ledger-writer` is JSON too; the opinion pipeline's
+        # artifacts are free text.
+        p = Path(str(scratch_dir)) / expected_artifact
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists() or p.stat().st_size == 0:
+            if expected_artifact.endswith(".json") and agent_name == "curator":
+                p.write_text(
+                    '{"arxiv_id": "2606.19341v1", "rationale": "stub"}',
+                    encoding="utf-8",
+                )
+            elif expected_artifact.endswith(".json") and agent_name == "ledger-writer":
+                # Minimal 4-section ledger so the gate has something to
+                # validate. Anchors point at the fulltext the executor
+                # patches in (see the test setup); the gate may flag the
+                # anchor — that's irrelevant to this test, which only
+                # cares about dispatch threading.
+                p.write_text(
+                    '{"problem": [], "method": [], "key_results": [], '
+                    '"limitations": []}',
+                    encoding="utf-8",
+                )
+            else:
+                p.write_text("stub body", encoding="utf-8")
+        return {
+            "ok": True,
+            "reason": f"capturing fake wrote {p}",
+            "artifact_path": str(p),
+        }
+
+
+def test_runner_threads_agent_dir_and_whitelist_for_morning(tmp_path):
+    """Runner-level (the 3-layer threading): a morning agent step,
+    driven through `_run_dispatch`, must receive `agent_dir="agents"`
+    + `whitelist=AGENT_WHITELIST`. This is the "byte-identical despite
+    the edit" proof: the default opinion path still resolves the opinion
+    agents dir + opinion whitelist — Task 1-impl must not regress this.
+    """
+    from lib.runner import run_pipeline
+    from lib.dispatch import AGENT_WHITELIST
+
+    scratch = _bootstrap_scratch(tmp_path)
+    fake = _KwargCapturingDispatch()
+    gates = _make_gate_map()
+    config = _make_config_stub()
+
+    result = run_pipeline(
+        "morning",
+        date="2026-06-14",
+        dispatch=fake,
+        gates=gates,
+        config=config,
+        scratch_dir=scratch,
+    )
+
+    # The pipeline must have run cleanly (the fake never fails).
+    assert isinstance(result, dict)
+    assert result.get("status") != "halted", (
+        f"morning run must not halt; got {result!r}"
+    )
+    # Some agent dispatches must have happened (the morning pipeline has
+    # multiple agent stations; this is the precondition for the threading
+    # assertion below).
+    assert len(fake.calls) > 0, (
+        f"runner must invoke the dispatch at least once for morning; "
+        f"got 0 calls"
+    )
+    # Every opinion dispatch must carry agent_dir="agents" and
+    # whitelist=AGENT_WHITELIST in its kwargs. (The thread must hit
+    # _run_dispatch → _default_dispatch → dispatch_persona.)
+    for call in fake.calls:
+        kwargs = call["kwargs"]
+        assert "agent_dir" in kwargs, (
+            f"opinion dispatch kwargs must include `agent_dir` "
+            f"(3-layer thread proof); got kwargs={kwargs!r}"
+        )
+        assert kwargs["agent_dir"] == "agents", (
+            f"opinion dispatch must receive agent_dir='agents', got "
+            f"{kwargs['agent_dir']!r} (call agent={call['agent']!r})"
+        )
+        assert "whitelist" in kwargs, (
+            f"opinion dispatch kwargs must include `whitelist` "
+            f"(3-layer thread proof); got kwargs={kwargs!r}"
+        )
+        assert kwargs["whitelist"] == AGENT_WHITELIST, (
+            f"opinion dispatch must receive whitelist=AGENT_WHITELIST, "
+            f"got {kwargs['whitelist']!r} (call agent={call['agent']!r})"
+        )
+
+
+def test_runner_threads_paper_agent_dir_and_whitelist(tmp_path, monkeypatch):
+    """Runner-level (the 3-layer threading): a papers agent step must
+    receive `agent_dir="agents/papers"` + `whitelist=PAPER_AGENT_WHITELIST`.
+    This is the "paper path actually threads" pin (the P2 vacuous-firewall
+    lesson: "looks wired, isn't" — a unit-level pin alone is insufficient,
+    the runner-level pin proves the threading goes all the way through).
+    """
+    from lib.runner import run_pipeline
+    from lib.pipeline_papers import PAPER_AGENT_WHITELIST
+
+    scratch = _bootstrap_scratch(tmp_path)
+    fake = _KwargCapturingDispatch()
+    gates = _make_gate_map()
+    config = _make_config_stub()
+    # Paper-line requires `cfg.papers.{categories,max_candidates}` for the
+    # discovery executor. The runner wires `cfg.papers.categories` into
+    # `fetch_categories(...)` directly; with MagicMock defaults it sees a
+    # truthy MagicMock iterable, and the gate's `check_artifact` passes
+    # because the executor writes the candidates.json. We stub a real
+    # tuple + integer so the executor doesn't hit arXiv / fail on a
+    # MagicMock-iterable shape mismatch.
+    config.papers = MagicMock()
+    config.papers.categories = ("cs.CL",)
+    config.papers.max_candidates = 15
+    # Stub BOTH network-calling stations so this runner-level threading test is
+    # offline-deterministic (it asserts dispatch kwargs, NOT real collection):
+    #   - discovery `_https_get` → a one-entry arXiv feed (so candidates.json is
+    #     non-empty and the curator station is reached + dispatched).
+    #   - fetch `fetch_fulltext` → canned text (the fetch station at
+    #     executors.py:231 otherwise hits live arxiv.org/html → URLError flake;
+    #     confirmed by stack trace). Use `monkeypatch` so both are auto-restored
+    #     and never leak into sibling tests (the prior raw module-attr assignment
+    #     leaked for the whole session).
+    from lib.paperline import discovery as _discovery_mod
+    from lib.paperline import fetch as _fetch_mod
+    _FEED = (
+        b"<feed xmlns='http://www.w3.org/2005/Atom' "
+        b"xmlns:arxiv='http://arxiv.org/schemas/atom'>"
+        b"<entry><id>http://arxiv.org/abs/2606.19341v1</id>"
+        b"<title>Stub</title><summary>Stub</summary>"
+        b"<published>2026-06-14T00:00:00Z</published>"
+        b"<arxiv:primary_category term='cs.CL'/>"
+        b"<category term='cs.CL'/>"
+        b"<link rel='related' type='application/pdf' href='http://arxiv.org/pdf/2606.19341v1'/>"
+        b"</entry></feed>"
+    )
+    monkeypatch.setattr(_discovery_mod, "_https_get", lambda url, *, timeout=30: _FEED)
+    monkeypatch.setattr(
+        _fetch_mod,
+        "fetch_fulltext",
+        lambda arxiv_id, **kw: {"method": "html", "text": "stub fulltext", "source_url": "stub"},
+    )
+
+    result = run_pipeline(
+        "papers",
+        date="2026-06-14",
+        no_tts=True,
+        dispatch=fake,
+        gates=gates,
+        config=config,
+        scratch_dir=scratch,
+    )
+
+    assert isinstance(result, dict)
+    # NOTE: paper collection stations are mostly code-only (config,
+    # scratch, discovery, fetch, ledger-verify); only curator + ledger-writer
+    # dispatch. The test asserts the threading reached the agent dispatches.
+    paper_agent_calls = [
+        c for c in fake.calls
+        if c["agent"] in ("curator", "ledger-writer")
+    ]
+    assert len(paper_agent_calls) >= 1, (
+        f"papers pipeline must dispatch at least one paper agent "
+        f"(curator/ledger-writer); got calls="
+        f"{[(c['agent'], c['kwargs'].get('agent_dir')) for c in fake.calls]!r}"
+    )
+    # Every paper dispatch must carry agent_dir="agents/papers" +
+    # whitelist=PAPER_AGENT_WHITELIST.
+    for call in paper_agent_calls:
+        kwargs = call["kwargs"]
+        assert "agent_dir" in kwargs, (
+            f"paper dispatch kwargs must include `agent_dir` "
+            f"(3-layer thread proof); got kwargs={kwargs!r}"
+        )
+        assert kwargs["agent_dir"] == "agents/papers", (
+            f"paper dispatch must receive agent_dir='agents/papers', got "
+            f"{kwargs['agent_dir']!r} (call agent={call['agent']!r})"
+        )
+        assert "whitelist" in kwargs, (
+            f"paper dispatch kwargs must include `whitelist` "
+            f"(3-layer thread proof); got kwargs={kwargs!r}"
+        )
+        assert kwargs["whitelist"] == PAPER_AGENT_WHITELIST, (
+            f"paper dispatch must receive whitelist=PAPER_AGENT_WHITELIST, "
+            f"got {kwargs['whitelist']!r} (call agent={call['agent']!r})"
+        )

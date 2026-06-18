@@ -106,6 +106,8 @@ confirmed_at: 2026-06-18T10:04:41
 <!-- section: phase-3 keywords: committee-lite, digest-rubric, explainer-voice, faithfulness-gate, paper-draft -->
 ## Phase 3: 论文生成侧
 
+**Status:** 🔶 Implementation + unit (424 lib/184 prep/8 bats) + opinion zero-change + implementation-reviewer 0 must-fix DONE. **LIVE validation partial:** the live run (real paper 2606.19341 via staged-injection, arXiv 503 down) PROVED collection (curator pick + fetch + ledger) + committee (3 real drafts) + digest-scorer (valid verdict) + select live; **finalize + 忠实门 live run slow/in-flight** (40-min/dispatch). **2 bugs the live run surfaced — both FIXED:** (1) artifact-naming `draft-稿-稿-A.md` (CJK tag double-append → A/B/C ASCII slices); (2) **SF-2** 局限保留 was a design conflict (a paraphrasing finalizer false-halts on verbatim/n-gram coverage — empirically confirmed) → coverage moved to AGENT-assessed (user chose option 1, 2026-06-18); 溯源+夸大 stay code floors. ⚠️ REMAINING for true phase-done: one clean live finalize+忠实门 pass (a real paper → a real 解读稿.md that clears the gate) — blocked by slow finalize + arXiv 503.
+
 **Goal:** 从一篇真实论文产出一期忠实科普解读稿（no-TTS），讲法清楚、不掺观点，且忠实门拦得住夸大/漏局限。
 
 **Depends on:** Phase 2
@@ -124,11 +126,11 @@ confirmed_at: 2026-06-18T10:04:41
 - 科普 select 破平规则的代码位置（论文线自有 select 模块）。
 
 **Acceptance criteria:**
-- [ ] 真实 no-TTS e2e：从真实论文产出一期忠实科普解读 `.md`（4 段 / 讲解者声音 / 无观点掺入 / 过长度门）。
-- [ ] 忠实门拦截力（确定性证）：构造一份夸大稿（"提升3%"→"解决了"）+ 一份漏局限稿，门能 flag 并打回；二次失败停线。
-- [ ] 科普 select 物理隔离：不 import / 不调用观点线 `select_draft`（结构测试覆盖）。
-- [ ] 早晚间回归四门仍全绿。
-- [ ] UT + E2E pass for 生成侧。
+- [~] 真实 no-TTS e2e：从真实论文产出一期忠实科普解读 `.md`（4 段 / 讲解者声音 / 无观点掺入 / 过长度门）。 — **引擎链确定性证毕**（`run_pipeline('papers', no_tts=True)` 走通 committee→score→select→finalize→忠实门，status=ok，过长度门 4500）；**LIVE-LLM 真实论文生成 ⏸ DEFERRED 到 P4**（同 P1/P2 Option-B：慢/proxy-gated；引擎接线已证，缺的是一次真跑）+ SF-2 局限覆盖鲁棒性需在真实草稿上调（P4 ship-gate）。
+- [x] 忠实门拦截力（确定性证）：构造一份夸大稿 + 一份漏局限稿，门能 flag 并打回；二次失败停线。 — gate 直证（夸大 7 flags / 漏局限 3 flags / faithful PASS）+ **引擎级证**（exaggerated body 过 `run_pipeline` → status=halted, failed_step=faithfulness, 无 .md；retry 重派 finalize 后二次 fail 停线）。agent `faithful:true` 自标清不掉确定性 flag（ADD-only，9 UT + reviewer 实证）。
+- [x] 科普 select 物理隔离：不 import / 不调用观点线 `select_draft`。 — `lib/paperline/select.py` 独立模块；**靶向 AST 测试** `test_select_does_not_import_episode`（既有 firewall 不覆盖 episode，reviewer 植入 import 实证能拦）。
+- [x] 早晚间回归四门仍全绿。 — golden byte-identical；423 lib + 184 prep + 8 bats 全绿；runner.py/dispatch.py 零 paper import（dispatch 线感知/_RETRY_PARENT/_call_gate 改动均向后兼容）。
+- [x] UT + E2E pass for 生成侧。 — UT: select 14 / faithfulness 9 / executors / topology / engine-retry 全绿（offline urllib-blocked）；E2E: `evals/paperline_generation_e2e.py` Part A(gate blocks)+B(happy chain)+C(engine block) 全 PASS。
 
 **Review checklist:**
 - [ ] run-phase review step（implementation-reviewer，重点核对忠实门 recompute 不信自标、select 隔离、声音不挂 bible）。

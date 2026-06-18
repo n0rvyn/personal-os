@@ -1,0 +1,92 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/0MIIcwP0V8ZrQQRcj3WGf3A4aDo</id>
+  <title>arXiv Query: search_query=cat:cs.CL&amp;id_list=&amp;start=0&amp;max_results=2</title>
+  <updated>2026-06-18T06:14:50Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=cat:cs.CL&amp;start=0&amp;max_results=2&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>2</opensearch:itemsPerPage>
+  <opensearch:totalResults>112489</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2606.19341v1</id>
+    <title>Native Active Perception as Reasoning for Omni-Modal Understanding</title>
+    <updated>2026-06-17T17:59:56Z</updated>
+    <link href="https://arxiv.org/abs/2606.19341v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2606.19341v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Passive models for long video understanding typically rely on a "watch-it-all" paradigm, processing frames uniformly regardless of query difficulty, causing computational cost to grow with video duration. Although interactive frameworks have emerged, they often rely on global pre-scanning, and their context cost still scales with video length. We propose OmniAgent, the first native omni-modal agent that formulates video understanding as a POMDP-based iterative Observation-Thought-Action cycle. OmniAgent executes on-demand actions to selectively distill audio-visual cues into a persistent textual memory, effectively decoupling reasoning complexity from raw video duration. To operationalize this, we introduce (1) Agentic Supervised Fine-Tuning to bootstrap native active perception via best-of-N trajectory synthesis with dual-stage quality control, and (2) Agentic Reinforcement Learning with TAURA (Turn-aware Adaptive Uncertainty Rescaled Advantage), which leverages turn-level entropy to steer credit assignment toward pivotal discovery turns. Crucially, OmniAgent exhibits positive test-time scaling, where performance improves as the number of reasoning turns increases, validating the efficacy of active perception. Empirical results across ten benchmarks (e.g., VideoMME, LVBench) demonstrate that OmniAgent achieves state-of-the-art performance among open-source models. Notably, on LVBench, our 7B agent outperforms the 10$\times$ larger Qwen2.5-VL-72B (50.5% vs. 47.3%).</summary>
+    <category term="cs.CV" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.SD" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-06-17T17:59:56Z</published>
+    <arxiv:comment>Accepted at ICML 2026. Code and models: https://github.com/harryhsing/omniagent</arxiv:comment>
+    <arxiv:primary_category term="cs.CV"/>
+    <author>
+      <name>Zhenghao Xing</name>
+    </author>
+    <author>
+      <name>Ruiyang Xu</name>
+    </author>
+    <author>
+      <name>Yuxuan Wang</name>
+    </author>
+    <author>
+      <name>Jinzheng He</name>
+    </author>
+    <author>
+      <name>Ziyang Ma</name>
+    </author>
+    <author>
+      <name>Qize Yang</name>
+    </author>
+    <author>
+      <name>Yunfei Chu</name>
+    </author>
+    <author>
+      <name>Jin Xu</name>
+    </author>
+    <author>
+      <name>Junyang Lin</name>
+    </author>
+    <author>
+      <name>Chi-Wing Fu</name>
+    </author>
+    <author>
+      <name>Pheng-Ann Heng</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2606.19336v1</id>
+    <title>Learning User Simulators with Turing Rewards</title>
+    <updated>2026-06-17T17:58:48Z</updated>
+    <link href="https://arxiv.org/abs/2606.19336v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2606.19336v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Learning to simulate human users in interactive settings could advance the training of agent assistants, evaluation of personalization systems, research in the social sciences, and more. Existing approaches generally do so by training a large language model (LLM) to match a single ground truth response, either by maximizing the log probability or by using a similarity reward. We instead propose {Turing-RL}: a Turing-Test-based reinforcement learning approach for training user simulator models. {Turing-RL} uses a discriminative Turing reward with an LLM judge to score how indistinguishable a generated response is from the real user's given the user's history, and the user simulator LLM learns to produce responses indistinguishable from what the user could have said with such rewards. Across two different domains--conversational chat and Reddit forum discussion--we find that {Turing-RL} consistently outperforms baseline methods on both LLM and human evaluation metrics. Our study suggests that optimizing for indistinguishability, rather than response matching, is effective for learning user simulators.</summary>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-06-17T17:58:48Z</published>
+    <arxiv:primary_category term="cs.CL"/>
+    <author>
+      <name>Yingshan Susan Wang</name>
+    </author>
+    <author>
+      <name>Cedegao E. Zhang</name>
+    </author>
+    <author>
+      <name>Linlu Qiu</name>
+    </author>
+    <author>
+      <name>Zexue He</name>
+    </author>
+    <author>
+      <name>Pengyuan Li</name>
+    </author>
+    <author>
+      <name>Alex Pentland</name>
+    </author>
+    <author>
+      <name>Roger P. Levy</name>
+    </author>
+    <author>
+      <name>Yoon Kim</name>
+    </author>
+  </entry>
+</feed>

@@ -79,3 +79,34 @@ Sandbox: `Content/Podcasts/.e2e-sandbox-phase2` (real PKOS inputs, seeded with 6
 - Task 7-tests: regression fixtures + integration 测试 ✅ — 3/3 PASS
 - Task 7-impl: fixtures landed + integration green ✅ — 06-14 fixture→不达标 (deterministic hard gates, judge=None still red: sections=5/draft/betting/duration 5455<6570/intra-dup/cross-dup); clean→绿; **temperature-shield→绿 (acceptance #5: repeated 主观判断 + woven judgment NOT flagged)**. Real 06-14 artifacts vendored into lib/tests/fixtures/ (no absolute paths).
 - **Segment 2 green: full suite 304/304.** All 13 tasks done. **Status: complete.**
+
+---
+
+**Plan:** /Users/norvyn/Code/Skills/personal-os/podcast-studio/docs/06-plans/2026-06-18-paper-digest-p2-collection-plan.md
+**Status:** complete
+**Tasks:** 14/14 completed, 0 blocked, 0 failed (1 inline orchestrator fix: 2-impl false test assertion)
+
+### Task Results
+
+- Task 1-tests: config `papers.*` tests ✅ — 3 new papers tests pre-impl red (ImportError), 25 existing pass
+- Task 1-impl: config `papers.*` impl ✅ — 28/28 test_config pass; 343/343 lib suite; zero opinion-config regressions (papers section OPTIONAL → existing configs unchanged)
+- Task 2-tests: arXiv discovery tests + real-Atom fixture ✅ — 4/4 pre-impl red (ModuleNotFoundError lib.paperline.discovery)
+- Task 2-impl: arXiv discovery impl ✅ — `lib/paperline/discovery.py` parses 7 fields from real Atom, arxiv_id regex-validated, `cat:` colon preserved in query, missing-id entries skipped, injected fetcher. Self-blocked (did NOT tamper) on a FALSE 2-tests assertion (`"OmniAgent" in title` — OmniAgent is the model name in the abstract; real title = "Native Active Perception as Reasoning for Omni-Modal Understanding"). **Orchestrator(opus) inline fix** (遇阻修阻不绕路): corrected the assertion to `"Native Active Perception" in title` — NOT impl-weakening (impl was correct); 4/4 discovery tests now green.
+- **Segment 1 (batch 0, hard-stop) green.** Self-pacing: orchestrator adjudicated the hard-stop, auto-continuing to segment 2 (batches 1-3: fetch, ledger, personas, topology/bundle, firewall test, docs, real-arXiv e2e).
+- Task 3-tests: full-text fetch tests + 3 real fixtures (html-available / html-404 / pdftotext) ✅ — 10 pre-impl red + 1 regex sanity
+- Task 3-impl: `lib/paperline/fetch.py` ✅ — 11/11; HTML-primary (ltx markers) → PDF fallback (pdftotext); arxiv_id regex-validated; both-unavailable raises; 358/358 suite
+- Task 4-tests: fact-ledger tests ✅ — 10 pre-impl red
+- Task 4-impl: `lib/paperline/ledger.py` ✅ — 10/10 (validate_ledger 5 cases + verify_anchors: pass / ws-normalized / fabricated-flagged / multi-flagged); zero opinion imports, no factcheck import (firewall trivially clean)
+- Task 5: paper personas ✅ — `agents/papers/{curator,ledger-writer}.md`; ledger-writer carries the verbatim-anchor requirement
+- Task 6-tests: topology + bundle tests ✅ — 15 new pre-impl red; 7 opinion cases pass (golden pin + new `unknownshow` parametrize per must-fix #1)
+- Task 6-impl: `lib/pipeline_papers.py` + `lib/lines.py` PAPER_LINE + `lib/pipeline.py` (validate_pipeline `whitelist` param) ✅ — 22/22; **30/30 opinion zero-change, topology golden byte-identical**; ran after 4-impl/5 (sequential, no race)
+- Task 7: firewall activation ✅ — `test_line_isolation` 2/2 both directions, no skips; must-fix #2 applied (`_OPINION_MODULES` = 12, `"lines"` removed)
+- Task 8: pdftotext dep declared ✅ — CLAUDE.md system-deps line + requirements.txt
+- Task 9: **LIVE arXiv collection e2e** ✅ — 15 candidates fetched → curator chose `2606.19341v1` → HTML full-text 90054 chars → 4-section ledger (problem 3 / method 5 / key_results 6 / limitations 3), `verify_anchors.ok=True flagged=0`; `paper-ledger.json` written. **Orchestrator INDEPENDENTLY re-verified: `validate_ledger` OK + 17/17 anchors verbatim in a separate pdftotext extraction of the same paper** (not trusting the harness self-report).
+- **Segment 2 green. Full lib suite 385 passed + 8 bats; opinion line byte-identical zero-change (no opinion module touched, pipeline.py only the backward-compatible signature). Status: complete.**
+
+**Step 6 review (implementation-reviewer, fresh context):** report `.claude/reviews/implementation-reviewer-2026-06-18-p2-collection.md` — ❌ 1 must-fix + 2 should-fix; design fidelity otherwise high (D-014/D-005/D-008/D-017 ✅, naming firewall ✅, tests genuine, live e2e real). **All 3 fixed by orchestrator (opus) + re-verified:**
+- **MF-1 (CRITICAL): paper-side firewall was VACUOUS.** `_check_paper_clean` matched `module.split(".")[0]` against bare names `{stance,…}`, but this repo imports `from lib.bible import …` → split→`"lib"`, never matched → the D-015 isolation guard (acceptance #3) could never fire (false-green). Fixed: rewrote the matcher to full-name prefix-match (mirroring the opinion side) + added `lib.`-prefixed forbidden forms. **PROVEN functional**: a probe importing `lib.bible`/`lib.stance`/`import lib.magnitude`/bare `coveredground` is now CAUGHT; shareable `lib.episode`/`lib.factcheck`/`lib.config` correctly NOT flagged.
+- **SF-1**: `fetch.py` ran `pdftotext` before checking `pdf_status==200` (fed a 404 page to pdftotext, misleading error). Fixed: extract only on 200; corrected the test that pinned the wasteful path (`pdf_called==1`→`==0`).
+- **SF-2**: regex asymmetry — discovery `(v\d+)?` vs fetch `v\d+`. Fixed: aligned fetch to `(v\d+)?` (+ 2 docstrings); removed the now-valid `2606.19341` from the invalid-id test. discovery/fetch/test-pin/D-017 now agree.
+- Post-fix: **384 lib passed** (385 − 1 removed-invalid parametrize case) + 8 bats; firewall 2/2 no-skips + probe-proven; opinion golden byte-identical. 2 nice-to-have left (non-blocking).

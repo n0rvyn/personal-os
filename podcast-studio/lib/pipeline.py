@@ -651,8 +651,19 @@ def load_pipeline(show: str) -> list[dict[str, Any]]:
     return [dict(step) for step in _build_steps()]
 
 
-def validate_pipeline(steps: list[dict[str, Any]]) -> None:
+def validate_pipeline(
+    steps: list[dict[str, Any]],
+    *,
+    whitelist: frozenset[str] = AGENT_WHITELIST,
+) -> None:
     """Validate a step table; raise ValueError naming the offending field.
+
+    `whitelist` parameterizes the agent-name whitelist check (defaults to
+    the opinion-line `AGENT_WHITELIST`, preserving byte-identical behavior
+    for the morning/evening call sites). The paper-line topology
+    (`lib.pipeline_papers`) calls this with `whitelist=PAPER_AGENT_WHITELIST`
+    so its two collection personas (curator, ledger-writer) validate while
+    keeping the opinion call site untouched (Task 6-impl, plan).
 
     Checks (fail-closed — ANY violation raises, the runner does not get
     a "best-effort" step list):
@@ -725,10 +736,10 @@ def validate_pipeline(steps: list[dict[str, Any]]) -> None:
                     f"steps[{i}] (name={step['name']!r}) kind='agent' requires "
                     f"a non-empty string `agent` field"
                 )
-            if step["agent"] not in AGENT_WHITELIST:
+            if step["agent"] not in whitelist:
                 raise ValueError(
                     f"steps[{i}] (name={step['name']!r}) agent={step['agent']!r} "
-                    f"not in whitelist {sorted(AGENT_WHITELIST)}"
+                    f"not in whitelist {sorted(whitelist)}"
                 )
         else:  # kind == "code"
             if step["agent"] is not None:

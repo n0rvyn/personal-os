@@ -45,7 +45,7 @@ python3 -m lib.config --validate ~/.podcast-studio/config.yaml
 
 # Runtime deps
 pip install -r requirements.txt   # PyYAML
-# System: ffmpeg + curl must be on PATH (tts merge + vendor calls)
+# System: ffmpeg + curl must be on PATH (tts merge + vendor calls); pdftotext must be on PATH for the paper line's PDF fallback (apt: poppler-utils / brew: poppler)
 ```
 
 `conftest.py` files put both the plugin root (for `from lib.config import ...`)

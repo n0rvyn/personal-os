@@ -69,6 +69,8 @@ confirmed_at: 2026-06-18T10:04:41
 <!-- section: phase-2 keywords: paper-curator, full-text-fetch, fact-ledger, arxiv, paperline-scaffold -->
 ## Phase 2: 论文采集侧
 
+**Status:** ✅ Completed — 2026-06-18
+
 **Goal:** 论文线骨架落地，能自主从 arXiv 选出一篇、抓到全文、抽出带原文锚点的"论文事实账"——尚不产出听众节目。
 
 **Depends on:** Phase 1
@@ -88,12 +90,12 @@ confirmed_at: 2026-06-18T10:04:41
 - 全文抓取：arXiv HTML（ar5iv / arxiv html）vs PDF 提取（pdftotext）——哪个对中文/公式更稳？（真实样本定）
 - 论文事实账 schema（字段 + 原文锚点格式）。
 
-**Acceptance criteria:**
-- [ ] 真实 arXiv 样本验证：选题判官能从真实候选选出 1 篇、抓到**全文**（确证非摘要、非二手报道）。
-- [ ] 论文事实账结构正确：问题/方法/关键结果数字/局限齐全，每条带可回溯的原文锚点（真实论文跑通）。
-- [ ] **不打架结构测试激活并通过**：`lib/paperline/*`、`lib/pipeline_papers.py` 不 import stance/coveredground/magnitude/bible；观点线不 import 论文线。
-- [ ] 早晚间回归四门仍全绿（P2 未碰观点线 → 零变化保持）。
-- [ ] UT pass for 采集侧。
+**Acceptance criteria:** (P2 done 2026-06-18 — self-pacing; implementation-reviewer 1 must-fix + 2 should-fix all fixed + re-verified)
+- [x] 真实 arXiv 样本验证：选题判官能从真实候选选出 1 篇、抓到**全文**（确证非摘要、非二手报道）。 — LIVE e2e: 15 arXiv 候选 → curator 选 `2606.19341v1` → HTML 全文 90054 字符；锚点溯源到正文（非摘要）内容证明抓的是全文。
+- [x] 论文事实账结构正确：问题/方法/关键结果数字/局限齐全，每条带可回溯的原文锚点（真实论文跑通）。 — 4 段账(problem3/method5/key_results6/limitations3)，`verify_anchors.ok=True`；orchestrator 独立复验 17/17 锚点逐字命中**另一套** pdftotext 抽取。
+- [x] **不打架结构测试激活并通过**：`lib/paperline/*`、`lib/pipeline_papers.py` 不 import stance/coveredground/magnitude/bible；观点线不 import 论文线。 — `test_line_isolation` 2/2 无 skip。**注**：reviewer 抓出首版 paper-side check 用 `split(".")[0]` 对裸名匹配 → 对 `lib.` 前缀 import 恒不触发(假绿)；已修为全名前缀匹配并 probe 证明真能拦截违规。
+- [x] 早晚间回归四门仍全绿（P2 未碰观点线 → 零变化保持）。 — opinion 模块零改动，`pipeline.py` 仅 `validate_pipeline` 向后兼容签名，拓扑 golden byte-identical；384 lib + 8 bats + prep 184 collectable。门④真实 e2e 沿用 P1 Option-B 缓验（本机缺 config）。
+- [x] UT pass for 采集侧。 — discovery 4 / fetch 11 / ledger 10 / pipeline_papers 13 / lines 9 / isolation 2，全绿。
 
 **Review checklist:**
 - [ ] run-phase review step（implementation-reviewer，重点核对采集真抓全文、事实账锚点可溯源、跨线零 import）。

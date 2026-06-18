@@ -32,12 +32,99 @@ def test_get_line_morning_evening_same_opinion():
     assert m is e
 
 
-@pytest.mark.parametrize("show", ["papers", "xxx", ""])
+@pytest.mark.parametrize("show", ["unknownshow", "xxx", ""])
 def test_get_line_unknown_raises(show):
-    """An unregistered show fails closed, naming the show."""
+    """An unregistered show fails closed, naming the show.
+
+    NOTE (must-fix #1, Phase 2): "papers" was originally in this parametrize
+    list under the assumption it was unregistered. After Task 6-impl
+    registers PAPER_LINE in `_LINE_REGISTRY`, `get_line("papers")` no
+    longer raises. We swap it out for `"unknownshow"` — a still-unregistered
+    sentinel — so the unknown-show fail-closed case still tests an
+    unknown show (its pinning value: an UNREGISTERED name raises).
+    """
     with pytest.raises(ValueError) as ei:
         get_line(show)
     assert repr(show) in str(ei.value) or show in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — paper-line bundle registration (Task 6-impl).
+# ---------------------------------------------------------------------------
+
+def test_get_line_papers_bundle():
+    """After Task 6-impl registers PAPER_LINE, `get_line("papers")`
+    returns a LineBundle whose line_id is "paper" and whose agent_dir
+    points at the paper-personas directory (`agents/papers/`). This is the
+    structural proof that the engine can resolve the paper show."""
+    from lib.lines import LineBundle, get_line
+
+    bundle = get_line("papers")
+    assert isinstance(bundle, LineBundle)
+    # line_id distinguishes paper from opinion (morning/evening both
+    # resolve to "opinion").
+    assert bundle.line_id == "paper", (
+        f"paper bundle line_id must be 'paper', got {bundle.line_id!r}"
+    )
+    # agent_dir is what the dispatch persona reads from; for the paper
+    # line it's agents/papers/ (Task 5).
+    assert bundle.agent_dir == "agents/papers", (
+        f"paper bundle agent_dir must be 'agents/papers', got "
+        f"{bundle.agent_dir!r}"
+    )
+    # The bundle must expose the D-004 contract shape (same as the
+    # opinion bundle — required by the line-agnostic engine).
+    for attr in (
+        "topology", "gate_map", "executor_map",
+        "editorial_loader", "floor_fn",
+    ):
+        assert hasattr(bundle, attr), f"LineBundle missing {attr!r}"
+    # The topology callable, invoked with the registered show name, must
+    # equal the collection topology that lib/pipeline_papers builds.
+    from lib.pipeline_papers import _build_paper_steps
+    assert bundle.topology("papers") == _build_paper_steps()
+
+
+def test_opinion_topology_unchanged_after_paper_registration():
+    """The ZERO-CHANGE pin: registering the paper bundle MUST NOT alter
+    the morning/evening opinion topology. The frozen golden (commited in
+    `lib/tests/fixtures/topology_golden.json`) is the non-tautological
+    reference — a live load_pipeline() call would be tautological.
+
+    This test re-asserts the golden AFTER Task 6-impl runs. If the paper
+    registration accidentally overwrites or aliases the opinion entries
+    in `_LINE_REGISTRY`, the morning/evening golden would diverge.
+    """
+    # Re-load the golden from disk (do NOT cache _GOLDEN against a live
+    # load_pipeline() — that would be tautological).
+    golden = json.loads(
+        (Path(__file__).resolve().parent / "fixtures" / "topology_golden.json")
+        .read_text(encoding="utf-8")
+    )
+    # Morning and evening topologies are byte-identical to the golden.
+    assert get_line("morning").topology("morning") == golden["morning"]
+    assert get_line("evening").topology("evening") == golden["evening"]
+    # And morning == evening (one line, two shows).
+    assert (
+        get_line("morning").topology("morning")
+        == get_line("evening").topology("evening")
+    )
+
+
+def test_opinion_and_paper_lines_are_distinct_objects():
+    """The paper bundle must NOT be the same LineBundle instance as the
+    opinion bundle. The engine looks up bindings via get_line(show) and
+    must see two distinct bundles so per-line state (gate_map, executor_map,
+    agent_dir) does not bleed across lines."""
+    opinion = get_line("morning")
+    paper = get_line("papers")
+    assert opinion is not paper, (
+        "paper bundle must be a distinct LineBundle instance from opinion"
+    )
+    assert opinion.line_id != paper.line_id, (
+        f"line_id must differ: opinion={opinion.line_id!r} "
+        f"paper={paper.line_id!r}"
+    )
 
 
 def test_bundle_topology_matches_frozen_golden():

@@ -9,12 +9,19 @@ up via `get_line(show)` instead of importing them directly.
   REFERENCES the existing objects (load_pipeline, runner._default_gate_map,
   episode.floor_chars_for_show, the references/{show}.md loader) so morning/evening
   behavior is byte-identical to pre-refactor. (DP-A1, crystal D-004.)
-- **Paper line**: registered in a later phase (P2+); not present here.
+- **Paper line** (papers): Phase 2 collection skeleton (config → scratch →
+  discovery → curator → fetch → ledger-write → ledger-verify). Its bundle
+  REFERENCES the new `lib.pipeline_papers.load_papers_pipeline` and points
+  `agent_dir` at `agents/papers/` (the paper personas Task 5 creates). The
+  generation/publish stations land in P3/P4 — not declared-but-dead here.
 
 All cross-module imports inside the bundle callables are LAZY (deferred to call
 time) to break the import cycle: `lib.runner` imports `get_line` from this module,
 and this module's opinion bundle delegates back to `lib.runner._default_gate_map`
 / `lib.runner._opinion_executor_map`. Lazy imports keep both modules importable.
+The paper bundle's lazy `from lib.pipeline_papers import …` inside its
+callables mirrors the opinion bundle's lazy pattern — the registry IS the
+one legitimate cross-line bridge (test_line_isolation.py:18 must-fix #2).
 """
 from __future__ import annotations
 
@@ -99,11 +106,78 @@ OPINION_LINE = LineBundle(
 
 
 # ---------------------------------------------------------------------------
-# Registry: show → line. Paper line is added in P2+.
+# Paper line (papers) — Phase 2 collection skeleton (Task 6-impl).
+# ---------------------------------------------------------------------------
+def _paper_topology(show: str) -> list:
+    from lib.pipeline_papers import load_papers_pipeline  # lazy: registry bridge
+
+    return load_papers_pipeline(show)
+
+
+def _paper_gate_map() -> dict:
+    """Paper-line gate map.
+
+    Wired in the executor-dispatch task (P3+). For now, returns an empty
+    dict so the bundle shape stays complete and the engine can resolve the
+    paper show without raising. Code stations in the paper collection
+    topology (config / scratch / discovery / fetch / ledger-verify) need
+    their gate fns only after the P3 generation stations land; the
+    ledger-verify station will use a `check_ledger_verify` gate wired
+    here once `lib.paperline.ledger` is invoked from the runner (P3+).
+    """
+    return {}
+
+
+def _paper_executor_map() -> dict:
+    """Paper-line executor map.
+
+    Wired in the executor-dispatch task (P3+). Returns an empty dict for
+    now — the collection code stations will be implemented in P3 once the
+    generation half of the paper line lands. The topology shape itself is
+    pinned now (Task 6-impl) so the engine can resolve the paper show and
+    the line registry stays the single source of truth.
+    """
+    return {}
+
+
+def _paper_editorial_loader(show: str, plugin_root: Any) -> str:
+    """Paper-line editorial loader.
+
+    The paper line has no editorial branch in v1 (P2 collection only).
+    Return empty string — the persona prompts (Task 5) carry their own
+    discipline and the runner has nothing to thread in. Byte-equivalent to
+    the opinion line's OSError→"" behavior for a missing reference file.
+    """
+    return ""
+
+
+def _paper_floor(show: str) -> int:
+    """Paper-line floor (no character floor in v1 — collection only).
+
+    Returns 0 because no minimum-chars gate runs on collection stations.
+    """
+    return 0
+
+
+PAPER_LINE = LineBundle(
+    line_id="paper",
+    topology=_paper_topology,
+    gate_map=_paper_gate_map,
+    executor_map=_paper_executor_map,
+    editorial_loader=_paper_editorial_loader,
+    agent_dir="agents/papers",
+    floor_fn=_paper_floor,
+)
+
+
+# ---------------------------------------------------------------------------
+# Registry: show → line. Paper line is registered here (Task 6-impl);
+# engine's `get_line("papers")` now resolves to PAPER_LINE.
 # ---------------------------------------------------------------------------
 _LINE_REGISTRY: dict[str, LineBundle] = {
     "morning": OPINION_LINE,
     "evening": OPINION_LINE,
+    "papers": PAPER_LINE,
 }
 
 

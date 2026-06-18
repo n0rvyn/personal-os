@@ -1,1 +1,5 @@
 PyYAML>=6.0
+
+# System dependency (not a pip package): `pdftotext` from poppler
+# is required for the paper line's PDF fallback path (Task 3).
+# Install: apt-get install poppler-utils  /  brew install poppler

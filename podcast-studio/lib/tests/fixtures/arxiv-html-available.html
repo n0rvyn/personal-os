@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en">
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>Native Active Perception as Reasoning for Omni-Modal Understanding</title>
+</div><div class="ltx_page_content">
+<article class="ltx_document ltx_pruned_first">
+<h1 class="ltx_title ltx_title_document">Native Active Perception as Reasoning for Omni-Modal Understanding</h1>
+<div class="ltx_authors">
+<span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Zhenghao Xing
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Ruiyang Xu
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Yuxuan Wang
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Jinzheng He
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Ziyang Ma
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Qize Yang
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Yunfei Chu
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Jin Xu
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Junyang Lin
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Chi-Wing Fu
+</span></span>
+<span class="ltx_author_before">  </span><span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Pheng-Ann Heng
+</span></span>
+</div>
+
+<div id="abstract1" class="ltx_abstract">
+<h6 class="ltx_title ltx_title_abstract">Abstract</h6>
+<p class="ltx_p">Passive models for long video understanding typically rely on a “watch-it-all” paradigm, processing frames uniformly regardless of query difficulty, causing computational cost to grow with video duration. Although interactive frameworks have emerged, they often rely on global pre-scanning, and their context cost still scales with video length. We propose <span class="ltx_text ltx_font_bold">OmniAgent</span>, the first native omni-modal agent that formulates video understanding as a POMDP-based iterative <span class="ltx_text ltx_font_bold">Observation-Thought-Action</span> cycle. OmniAgent executes on-demand actions to selectively distill audio-visual cues into a persistent textual memory, effectively decoupling reasoning complexity from raw video duration. To operationalize this, we introduce (1) <span class="ltx_text ltx_font_bold">Agentic Supervised Fine-Tuning</span> to bootstrap native active perception via best-of-N trajectory synthesis with dual-stage quality control, and (2) <span class="ltx_text ltx_font_bold">Agentic Reinforcement Learning</span> with <span class="ltx_text ltx_font_bold">TAURA</span> (Turn-aware Adaptive Uncertainty Rescaled Advantage), which leverages turn-level entropy to steer credit assignment toward pivotal discovery turns. Crucially, OmniAgent exhibits positive test-time scaling, where performance improves as the number of reasoning turns increases, validating the efficacy of active perception. Empirical results across ten benchmarks (e.g., VideoMME, LVBench) demonstrate that OmniAgent achieves state-of-the-art performance among open-source models. Notably, on LVBench, our 7B agent outperforms the 10<math class="ltx_Math" alttext="\times" display="inline" intent=":literal"><semantics><mo>×</mo><annotation encoding="application/x-tex">\times</annotation></semantics></math> larger Qwen2.5-VL-72B (50.5% vs. 47.3%).</p>
+</div>
+<div class="ltx_keywords">Machine Learning, ICML
+</div>
+<div id="p2" class="ltx_para ltx_align_center">
+<p id="p2.1" class="ltx_p"><span id="p2.1.1" class="ltx_text"><sup id="p2.1.1.1" class="ltx_sup">1</sup>The Chinese University of Hong Kong</span> <span id="p2.1.2" class="ltx_text"><sup id="p2.1.2.1" class="ltx_sup">2</sup>Shanghai Jiao Tong University</span>
+</article></body></html>

@@ -593,3 +593,162 @@ def test_exchange_dir_non_str_fails_soft(tmp_path, monkeypatch):
 
     cfg = load_config()
     assert cfg.exchange_dir is None
+
+
+# ---------- Phase 2 paper-line: optional `papers.*` config section ----------
+
+def test_papers_section_absent_opinion_config_still_resolves(tmp_path, monkeypatch):
+    """Zero-change: an existing opinion config WITHOUT a `papers` section
+    resolves unchanged (cfg.papers is None)."""
+    from lib.config import PapersConfig  # noqa: F401  (pre-impl FAIL signal)
+
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+    # papers must be a defined attribute (None when absent) — not a missing
+    # field. The exact attribute name `papers` is the contract the paper
+    # line's require_papers(cfg) helper relies on.
+    assert cfg.papers is None
+    # Existing fields untouched.
+    assert cfg.tts.provider == "volc"
+    assert cfg.vault.output_dir.endswith("output")
+
+
+def test_papers_section_present_type_validated(tmp_path, monkeypatch):
+    """When present, `papers` is parsed into a PapersConfig and type-validated:
+    categories must be a non-empty list[str]; max_candidates a positive int."""
+    from lib.config import PapersConfig  # noqa: F401  (pre-impl FAIL signal)
+
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    # Valid shape → resolves.
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        papers:
+          categories:
+            - cs.CL
+            - cs.LG
+          max_candidates: 30
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+    assert cfg.papers is not None
+    assert isinstance(cfg.papers, PapersConfig)
+    assert list(cfg.papers.categories) == ["cs.CL", "cs.LG"]
+    assert cfg.papers.max_candidates == 30
+
+    # Bad shape: categories not a list → ConfigError.
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        papers:
+          categories: cs.CL
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "categories" in str(exc.value)
+
+    # Bad shape: categories empty → ConfigError.
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        papers:
+          categories: []
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "categories" in str(exc.value)
+
+    # Bad shape: categories contains non-string → ConfigError.
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        papers:
+          categories:
+            - 42
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "categories" in str(exc.value)
+
+    # Bad shape: max_candidates non-positive → ConfigError.
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        papers:
+          categories:
+            - cs.CL
+          max_candidates: 0
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+    with pytest.raises(Exception) as exc:
+        load_config()
+    assert "max_candidates" in str(exc.value)
+
+
+def test_require_papers_raises_when_absent(tmp_path, monkeypatch):
+    """require_papers(cfg) on a papers-less config raises ConfigError naming
+    papers.categories — the paper-line fail-closed use site, not a resolve-time
+    requirement."""
+    from lib.config import require_papers  # noqa: F401  (pre-impl FAIL signal)
+
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+    assert cfg.papers is None
+
+    with pytest.raises(Exception) as exc:
+        require_papers(cfg)
+    assert "papers.categories" in str(exc.value)

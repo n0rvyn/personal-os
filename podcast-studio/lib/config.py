@@ -62,6 +62,19 @@ class TtsConfig:
 
 
 @dataclass(frozen=True)
+class PapersConfig:
+    """Phase 2: optional `papers.*` config section for the paper-digest line.
+
+    `categories` is a tuple of arXiv category strings (e.g. ("cs.CL", "cs.LG"))
+    used by `lib.paperline.discovery.fetch_candidates`. `max_candidates` is the
+    upper bound for the discovery fetch (positive int, defaults to 60 when the
+    YAML omits it).
+    """
+    categories: tuple[str, ...]
+    max_candidates: int
+
+
+@dataclass(frozen=True)
 class PodcastTeamConfig:
     vault: VaultConfig
     tts: TtsConfig
@@ -70,6 +83,11 @@ class PodcastTeamConfig:
     # when absent: legacy `~/.podcast-studio/config.yaml` has no key →
     # `None`. Existence/read of this directory is Phase 5's concern.
     exchange_dir: str | None = None
+    # Phase 2 (paper line): optional `papers.*` section. OPTIONAL at resolve
+    # time — opinion configs without it stay zero-change. The paper line's
+    # config station requires it fail-closed via `require_papers(cfg)` at the
+    # use site, never here.
+    papers: PapersConfig | None = None
 
 
 def _default_config_path() -> Path:
@@ -277,6 +295,52 @@ def _validate_tts(tts_raw: dict[str, Any]) -> TtsConfig:
     return TtsConfig(provider=tts_raw["provider"], host_voice=tts_raw["host_voice"])
 
 
+def _validate_papers(papers_raw: Any) -> PapersConfig:
+    """Parse + type-validate the optional `papers.*` config section.
+
+    Mirrors the `vault.voice_corpus_dir` optional pattern: when the key is
+    absent the caller resolves to `None` (opinion configs unaffected). When
+    present, the schema is `categories: list[str]` (non-empty) + optional
+    `max_candidates: positive int` (default 60). Bad shapes raise ConfigError
+    naming the offending field — never silent defaults.
+    """
+    if not isinstance(papers_raw, dict):
+        raise ConfigError("papers must be a section (mapping)")
+
+    cats_raw = papers_raw.get("categories")
+    if not isinstance(cats_raw, list) or not cats_raw:
+        raise ConfigError(
+            "papers.categories must be a non-empty list of category strings"
+        )
+    for i, c in enumerate(cats_raw):
+        if not isinstance(c, str) or not c.strip():
+            raise ConfigError(
+                f"papers.categories[{i}] must be a non-empty string"
+            )
+    categories = tuple(cats_raw)
+
+    max_raw = papers_raw.get("max_candidates", 60)
+    if not isinstance(max_raw, int) or isinstance(max_raw, bool):
+        raise ConfigError("papers.max_candidates must be a positive int")
+    if max_raw <= 0:
+        raise ConfigError("papers.max_candidates must be a positive int")
+
+    return PapersConfig(categories=categories, max_candidates=max_raw)
+
+
+def require_papers(cfg: PodcastTeamConfig) -> PapersConfig:
+    """Fail-closed accessor for the paper-line use site.
+
+    Returns `cfg.papers` or raises ConfigError naming the missing key. This
+    is the ONLY place the paper line consults its config: by keeping the
+    requirement here (not in `resolve()`), existing opinion configs stay
+    zero-change — no `papers.*` key, no raise.
+    """
+    if cfg.papers is None:
+        raise ConfigError("missing required key: papers.categories")
+    return cfg.papers
+
+
 def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     """Resolve and validate the podcast-studio config.
 
@@ -309,7 +373,17 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     if isinstance(exchange_raw, str) and exchange_raw.strip():
         exchange_dir = str(Path(os.path.expanduser(exchange_raw)).resolve())
 
-    return PodcastTeamConfig(vault=vault, tts=tts, exchange_dir=exchange_dir)
+    # Phase 2 (paper line): optional `papers.*` section. When absent the
+    # field stays `None` so opinion configs resolve zero-change. The paper
+    # line's use site calls `require_papers(cfg)` for its fail-closed check.
+    papers_raw = raw.get("papers")
+    papers: PapersConfig | None = None
+    if papers_raw is not None:
+        papers = _validate_papers(papers_raw)
+
+    return PodcastTeamConfig(
+        vault=vault, tts=tts, exchange_dir=exchange_dir, papers=papers
+    )
 
 
 if __name__ == "__main__":

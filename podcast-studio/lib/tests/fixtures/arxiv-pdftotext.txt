@@ -1,0 +1,25 @@
+Native Active Perception as Reasoning for Omni-Modal Understanding
+
+Zhenghao Xing 1 * † Ruiyang Xu 2 * † Yuxuan Wang 3 * Jinzheng He 3 Ziyang Ma 2 4 † Qize Yang 3
+Yunfei Chu 3 Jin Xu 3 ‡ Junyang Lin 3 Chi-Wing Fu 1 Pheng-Ann Heng 1 ‡
+
+arXiv:2606.19341v1 [cs.CV] 17 Jun 2026
+
+1
+
+The Chinese University of Hong Kong 2 Shanghai Jiao Tong University
+3
+Qwen Team, Alibaba Group 4 Nanyang Technological University
+
+Code: https://github.com/harryhsing/OmniAgent
+SFT: https://huggingface.co/harryhsing/OmniAgent-SFT-7B
+RL: https://huggingface.co/harryhsing/OmniAgent-RL-7B
+*
+
+Equal contribution.
+
+†
+
+Work done during an internship at Qwen Team, Alibaba Group.
+
+‡

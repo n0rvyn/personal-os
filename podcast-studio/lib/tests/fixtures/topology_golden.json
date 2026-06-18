@@ -1,0 +1,1070 @@
+{
+  "morning": [
+    {
+      "name": "config",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "~/.podcast-studio/config.yaml"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "editorial",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "references/{show}.md"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "scratch",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}-{show}"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "stance-card-exists",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{show}"
+      ],
+      "artifact": null,
+      "gate": [
+        {
+          "fn": "check_stance_card_absent"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "continuity-read",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "throughline.yaml",
+        "{date}",
+        "{show}"
+      ],
+      "artifact": "continuity.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "collect",
+      "kind": "agent",
+      "agent": "davinci",
+      "inputs": [
+        "brief",
+        "vault",
+        "continuity"
+      ],
+      "artifact": "material-summary.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "magnitude",
+      "kind": "agent",
+      "agent": "liangchen",
+      "inputs": [
+        "recent_cards",
+        "candidates",
+        "recent_bodies"
+      ],
+      "artifact": "magnitude-verdict.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "assemble-briefs",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "magnitude-verdict.json",
+        "material-summary.md",
+        "continuity.json",
+        "covered-ground.yaml"
+      ],
+      "artifact": "writing-brief-A.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "bible-distill",
+      "kind": "agent",
+      "agent": "bible-distiller",
+      "inputs": [
+        "corpus"
+      ],
+      "artifact": "character-bible.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "drafts",
+      "kind": "agent",
+      "agent": "davinci",
+      "inputs": [
+        "writing-brief-A.json"
+      ],
+      "artifact": "draft-A.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        },
+        {
+          "fn": "check_min_chars",
+          "args": {
+            "min_chars": "floor"
+          }
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "critiques",
+      "kind": "agent",
+      "agent": "laohei",
+      "inputs": [
+        "draft-A.md"
+      ],
+      "artifact": "critique-A.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "polishes",
+      "kind": "agent",
+      "agent": "kuaidao",
+      "inputs": [
+        "draft-A.md",
+        "critique-A.json"
+      ],
+      "artifact": "polish-A.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        },
+        {
+          "fn": "check_min_chars",
+          "args": {
+            "min_chars": "floor"
+          }
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "scoring",
+      "kind": "agent",
+      "agent": "qianzhongshu",
+      "inputs": [
+        "polish-A.md",
+        "polish-B.md",
+        "polish-C.md"
+      ],
+      "artifact": "score-verdict.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "select-draft",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "score-verdict.json",
+        "polish-A.md",
+        "polish-B.md",
+        "polish-C.md"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "finalize",
+      "kind": "agent",
+      "agent": "kuaidao",
+      "inputs": [
+        "chosen-polish.md",
+        "score-verdict.json",
+        "character-bible.md"
+      ],
+      "artifact": "finalize-result.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        },
+        {
+          "fn": "check_min_chars",
+          "args": {
+            "min_chars": "floor",
+            "json_field": "body"
+          }
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "factcheck",
+      "kind": "agent",
+      "agent": "zhijianyuan",
+      "inputs": [
+        "finalize-result.json",
+        "material-summary.md"
+      ],
+      "artifact": "factcheck-verdict.json",
+      "gate": [
+        {
+          "fn": "check_factcheck"
+        }
+      ],
+      "parallel": null,
+      "retry": 1,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "broadcast-rewrite",
+      "kind": "agent",
+      "agent": "bianyang",
+      "inputs": [
+        "finalize-result.json",
+        "character-bible.md"
+      ],
+      "artifact": "broadcast-script-{date}.txt",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "scorecard",
+      "kind": "agent",
+      "agent": "scorecard",
+      "inputs": [
+        "finalize-result.json",
+        "broadcast-script-{date}.txt",
+        "factcheck-verdict.json",
+        "score-verdict.json"
+      ],
+      "artifact": "scorecard-verdict.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "tts",
+      "kind": "agent",
+      "agent": "jay",
+      "inputs": [
+        "broadcast-script-{date}.txt"
+      ],
+      "artifact": "audio-files.mp3",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": "no_tts",
+      "fail_soft": null
+    },
+    {
+      "name": "publish-paths",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{title}",
+        "{show}"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "resonance",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "finalize-result.json"
+      ],
+      "artifact": null,
+      "gate": [
+        {
+          "fn": "check_resonance_present"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "topic-log",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "published.md",
+        "approved_topics",
+        "topic_log_path"
+      ],
+      "artifact": "topic_log.yaml",
+      "gate": [
+        {
+          "fn": "check_topic_log_appended"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "stance-write",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{show}",
+        "card_dict"
+      ],
+      "artifact": "{date}-{show}.stance.yaml",
+      "gate": [
+        {
+          "fn": "check_write_card_returned"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "stance-card-gate",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{show}"
+      ],
+      "artifact": null,
+      "gate": [
+        {
+          "fn": "check_stance_card"
+        }
+      ],
+      "parallel": null,
+      "retry": 1,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "cleanup",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "scratch_dir"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "coveredground-distill",
+      "kind": "agent",
+      "agent": "coveredground-distiller",
+      "inputs": [
+        "published.md",
+        "recent_bodies",
+        "covered-ground.yaml"
+      ],
+      "artifact": "coveredground-apparatus.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "coveredground-update",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "coveredground-apparatus.json",
+        "vault.output_dir"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    }
+  ],
+  "evening": [
+    {
+      "name": "config",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "~/.podcast-studio/config.yaml"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "editorial",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "references/{show}.md"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "scratch",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}-{show}"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "stance-card-exists",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{show}"
+      ],
+      "artifact": null,
+      "gate": [
+        {
+          "fn": "check_stance_card_absent"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "continuity-read",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "throughline.yaml",
+        "{date}",
+        "{show}"
+      ],
+      "artifact": "continuity.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "collect",
+      "kind": "agent",
+      "agent": "davinci",
+      "inputs": [
+        "brief",
+        "vault",
+        "continuity"
+      ],
+      "artifact": "material-summary.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "magnitude",
+      "kind": "agent",
+      "agent": "liangchen",
+      "inputs": [
+        "recent_cards",
+        "candidates",
+        "recent_bodies"
+      ],
+      "artifact": "magnitude-verdict.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "assemble-briefs",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "magnitude-verdict.json",
+        "material-summary.md",
+        "continuity.json",
+        "covered-ground.yaml"
+      ],
+      "artifact": "writing-brief-A.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "bible-distill",
+      "kind": "agent",
+      "agent": "bible-distiller",
+      "inputs": [
+        "corpus"
+      ],
+      "artifact": "character-bible.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "drafts",
+      "kind": "agent",
+      "agent": "davinci",
+      "inputs": [
+        "writing-brief-A.json"
+      ],
+      "artifact": "draft-A.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        },
+        {
+          "fn": "check_min_chars",
+          "args": {
+            "min_chars": "floor"
+          }
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "critiques",
+      "kind": "agent",
+      "agent": "laohei",
+      "inputs": [
+        "draft-A.md"
+      ],
+      "artifact": "critique-A.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "polishes",
+      "kind": "agent",
+      "agent": "kuaidao",
+      "inputs": [
+        "draft-A.md",
+        "critique-A.json"
+      ],
+      "artifact": "polish-A.md",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        },
+        {
+          "fn": "check_min_chars",
+          "args": {
+            "min_chars": "floor"
+          }
+        }
+      ],
+      "parallel": [
+        "A",
+        "B",
+        "C"
+      ],
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "scoring",
+      "kind": "agent",
+      "agent": "qianzhongshu",
+      "inputs": [
+        "polish-A.md",
+        "polish-B.md",
+        "polish-C.md"
+      ],
+      "artifact": "score-verdict.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "select-draft",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "score-verdict.json",
+        "polish-A.md",
+        "polish-B.md",
+        "polish-C.md"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "finalize",
+      "kind": "agent",
+      "agent": "kuaidao",
+      "inputs": [
+        "chosen-polish.md",
+        "score-verdict.json",
+        "character-bible.md"
+      ],
+      "artifact": "finalize-result.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        },
+        {
+          "fn": "check_min_chars",
+          "args": {
+            "min_chars": "floor",
+            "json_field": "body"
+          }
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "factcheck",
+      "kind": "agent",
+      "agent": "zhijianyuan",
+      "inputs": [
+        "finalize-result.json",
+        "material-summary.md"
+      ],
+      "artifact": "factcheck-verdict.json",
+      "gate": [
+        {
+          "fn": "check_factcheck"
+        }
+      ],
+      "parallel": null,
+      "retry": 1,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "broadcast-rewrite",
+      "kind": "agent",
+      "agent": "bianyang",
+      "inputs": [
+        "finalize-result.json",
+        "character-bible.md"
+      ],
+      "artifact": "broadcast-script-{date}.txt",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "scorecard",
+      "kind": "agent",
+      "agent": "scorecard",
+      "inputs": [
+        "finalize-result.json",
+        "broadcast-script-{date}.txt",
+        "factcheck-verdict.json",
+        "score-verdict.json"
+      ],
+      "artifact": "scorecard-verdict.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "tts",
+      "kind": "agent",
+      "agent": "jay",
+      "inputs": [
+        "broadcast-script-{date}.txt"
+      ],
+      "artifact": "audio-files.mp3",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": "no_tts",
+      "fail_soft": null
+    },
+    {
+      "name": "publish-paths",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{title}",
+        "{show}"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "resonance",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "finalize-result.json"
+      ],
+      "artifact": null,
+      "gate": [
+        {
+          "fn": "check_resonance_present"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "topic-log",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "published.md",
+        "approved_topics",
+        "topic_log_path"
+      ],
+      "artifact": "topic_log.yaml",
+      "gate": [
+        {
+          "fn": "check_topic_log_appended"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "stance-write",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{show}",
+        "card_dict"
+      ],
+      "artifact": "{date}-{show}.stance.yaml",
+      "gate": [
+        {
+          "fn": "check_write_card_returned"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "stance-card-gate",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "vault.output_dir",
+        "{date}",
+        "{show}"
+      ],
+      "artifact": null,
+      "gate": [
+        {
+          "fn": "check_stance_card"
+        }
+      ],
+      "parallel": null,
+      "retry": 1,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "cleanup",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "scratch_dir"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": null
+    },
+    {
+      "name": "coveredground-distill",
+      "kind": "agent",
+      "agent": "coveredground-distiller",
+      "inputs": [
+        "published.md",
+        "recent_bodies",
+        "covered-ground.yaml"
+      ],
+      "artifact": "coveredground-apparatus.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "coveredground-update",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "coveredground-apparatus.json",
+        "vault.output_dir"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    }
+  ]
+}

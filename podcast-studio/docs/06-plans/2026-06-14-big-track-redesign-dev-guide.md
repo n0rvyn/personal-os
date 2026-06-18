@@ -3,7 +3,7 @@ type: dev-guide
 status: active
 tags: [podcast-studio, code-runner, agent-memory, anti-homogenization, eval-gate]
 refs: [docs/06-plans/2026-06-11-podcast-factchecker-plan.md]
-current: true
+current: false
 confirmed_at: 2026-06-14T01:55:00
 ---
 

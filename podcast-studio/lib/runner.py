@@ -59,7 +59,6 @@ from lib.episode import (
     check_stance_card,
     cleanup_scratch,
     episode_paths,
-    floor_chars_for_show,
     load_finalize_body,
     make_scratch,
     select_draft,
@@ -315,10 +314,12 @@ def _resolve_gate_args(raw_args: dict[str, Any], show: str) -> dict[str, Any]:
     step table is `min_chars: "floor"`, which maps to
     `floor_chars_for_show(show)`. Future sentinels can be added here
     without touching the step table or the gate fns."""
+    from lib.lines import get_line  # local import for leaf-ness
+
     out: dict[str, Any] = {}
     for k, v in (raw_args or {}).items():
         if v == "floor":
-            out[k] = floor_chars_for_show(show)
+            out[k] = get_line(show).floor_fn(show)
         else:
             out[k] = v
     return out
@@ -1211,124 +1212,149 @@ def _execute_step(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Opinion-line code-station executors (P1 DP-A1 / Task 4).
+#
+# Each executor is the EXACT dispatch block that used to live in the
+# `_run_code_step` if-chain — ctx side-effects + return shaping included —
+# moved verbatim into a `(ctx) -> Any` callable so the line bundle's
+# executor_map can route to it. The return value flows back to
+# `_execute_step`, so gated stations (stance-card-exists / stance-card-gate)
+# keep their gate check. scorecard / bible-distill are NOT here — they stay
+# intercepted in `_execute_step` (they bypass the gate by design).
+# ---------------------------------------------------------------------------
+def _noop_executor(ctx: dict[str, Any]) -> Any:
+    """config / editorial / scratch / stance-card-exists / stance-card-gate /
+    cleanup: body is a no-op (return None). The gate (when present, e.g. the
+    two stance tripwires) still fires on the None result in _execute_step."""
+    return None
+
+
+def _continuity_read_executor(ctx: dict[str, Any]) -> Any:
+    scratch: Path = ctx["scratch_dir"]
+    # Corrupt stance-card / throughline YAML makes load_cards / load_obsessions
+    # raise; convert to a named halt (NOT fail-soft — a silent empty continuity
+    # would drop a due bet's settlement).
+    try:
+        continuity = _continuity_read(ctx)
+    except Exception as e:  # noqa: BLE001 — surface as a named halt, not a crash
+        return {
+            "status": "halted",
+            "failed_step": "continuity-read",
+            "reason": (
+                f"continuity read failed (corrupt stance/throughline data?): {e}"
+            ),
+        }
+    ctx["continuity"] = continuity
+    return scratch / "continuity.json"
+
+
+def _select_draft_executor(ctx: dict[str, Any]) -> Any:
+    scratch: Path = ctx["scratch_dir"]
+    chosen_id, chosen_path = _select_draft_step(scratch)
+    ctx["chosen_id"] = chosen_id
+    ctx["chosen_path"] = chosen_path
+    return None
+
+
+def _resonance_executor(ctx: dict[str, Any]) -> Any:
+    ctx["resonance"] = _resonance_step(ctx)
+    return None
+
+
+def _topic_log_executor(ctx: dict[str, Any]) -> Any:
+    topic_log_path = _topic_log_step(ctx)
+    if topic_log_path is not None:
+        ctx["topic_log_path"] = topic_log_path
+    return None
+
+
+def _stance_write_executor(ctx: dict[str, Any]) -> Any:
+    path = _stance_write_step(ctx)
+    if path is not None:
+        ctx["stance_card_path"] = path
+    return path
+
+
+def _coveredground_update_executor(ctx: dict[str, Any]) -> Any:
+    # Phase 2 (covered-ground): reads the distiller's
+    # `coveredground-apparatus.json` from scratch, folds the new anchors into
+    # the existing `covered-ground.yaml` store, and writes it atomically.
+    # fail-soft: a missing/malformed apparatus json is logged + skipped; a code
+    # exception is swallowed — the post-publish station must NEVER crash the run.
+    scratch: Path = ctx["scratch_dir"]
+    from lib.coveredground import (
+        load_store,
+        update_store,
+        write_store,
+    )
+    state_dir = _subdir(ctx, "state")
+    date_str = ctx.get("date")
+    show = ctx.get("show")
+    apparatus_path = scratch / "coveredground-apparatus.json"
+    try:
+        if not apparatus_path.exists():
+            return None
+        raw = apparatus_path.read_text(encoding="utf-8")
+        payload = json.loads(raw) if raw.strip() else {}
+        anchors = payload.get("anchors") or []
+        if not anchors:
+            return None
+        store = load_store(state_dir)
+        update_store(
+            store, anchors, date_str, {"date": date_str, "show": show},
+        )
+        write_store(state_dir, store)
+    except Exception as e:  # noqa: BLE001 — fail-soft post-publish
+        print(
+            f"runner: coveredground-update failed (skipped): {e}",
+            file=sys.stderr,
+        )
+        return None
+    return None
+
+
+def _opinion_executor_map() -> dict[str, Callable[[dict[str, Any]], Any]]:
+    """Opinion-line code-station → executor map (the layer-2 dispatch the
+    runner used to do via an if-chain). lib.lines.OPINION_LINE.executor_map
+    delegates here. The name set MUST match the opinion topology's code
+    stations exactly (no-op-but-gated stations included so the map is the
+    authoritative station list per line)."""
+    return {
+        "config": _noop_executor,
+        "editorial": _noop_executor,
+        "scratch": _noop_executor,
+        "stance-card-exists": _noop_executor,   # no-op body, GATED (tripwire)
+        "continuity-read": _continuity_read_executor,
+        "assemble-briefs": _assemble_briefs,
+        "select-draft": _select_draft_executor,
+        "publish-paths": _publish_step,
+        "resonance": _resonance_executor,
+        "topic-log": _topic_log_executor,
+        "stance-write": _stance_write_executor,
+        "stance-card-gate": _noop_executor,     # no-op body, GATED (tripwire)
+        "cleanup": _noop_executor,
+        "coveredground-update": _coveredground_update_executor,
+    }
+
+
 def _run_code_step(
     step: dict[str, Any],
     ctx: dict[str, Any],
 ) -> Any:
-    """Dispatch a code step to its in-process helper. Returns whatever
-    the helper produces (a Path for artifact gates, a dict, etc.) —
-    the gate layer reads what it needs from ctx."""
+    """Dispatch a code step to its line's executor (P1 DP-A1 / Task 4).
+
+    The executor encapsulates the station's FULL dispatch block (ctx
+    side-effects + return shaping). The result flows back to _execute_step's
+    gate check, so gated code stations keep their halts. An unknown station
+    name → no-op None (matches the old if-chain's fallthrough)."""
     name = step["name"]
-    scratch: Path = ctx["scratch_dir"]
+    from lib.lines import get_line  # local import for leaf-ness
 
-    if name == "config":
-        return None  # config is resolved at the top of run_pipeline
-
-    if name == "editorial":
-        return None  # editorial branch is folded into the brief prompt
-
-    if name == "scratch":
-        return None  # scratch is set up at the top of run_pipeline
-
-    if name == "stance-card-exists":
-        return None  # the gate itself is the tripwire
-
-    if name == "continuity-read":
-        # Corrupt stance-card / throughline YAML makes load_cards /
-        # load_obsessions raise (CLAUDE.md: malformed cards raise, never
-        # fake-success). Without this guard the raw exception escapes the
-        # runner as an unstructured crash; convert it to the standard halt
-        # envelope with a named failed_step. NOT fail-soft — silently
-        # degrading to empty continuity would drop a due bet's settlement,
-        # so the user must fix the corrupt file before the run proceeds.
-        try:
-            continuity = _continuity_read(ctx)
-        except Exception as e:  # noqa: BLE001 — surface as a named halt, not a crash
-            return {
-                "status": "halted",
-                "failed_step": "continuity-read",
-                "reason": (
-                    f"continuity read failed (corrupt stance/throughline data?): {e}"
-                ),
-            }
-        ctx["continuity"] = continuity
-        return scratch / "continuity.json"
-
-    if name == "assemble-briefs":
-        return _assemble_briefs(ctx)
-
-    if name == "select-draft":
-        chosen_id, chosen_path = _select_draft_step(scratch)
-        ctx["chosen_id"] = chosen_id
-        ctx["chosen_path"] = chosen_path
-        return None
-
-    if name == "publish-paths":
-        return _publish_step(ctx)
-
-    if name == "resonance":
-        ctx["resonance"] = _resonance_step(ctx)
-        return None
-
-    if name == "topic-log":
-        topic_log_path = _topic_log_step(ctx)
-        if topic_log_path is not None:
-            ctx["topic_log_path"] = topic_log_path
-        return None
-
-    if name == "stance-write":
-        path = _stance_write_step(ctx)
-        if path is not None:
-            ctx["stance_card_path"] = path
-        return path
-
-    if name == "stance-card-gate":
-        return None  # the gate is the tripwire
-
-    if name == "cleanup":
-        return None  # cleanup is handled in the run_pipeline finally
-
-    if name == "coveredground-update":
-        # Phase 2 (covered-ground): reads the distiller's
-        # `coveredground-apparatus.json` from scratch, folds the new
-        # anchors into the existing `covered-ground.yaml` store, and
-        # writes the store atomically. fail-soft: a missing /
-        # malformed apparatus json is logged + skipped (the store
-        # simply doesn't grow this episode). A code exception is
-        # swallowed — the post-publish station must NEVER crash the
-        # run.
-        from lib.coveredground import (
-            load_store,
-            update_store,
-            write_store,
-        )
-        state_dir = _subdir(ctx, "state")
-        date_str = ctx.get("date")
-        show = ctx.get("show")
-        apparatus_path = scratch / "coveredground-apparatus.json"
-        try:
-            if not apparatus_path.exists():
-                return None
-            raw = apparatus_path.read_text(encoding="utf-8")
-            payload = json.loads(raw) if raw.strip() else {}
-            anchors = payload.get("anchors") or []
-            if not anchors:
-                return None
-            store = load_store(state_dir)
-            update_store(
-                store, anchors, date_str, {"date": date_str, "show": show},
-            )
-            write_store(state_dir, store)
-        except Exception as e:  # noqa: BLE001 — fail-soft post-publish
-            print(
-                f"runner: coveredground-update failed (skipped): {e}",
-                file=sys.stderr,
-            )
-            return None
-        return None
-
-    # Unknown code step — no-op
-    return None
+    executor = get_line(ctx["show"]).executor_map().get(name)
+    if executor is not None:
+        return executor(ctx)
+    return None  # unknown code step — no-op
 
 
 def _slice_done(step: dict[str, Any], ctx: dict[str, Any], tag: Optional[str]) -> bool:
@@ -1912,10 +1938,18 @@ def run_pipeline(
         dispatch (the anti-homogenization channel)
     """
     # ---------------------------------------------------------------- args
-    if show not in ("morning", "evening"):
+    # Engine is line-agnostic (P1 DP-A1): resolve the show to its line bundle
+    # via the registry instead of hard-coding morning/evening here. Only the
+    # opinion line is registered in P1, so the RunnerError message is preserved
+    # byte-identical for the existing two shows (current tests unaffected).
+    from lib.lines import get_line  # local import for leaf-ness
+
+    try:
+        line = get_line(show)
+    except ValueError:
         raise RunnerError(
             f"unknown show {show!r}; expected 'morning' or 'evening'"
-        )
+        ) from None
     if not date:
         from datetime import date as _date
         date = _date.today().isoformat()
@@ -1925,7 +1959,7 @@ def run_pipeline(
     if dispatch is None:
         dispatch = _default_dispatch
     if gates is None:
-        gates = _default_gate_map()
+        gates = line.gate_map()
     if config is None:
         from lib.config import load_config
         config = load_config()
@@ -1938,13 +1972,7 @@ def run_pipeline(
     # The runner threads it into the step-7 draft prompt (the "editorial folded
     # into the brief prompt" the step table promises but the first build dropped
     # → davinci drafted with no length/structure guidance → 2016<6500 halt).
-    editorial_text = ""
-    try:
-        editorial_text = (
-            Path(str(plugin_root)) / "skills" / "podcast" / "references" / f"{show}.md"
-        ).read_text(encoding="utf-8")
-    except OSError:
-        editorial_text = ""
+    editorial_text = line.editorial_loader(show, plugin_root)
 
     # Set the artifact-template date so _apply_artifact_template can
     # resolve `{date}` placeholders without threading ctx through every
@@ -1989,9 +2017,7 @@ def run_pipeline(
     }
 
     # --------------------------------------------------------------- main loop
-    from lib.pipeline import load_pipeline  # local import for leaf-ness
-
-    steps = load_pipeline(show)
+    steps = line.topology(show)
     steps_by_name = {s["name"]: s for s in steps}
     steps_run = 0
     halted_at: Optional[dict[str, str]] = None

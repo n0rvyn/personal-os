@@ -52,13 +52,13 @@ confirmed_at: 2026-06-18T10:04:41
 - 线注册表的数据结构与位置（独立 `lib/lines.py`？还是 `pipeline.py` 内？）。
 - gate_map / executor_map / editorial_loader / agent_dir 注入的接口形状。
 
-**Acceptance criteria:**
-- [ ] 现有 490 pytest + 8 bats **一字不改**全绿（引擎重构后早晚间所有现存测试照过）。
-- [ ] 新增 pin 测试：`load_pipeline("morning")` / `load_pipeline("evening")` 返回拓扑与重构前 byte-identical。
-- [ ] 06-14 回归样本喂确定性站点，行为不变（断言）。
-- [ ] 真实 no-TTS e2e 跑早/晚各一期，产物结构等价（段数 / 无草稿头 / 长度门 / 台账卡写入 / covered-ground 注入 都在）。
-- [ ] 不打架结构测试 harness 就位：观点线模块不 import 论文线模块（论文线侧断言留待 P2 激活，本阶段标记 pending）。
-- [ ] UT pass for 引擎抽取 + 线注册表。
+**Acceptance criteria:** (P1 done 2026-06-18 — self-pacing; implementation-reviewer 0 must-fix)
+- [x] 现有 **513**（329 lib + 184 prep）+ 8 bats **一字不改**全绿（原 329 lib 经 `pytest --ignore` 验证恰好 329 passed = 零变化；490 是 stale 数，实为 513）。
+- [x] 新增 pin 测试：`get_line(show).topology(show)` 对**冻结 golden**（`lib/tests/fixtures/topology_golden.json`）byte-identical（`test_lines.py`；非 live load_pipeline）。
+- [x] 06-14 回归样本确定性站点行为不变（既有 `test_scorecard/structlint/dedup` 对 06-14 fixture 的断言，全绿）。
+- [ ] ⏸ **DEFERRED（用户选 Option B）**：真实 no-TTS e2e 早/晚各一期产物结构等价 —— 本机缺 config，待 config/环境备好后用**当前代码**做基线补验（已发布旧节目是旧版本、不构成有效 A/B 基线）。
+- [x] 不打架结构测试 harness 就位（`test_line_isolation.py`：观点线侧 active+green，论文线侧 skip 待 P2 激活）。
+- [x] UT pass for 引擎抽取 + 线注册表（`test_lines.py` 6 + `test_executor_map.py` 4，含 gate-tripwire 守 cycle-1 缺陷）。
 
 **Review checklist:**
 - [ ] run-phase review step（自动 dispatch implementation-reviewer，重点核对早晚间行为保持 + 注入接口正确）。

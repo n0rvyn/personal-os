@@ -408,8 +408,34 @@ def _drive_and_verify(
         "actually go through the engine?"
     )
     assert "steps_run" in result, "run_pipeline envelope missing 'steps_run'"
-    assert result["status"] == "ok", (
-        f"run_pipeline did not finish ok: {result!r}; engine wiring broken"
+    # This is a COLLECTION e2e: it stages the collection half (config→…→
+    # ledger-verify, steps 1-7) and proves the ledger-verify gate runs through
+    # run_pipeline. The generation half (committee→…→faithfulness) is
+    # intentionally NOT staged here (the fake writes empty for generation
+    # agents — full-chain staging is paperline_generation_e2e.py's job). So the
+    # run is EXPECTED to complete the collection half then halt at the first
+    # un-staged generation station (committee). Asserting status=="ok" would
+    # require staging the whole generation chain — out of this e2e's scope (and
+    # was a stale assertion from P2, when the topology ended at ledger-verify).
+    # We assert COLLECTION COMPLETION instead: ≥7 steps ran AND any halt is in
+    # the generation half (proving ledger-verify, the last collection step, let
+    # the run pass). A halt INSIDE the collection half is a real regression.
+    _COLLECTION_STEPS = 7  # config,scratch,discovery,curator,fetch,ledger-write,ledger-verify
+    _GENERATION_STATIONS = {"committee", "digest-score", "digest-select", "finalize", "faithfulness"}
+    assert result["status"] in ("ok", "halted"), (
+        f"unexpected run_pipeline status {result['status']!r}: {result!r}"
+    )
+    if result["status"] == "halted":
+        _failed = (result.get("failed_step") or "").split(":")[0]
+        assert _failed in _GENERATION_STATIONS, (
+            f"collection e2e halted INSIDE the collection half at "
+            f"{result.get('failed_step')!r} — the collection chain (through "
+            f"ledger-verify) must complete; only the intentionally-unstaged "
+            f"generation half may halt. {result!r}"
+        )
+    assert result.get("steps_run", 0) >= _COLLECTION_STEPS, (
+        f"collection half incomplete: only {result.get('steps_run')} steps ran, "
+        f"expected ≥{_COLLECTION_STEPS} (config→…→ledger-verify). {result!r}"
     )
 
     # --- 6. Station-order proof: the fake dispatch recorded the steps ----
@@ -436,19 +462,26 @@ def _drive_and_verify(
     # + `whitelist={'curator','ledger-writer'}` (= PAPER_AGENT_WHITELIST).
     # This is the "looks wired, isn't" lesson from P2's vacuous-firewall
     # bug — verify the threading, not just the call site.
+    # The threaded whitelist is the line bundle's PAPER_AGENT_WHITELIST — which
+    # P3 EXPANDED to include the generation personas (digest-writer/-scorer/
+    # finalizer/faithfulness-judge). Compare against the real source of truth,
+    # not a hardcoded P2-era snapshot ({curator, ledger-writer}) — that stale
+    # snapshot is what broke this check once P3 grew the whitelist.
+    from lib.pipeline_papers import PAPER_AGENT_WHITELIST
     for call in fake_dispatch.calls:
         assert call["agent_dir"] == "agents/papers", (
             f"dispatch {call['step']!r} got agent_dir={call['agent_dir']!r}; "
             "expected 'agents/papers' (paper line bundle)"
         )
-        assert set(call["whitelist"]) == {"curator", "ledger-writer"}, (
+        assert set(call["whitelist"]) == set(PAPER_AGENT_WHITELIST), (
             f"dispatch {call['step']!r} got whitelist={call['whitelist']!r}; "
-            "expected PAPER_AGENT_WHITELIST (curator + ledger-writer)"
+            f"expected PAPER_AGENT_WHITELIST ({sorted(PAPER_AGENT_WHITELIST)})"
         )
 
     # --- 8. ledger-verify gate proof: real run on the staged ledger -------
-    # The gate runs as part of `run_pipeline`; the harness asserts
-    # `status == 'ok'` above. Now also confirm the gate's report landed.
+    # The gate runs as part of `run_pipeline`; the collection-completion
+    # assertion above proves the run passed ledger-verify. Now also confirm the
+    # gate's report landed.
     report_path = scratch_dir / "ledger-verify-report.json"
     if report_path.is_file():
         report = json.loads(report_path.read_text(encoding="utf-8"))

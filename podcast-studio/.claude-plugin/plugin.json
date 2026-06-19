@@ -1,6 +1,6 @@
 {
   "name": "podcast-studio",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "personal-os fleet-member podcast production. A Claude-driven multi-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, backed by a vendored prep orchestrator (topic dedup, angle rotation, MinHash) and TTS synthesis via the personal-os fleet's tts skill. Reads all paths and credentials from ~/.podcast-studio/config.yaml.",
   "author": {
     "name": "Norvyn"

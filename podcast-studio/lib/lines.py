@@ -176,14 +176,17 @@ def _paper_editorial_loader(show: str, plugin_root: Any) -> str:
 
 
 def _paper_floor(show: str) -> int:
-    """Paper-line floor — committee draft min-chars gate.
+    """Paper-line floor — the finalize-body min-chars gate.
 
     Returns 4500 (≈13 min @ ~350 non-ws chars/min, calibrated off the
     opinion 6500 ≈18 min ratio for a focused single-paper digest). The
-    committee-lite 2-3 drafts pass through per-slice gate G2 against
-    this floor; below the floor the slice halts and re-runs. Opinion
-    floor stays in `_opinion_floor` → `lib.episode.floor_chars_for_show`
-    (byte-identical for morning/evening).
+    floor is enforced ONCE, on the finalize body (`check_min_chars` with
+    `json_field="body"`, step 11 of `lib.pipeline_papers`) — the published
+    deliverable, not the throwaway committee drafts (committee gates
+    existence only; a too-short discarded draft must not halt the run).
+    A too-short body re-derives the finalizer up to its retry cap, then
+    halts. Opinion floor stays in `_opinion_floor` →
+    `lib.episode.floor_chars_for_show` (byte-identical for morning/evening).
     """
     return 4500
 

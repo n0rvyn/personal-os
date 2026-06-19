@@ -77,7 +77,10 @@ def part_a_faithfulness_blocks(tmp: Path) -> bool:
 
 
 def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
-                            expect_ok: bool = True, label: str = "faithful") -> bool:
+                            expect_ok: bool = True, label: str = "faithful",
+                            short_slice: str | None = None, short_finalize: bool = False,
+                            expect_failed_step: str | None = None,
+                            expect_finalize_dispatches: int | None = None) -> bool:
     """The generation chain runs through run_pipeline with a fake dispatch that
     stages each agent station's artifact.
 
@@ -85,7 +88,19 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
     `finalize_body="exaggerated"` → the 忠实门 FLAGS, retry re-dispatches finalize
     (same body), 2nd flag HALTs (status != ok, no publish) — the engine-level
     negative control (SF-1): proves the gate blocks THROUGH run_pipeline, not just
-    when called directly (Part A)."""
+    when called directly (Part A).
+
+    Length-floor placement knobs (过长度门 moved committee → finalize body):
+    - `short_slice="B"` → committee slice B is written BELOW the floor. Under the
+      OLD per-slice committee floor this halted the whole run; under the new
+      existence-only committee gate it MUST pass (the short draft is discarded at
+      digest-select, never airs). Pair with expect_ok=True.
+    - `short_finalize=True` → the finalize BODY is written below the floor →
+      exercises the finalize-body floor + retry=3 (halts AT finalize, never
+      reaching 忠实门). Pair with expect_failed_step="finalize",
+      expect_finalize_dispatches=4 (1 initial + 3 retries).
+    `expect_failed_step` / `expect_finalize_dispatches`: optional extra assertions
+    on the halt site + the finalize re-dispatch count."""
     from unittest.mock import MagicMock
 
     from lib.runner import run_pipeline
@@ -123,7 +138,16 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
     (scratch / "chosen-arxiv-id.json").write_text(json.dumps({"arxiv_id": "2606.19341v1"}), encoding="utf-8")
     faithful_body = (FIXTURES / "faithful-draft.md").read_text(encoding="utf-8")
     final_body = (FIXTURES / f"{finalize_body}-draft.md").read_text(encoding="utf-8")
-    floor_pad = faithful_body + ("\n\n" + "（讲解延展，把术语翻成大白话，保持忠实。）" * 200)
+    # Neutral filler: no absolute-strength phrases + no factual claims, so it
+    # clears the length floor WITHOUT touching any 忠实门 verdict (a faithful
+    # body stays faithful; an exaggerated body keeps its fixture's 夸大 phrases).
+    _pad = "\n\n" + "（讲解延展，把术语翻成大白话，保持忠实。）" * 200
+    floor_pad = faithful_body + _pad
+    # The finalize body is now the floored deliverable (step 11 carries
+    # check_min_chars json_field="body"); pad it past 4500 so Part B clears the
+    # floor and Part C reaches 忠实门 (the short raw fixtures would otherwise
+    # halt at finalize, never reaching the gate this e2e exercises).
+    final_body_padded = final_body + _pad
     inner_ledger = json.loads(STAGED_LEDGER.read_text(encoding="utf-8"))["ledger"]
 
     dispatched: list[str] = []
@@ -142,7 +166,13 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
             (sd / artifact_name).write_text(
                 json.dumps(inner_ledger, ensure_ascii=False), encoding="utf-8")
         elif agent == "digest-writer":
-            (sd / artifact_name).write_text(floor_pad, encoding="utf-8")
+            # short_slice: write ONE committee slice below the floor. The OLD
+            # per-slice committee floor halted at committee:<slice>; the new
+            # existence-only gate must let it through (discarded at select).
+            if short_slice and artifact_name.endswith(f"draft-{short_slice}.md"):
+                (sd / artifact_name).write_text("x" * 100, encoding="utf-8")  # <4500, >50 stub bypass
+            else:
+                (sd / artifact_name).write_text(floor_pad, encoding="utf-8")
         elif agent == "digest-scorer":
             (sd / artifact_name).write_text(json.dumps({"candidates": [
                 {"candidate_id": "稿-A", "scores": {"准确": 5, "清晰": 5, "框架还原": 5, "可读": 5, "total": 20}},
@@ -150,8 +180,11 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
                 {"candidate_id": "稿-C", "scores": {"准确": 4, "清晰": 4, "框架还原": 4, "可读": 4, "total": 16}},
             ]}, ensure_ascii=False), encoding="utf-8")
         elif agent == "finalizer":
+            # short_finalize: write the unpadded (<4500) body to exercise the
+            # finalize-body floor + retry=3 (halts at finalize, never 忠实门).
+            body = final_body if short_finalize else final_body_padded
             (sd / artifact_name).write_text(
-                json.dumps({"title": "OmniAgent 科普解读", "body": final_body}, ensure_ascii=False),
+                json.dumps({"title": "OmniAgent 科普解读", "body": body}, ensure_ascii=False),
                 encoding="utf-8")
         elif agent == "faithfulness-judge":
             (sd / artifact_name).write_text(json.dumps({"claims": [], "faithful": True}), encoding="utf-8")
@@ -174,10 +207,19 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
     # Block path: an exaggerated body → 忠实门 flags → retry re-dispatches finalize →
     # 2nd flag HALTs (status!='ok', failed_step='faithfulness', no .md).
     status_matches = (status == "ok") == expect_ok
-    halt_correct = expect_ok or (failed_step == "faithfulness")  # block must die AT 忠实门
-    ok = status_matches and halt_correct and "finalizer" in dispatched and "faithfulness-judge" in dispatched
-    desc = "cleared 忠实门 (happy path)" if expect_ok else "HALTED at 忠实门 (engine-level block + retry-then-stop)"
-    print(f"  [{label}] {'PASS' if ok else 'FAIL'}  generation chain through run_pipeline — {desc}")
+    checks = {"status": status_matches}
+    if expect_failed_step is not None:
+        checks["failed_step"] = (failed_step == expect_failed_step)
+    if expect_finalize_dispatches is not None:
+        checks["finalize_dispatches"] = (dispatched.count("finalizer") == expect_finalize_dispatches)
+    if expect_ok:
+        # Happy path must walk the whole chain through the 忠实门.
+        checks["full_chain"] = ("finalizer" in dispatched and "faithfulness-judge" in dispatched)
+    ok = all(checks.values())
+    failed = [k for k, v in checks.items() if not v]
+    print(f"  [{label}] {'PASS' if ok else 'FAIL'}  run_pipeline "
+          f"(status={status}, failed_step={failed_step}, finalizer×{dispatched.count('finalizer')})"
+          + ("" if ok else f" — failed checks: {failed}"))
     return ok
 
 
@@ -187,11 +229,19 @@ def main() -> int:
     a = part_a_faithfulness_blocks(tmp)
     b = part_b_generation_chain(tmp, finalize_body="faithful", expect_ok=True, label="faithful")
     print("\n[e2e] Part C — engine-level block (exaggerated body through run_pipeline):")
-    c = part_b_generation_chain(tmp, finalize_body="exaggerated", expect_ok=False, label="exaggerated")
+    c = part_b_generation_chain(tmp, finalize_body="exaggerated", expect_ok=False,
+                                label="exaggerated", expect_failed_step="faithfulness")
+    print("\n[e2e] Part D — a discarded short committee draft must NOT halt the run:")
+    d = part_b_generation_chain(tmp, short_slice="B", expect_ok=True, label="short-B-discarded")
+    print("\n[e2e] Part E — a too-short finalize BODY floors + retries (3) then halts AT finalize:")
+    e = part_b_generation_chain(tmp, short_finalize=True, expect_ok=False, label="short-finalize",
+                                expect_failed_step="finalize", expect_finalize_dispatches=4)
     print(f"\n[e2e] DONE  Part A (忠实门 gate blocks)={'PASS' if a else 'FAIL'}  "
           f"Part B (happy chain)={'PASS' if b else 'FAIL'}  "
-          f"Part C (engine-level block + retry-then-stop)={'PASS' if c else 'FAIL'}")
-    return 0 if (a and b and c) else 1
+          f"Part C (engine-level block + retry-then-stop)={'PASS' if c else 'FAIL'}  "
+          f"Part D (short discarded draft → no halt)={'PASS' if d else 'FAIL'}  "
+          f"Part E (short body → finalize floor + retry×3 → halt)={'PASS' if e else 'FAIL'}")
+    return 0 if (a and b and c and d and e) else 1
 
 
 if __name__ == "__main__":

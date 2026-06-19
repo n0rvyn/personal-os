@@ -183,7 +183,14 @@ def _build_paper_steps() -> list[dict[str, Any]]:
         # ===================================================================
         # --- step 8: committee-lite (agent parallel fan-out) --------------
         # Fan out digest-writer across 稿-A/稿-B/稿-C from the verified ledger
-        # (变讲法不变观点, no host opinion). Per-slice floor gate (过长度门, G2).
+        # (变讲法不变观点, no host opinion). Per-slice EXISTENCE gate ONLY — the
+        # length floor (过长度门) does NOT live here. committee writes 3 drafts
+        # but digest-select keeps 1, so flooring all 3 lets a draft that gets
+        # discarded anyway halt an otherwise-fine episode (the live e2e's
+        # 2950<4500 B-draft false-halt while A=5385/C=4692 were fine). Gate the
+        # deliverable, not the throwaways — the floor moved to the finalize
+        # body (step 11), mirroring the opinion line (which floors its finalize
+        # body, never every committee draft).
         {
             "name": "committee",
             "kind": "agent",
@@ -195,9 +202,9 @@ def _build_paper_steps() -> list[dict[str, Any]]:
             # draft-稿-稿-A — caught in the live e2e.) The 科普 candidate_id
             # 稿-A/稿-B/稿-C maps by position (A→稿-A) at digest-select.
             "artifact": "draft-A.md",
-            # "floor" sentinel → runner resolves get_line("papers").floor_fn = 4500
-            # (过长度门, single-sourced from _paper_floor; G2 per-slice gating).
-            "gate": [{"fn": "check_min_chars", "args": {"min_chars": "floor"}}],
+            # Per-slice existence only (each A/B/C draft landed + non-empty).
+            # Length is enforced once, on the selected+finalized body (step 11).
+            "gate": [{"fn": "check_artifact"}],
             "parallel": ["A", "B", "C"],
             "retry": None,
             "skip_when": None,
@@ -231,15 +238,29 @@ def _build_paper_steps() -> list[dict[str, Any]]:
         },
         # --- step 11: finalize (agent — 讲解者 voice unify) ----------------
         # The _RETRY_PARENT target for the 忠实门 retry (re-derives body content).
+        # Carries the paper line's ONE length floor (过长度门): check_min_chars
+        # over the finalize body (json_field="body"). The body IS the published
+        # deliverable, and the finalizer EXPANDS (translates terms into 大白话 +
+        # adds analogies, never trims — live: 6539-char body > any committee
+        # draft), so a borderline-short selected draft usually clears here; the
+        # floor gates what actually airs. retry=3: a too-short body re-derives
+        # the finalizer up to 3× (fresh LLM variance per dispatch — NOT a
+        # length-prompt, which the live run proved backfires), then HALTS
+        # (D-009, never a half-product). Same gate shape as the opinion line's
+        # finalize body floor; the retry policy differs (opinion re-derives via
+        # the factcheck/12a station, the paper line via this station's retry=3).
         {
             "name": "finalize",
             "kind": "agent",
             "agent": "finalizer",
             "inputs": ["digest-selected.json", "papers-voice.md"],
             "artifact": "finalize-result.json",
-            "gate": [{"fn": "check_artifact"}],
+            "gate": [
+                {"fn": "check_artifact"},
+                {"fn": "check_min_chars", "args": {"min_chars": "floor", "json_field": "body"}},
+            ],
             "parallel": None,
-            "retry": None,
+            "retry": 3,
             "skip_when": None,
             "fail_soft": None,
         },

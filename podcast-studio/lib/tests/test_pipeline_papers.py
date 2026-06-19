@@ -300,3 +300,65 @@ def test_load_papers_pipeline_rejects_unknown_show():
 
     with pytest.raises(ValueError):
         load_papers_pipeline("not-a-show")
+
+
+# ---------------------------------------------------------------------------
+# Length floor placement (过长度门): on the finalize BODY, not the committee
+# drafts. The committee writes 3 drafts but digest-select keeps 1, so a floor
+# on the committee slices lets a discarded short draft halt an otherwise-fine
+# episode (the live 2950<4500 B-draft false-halt). The floor moved to the
+# finalize body (mirrors the opinion line's finalize body floor). These pins
+# fail if the floor regresses back onto the committee step.
+# ---------------------------------------------------------------------------
+
+def _paper_step(name: str) -> dict:
+    from lib.pipeline_papers import _build_paper_steps
+
+    step = next((s for s in _build_paper_steps() if s["name"] == name), None)
+    assert step is not None, f"step {name!r} must exist in the paper topology"
+    return step
+
+
+def test_committee_gate_is_existence_only_no_length_floor():
+    """The committee station gates EXISTENCE only (check_artifact). It must
+    NOT carry a length floor: flooring throwaway drafts that digest-select
+    discards is the false-halt bug this fix removed."""
+    committee = _paper_step("committee")
+    gate_fns = [g.get("fn") for g in committee.get("gate", [])]
+    assert gate_fns == ["check_artifact"], (
+        f"committee gate must be exactly [check_artifact] (existence only); "
+        f"a check_min_chars floor here re-introduces the discarded-draft "
+        f"false-halt. got {gate_fns!r}"
+    )
+    # Still a per-slice parallel fan-out (each A/B/C must exist).
+    assert committee.get("parallel") == ["A", "B", "C"], (
+        f"committee must stay a 3-slice fan-out, got {committee.get('parallel')!r}"
+    )
+
+
+def test_finalize_gate_carries_body_length_floor_with_retry():
+    """The single 过长度门 lives on the finalize body: check_min_chars with
+    args.min_chars=='floor' (sentinel → _paper_floor=4500) AND
+    json_field=='body' (the body inside finalize-result.json IS the published
+    deliverable). retry==3: a too-short body re-derives the finalizer up to 3×
+    then halts (D-009)."""
+    finalize = _paper_step("finalize")
+    gate = finalize.get("gate", [])
+    fns = [g.get("fn") for g in gate]
+    assert "check_min_chars" in fns, (
+        f"finalize must carry the length floor (check_min_chars); got {fns!r}"
+    )
+    floor_item = next(g for g in gate if g.get("fn") == "check_min_chars")
+    args = floor_item.get("args", {})
+    assert args.get("min_chars") == "floor", (
+        f"finalize floor must use the 'floor' sentinel (→ _paper_floor), "
+        f"got {args.get('min_chars')!r}"
+    )
+    assert args.get("json_field") == "body", (
+        f"finalize floor must count the 'body' JSON field (the deliverable), "
+        f"got {args.get('json_field')!r}"
+    )
+    assert finalize.get("retry") == 3, (
+        f"finalize retry must be 3 (re-derive a too-short body up to 3× then "
+        f"halt), got {finalize.get('retry')!r}"
+    )

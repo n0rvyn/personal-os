@@ -384,7 +384,13 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     cfg_path = _resolve_config_path(path)
 
     if not cfg_path.exists():
-        raise ConfigError(f"config file not found: {cfg_path}")
+        raise ConfigError(
+            f"config file not found: {cfg_path}. "
+            f"解析顺序: 显式 path 参数 → $PODCAST_STUDIO_CONFIG → "
+            f"cwd 向上找带 vault/tts 段的 personal-os.yaml → "
+            f"~/.podcast-studio/config.yaml。"
+            f"把 $PODCAST_STUDIO_CONFIG 指向你的 config,或在默认路径建文件。"
+        )
 
     raw = _read_yaml(cfg_path)
 

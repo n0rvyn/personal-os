@@ -30,6 +30,9 @@ fan-out (drafts/critiques/polishes at 7/8/9) and gate-retry loops (12↔12a,
 this skill is a thin wrapper that calls:
 
 ```bash
+# config 由 lib.config.load_config 解析,顺序: $PODCAST_STUDIO_CONFIG →
+# cwd 向上找带 vault/tts 段的 personal-os.yaml → ~/.podcast-studio/config.yaml。
+# 都没命中就 fail-closed(ConfigError)—— 这时设 $PODCAST_STUDIO_CONFIG 指向你的 config。
 python -m lib.runner --show <morning|evening|papers> [--date YYYY-MM-DD] [--no-tts]
 ```
 
@@ -69,7 +72,9 @@ and injected into each persona dispatch by the runner's step-2 loader.
 
 1. **Load config** — `from lib.config import load_config`. Resolves
    `vault.subjective_dir`, `vault.news_dir`, `vault.output_dir`, and `tts.*`
-   from `~/.podcast-studio/config.yaml`. Fail-closed on missing keys.
+   via the config-path lookup order (`$PODCAST_STUDIO_CONFIG` → cwd-walk
+   `personal-os.yaml` with a `vault`/`tts` section → `~/.podcast-studio/config.yaml`).
+   Fail-closed: a missing file or a missing key both raise `ConfigError`.
 2. **Load per-show editorial** — branch on `morning` vs `evening` and read
    `references/morning.md` or `references/evening.md`. The loaded text is the
    per-step editorial block injected into each persona dispatch.
@@ -565,7 +570,9 @@ the script, not as a directive.
 
 ## Configuration
 
-`~/.podcast-studio/config.yaml` is the only config source. Resolved keys:
+Config is resolved by `lib.config.load_config` (order: `$PODCAST_STUDIO_CONFIG`
+→ cwd-walk `personal-os.yaml` with a `vault`/`tts` section →
+`~/.podcast-studio/config.yaml`). Resolved keys:
 
 - `vault.subjective_dir` — subjective notes / journal
 - `vault.news_dir` — news / domain feed

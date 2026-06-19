@@ -140,3 +140,52 @@ Sandbox: `Content/Podcasts/.e2e-sandbox-phase2` (real PKOS inputs, seeded with 6
 - **SF-2 DEFERRED to P4** (DP-001 recommendation accepted): 忠实门 局限保留 uses a 12-char VERBATIM substring match — fail-closed safe, but a paraphrasing LIVE digest-writer could false-flag → halt → never ship. The deterministic check passes on the fixtures (near-verbatim); the live-draft robustness must be tuned against REAL drafts before P4's live committee/finalize run (实现前验证输入样本). **⚠️ P4 ship-gate: tune 局限 coverage robustness + 人工验证 on real drafts before the first live no-TTS run.**
 - 2 nice-to-have (stale docstrings) skipped — assertions are correct.
 - **P3 COMPLETE.** 12/12 tasks, 423 lib + 184 prep + 8 bats green, opinion zero-change proven, 忠实门 blocks through the engine.
+
+---
+
+## Execution Report
+
+**Plan:** docs/06-plans/2026-06-19-paper-digest-p4-plan.md
+**Status:** complete
+**Tasks:** 13 total — 4 completed / 0 blocked / 0 failed
+
+### Task Results
+
+- Task 1-tests: 论文线输出隔离 — 测试先行 ✅ — 3 new tests FAIL test-first (papers subdirs + output_root_fn); opinion-only zero-side-effect shield passes
+- Task 1-impl: 论文线输出隔离 — 实现 ✅ — config papers subdirs gated on has_papers; LineBundle.output_root_fn (opinion→output_dir byte-identical, paper→output_dir/papers); golden/isolation/pipeline 44 pass
+- Task 2-tests: paper-log 存储模块 — 测试先行 ✅ — 20 tests FAIL test-first (ModuleNotFoundError)
+- Task 2-impl: paper-log 存储模块 — 实现 ✅ — executor blocked spuriously (advisor-gate); implemented in main context (opus): load/append/is_covered + fail-closed + atomic write + line-isolation. 20 paperlog green, full lib 450 passed, opinion golden green. (Also fixed one buggy 2-tests case whose _make_entry helper coerced the non-list input.)
+- Task 3-tests/3-impl: same-day-guard + paper-log-read 前段站点 ✅ — code stations resolve papers_* subdirs (not opinion ctx); curator input→paper-log.json; arXiv-id hard dedup pre-filter. 49 paper tests green
+- Task 4: 口播稿(broadcaster) + TTS(jay) publish-half ✅ — agents/papers/broadcaster.md + jay.md; broadcaster+jay added to PAPER_AGENT_WHITELIST (load-time guard, verifier MR#2); paper jay needed (agent_dir isolation, no fallback to agents/)
+- Task 5-tests/5-impl: publish station ✅ — _paper_publish_executor writes papers/episodes/{date}-{slug}.md from finalize body + mp3 move; reuses episode_paths (line-neutral)
+- Task 6-tests/6-impl: paper-log-write (DP-601=B) + cleanup ✅ — append BEFORE publish + post-write verify (blocking, no orphan window); topology …tts→paper-log-write→publish→cleanup
+- Task 7: CLI + SKILL.md ✅ — --show choices += papers; /podcast papers doc block + slot cadence note (midday via /loop)
+- Task 8: e2e + zero-change final ✅ — papers no-TTS e2e Parts A–F all PASS (full chain→publish→paper-log + dedup + same-day fail-fast); opinion no-TTS e2e = test_production_gate_map_no_tts_reaches_publish green; collection e2e exit 0
+
+**P4 IMPLEMENTATION COMPLETE — all 13 tasks done; independently reviewed (implementation-reviewer fresh context: 0 must-fix, 2 should-fix [1 faithful-mirror/accepted, 1 fixed], 2 nice-to-have).** Acceptance (DETERMINISTIC): lib 472 passed + prep 184 + bats 8; opinion zero-change byte-identical (golden + isolation 44 green, runner.py diff = only `--show` choices); papers no-TTS e2e Parts A–F green (full chain→publish→paper-log + dedup + same-day fail-fast + concepts path); opinion morning no-TTS e2e green (`test_production_gate_map_no_tts_reaches_publish`, full pipeline→publish through real gates). DP-601=B log-before-publish; output isolated (output_dir/papers/).
+
+**Verification tiers (honest — deterministic done, real-LLM pending):**
+- ✅ **Automated (deterministic) e2e** — DONE + green, both lines. This is 門④'s established form across P1/P2/P3.
+- ⏳ **Real-LLM papers no-TTS run** — FEASIBLE but NOT RUN. handoff §6 sandbox + drive_live.py + cached arXiv exist; needs `--model sonnet` + ~30-60min + arXiv/proxy (flaky). Plan Task 8 Real-path + Manual (mp3 真听) verify pending — the dev-guide's "真实 full e2e / 真实跑两期" is NOT yet satisfied.
+- 🚫 **Real-LLM opinion run** — env-blocked (no production config, empty sandbox vault). Genuinely deferred (opinion is byte-identical → a real run proves nothing new).
+- ⏳ **TTS** — not exercised (no_tts throughout); jay wiring is unit/topology-level only.
+
+---
+
+## Execution Report
+
+**Plan:** docs/06-plans/2026-06-19-paperline-anchor-grounding-plan.md
+**Status:** complete
+**Tasks:** 5 total — 5 completed / 0 blocked / 0 failed
+
+### Task Results
+
+- Task 1-tests: anchor 扎根判定测试 ✅ — +2 tests; `test_verify_anchors_passes_faithful_paraphrase` FAIL-first on verbatim impl (uses REAL pdftotext fixture, verifier MR#1); `test_verify_anchors_flags_fabricated_number` regression shield
+- Task 1-impl: verify_anchors 重写 ✅ — `_norm_match`/`_content_tokens`/`_is_number_token`/`_anchor_grounded`; `_GROUND_THRESHOLD=0.8`; 数字零容忍 + 词含纳≥0.8; `_TOKEN_RE` 线性(无 ReDoS); 空 anchor skip 语义保留; 474 passed/1 skipped (+2 vs 472 baseline); fabricated 仍 flag
+- Task 2: ledger-writer.md 提示词放松 ✅ — 删整句逐字死规则; 保留+强化 anchor 英文约束(line 66/79, 验证 MR#2) + 数字/名字零容忍
+- Task 3: faithfulness.py 注释同步 ✅ — comment-only; 夸大/局限底线 byte-identical; 10/10 faithfulness green
+- Task 4: evals LIVE_LEDGER 开关 ✅ — env-gated ledger stage; 默认行为不变; ast.parse ok
+
+**COMPLETE — 5/5 tasks; verify-plan approved (2 MR folded); implementation-reviewer 0 must-fix, 3 nice-to-have deferred (SF-1 plan verb "Modify" for new evals file / SF-2 dup `its` in `_STOP` / SF-3 None-fulltext defended at `_norm_match` boundary).** 474 lib passed/1 skipped.
+
+**✅ Real-path verify DONE + GREEN (live un-staged ledger, `LIVE_LEDGER=1`, --model sonnet→9090→MiniMax, 789s):** status=ok, `.md` `2026-06-19-看得少反而答得对.md` (6822字) published to papers/episodes + paper-logged; 忠实门 passed first try. **Relaxation proven load-bearing:** the live writer produced 3 non-verbatim anchors (incl. the exact "On LVBench…" failure that halted the first fully-live run + reflowed math notation) — OLD verbatim gate would flag all 3 → halt; NEW gate ok=True/0 flagged; faithfulness judge faithful=True/0 dropped/15 clean claims. Fix resolves the P3-handoff ledger-writer verbatim-anchor flakiness.

@@ -13,8 +13,13 @@ probe-validated on the real `2606.19341` ledger, see
 `.claude/p3-probes/faithfulness-probe-finding.json`):
 
   1. **Anchor traceability** — `lib.paperline.ledger.verify_anchors(ledger, fulltext)`:
-     every ledger anchor must be a verbatim substring of the full text (the ledger
-     the draft is written from must itself be grounded).
+     every ledger anchor must be grounded in the full text. Grounding is determined
+     by `lib.paperline.ledger.verify_anchors`: numerics (tokens containing a digit,
+     e.g. `50.5%`, `10×`, `72b`, `qwen2.5-vl-72b`, `2025`) must all appear in the
+     normalized full text (zero tolerance — catches fabricated numbers / misattributed
+     names), and pure-word tokens must be present at ≥ 80% containment (tolerates
+     connecting words / case / pdftotext reflow — see DP-001). Verbatim-substring
+     matching is no longer the rule; faithful rewrites now pass.
   2. **夸大 detection** — an absolute-strength phrase ("彻底解决" / "完全攻克" / …) in
      the draft body, while the paper's results are only HEDGED gains (comparative %),
      is an over-claim → flag.

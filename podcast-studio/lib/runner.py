@@ -1877,6 +1877,45 @@ def _scorecard_step(
     return None
 
 
+# Paper-line committee 讲法 paths (mirror agents/papers/digest-writer.md §"committee
+# 三条讲法路径"). The runner ASSIGNS the slice; the persona system prompt carries
+# the full path spec. Keeping the one-line gloss here makes the dispatch prompt
+# self-describing without re-stating the persona's contract.
+_PAPER_COMMITTEE_PATHS = {
+    "A": "类比路径 —— 每个抽象概念先用一个日常类比让人秒懂，再回到论文里的精确术语",
+    "B": "拆步骤路径 —— 从方法输入端开始，顺着数据流一步步往后讲（先把 X 喂进去得到 Y，再把 Y 和 Z…）",
+    "C": "反直觉切入路径 —— 从论文最反直觉的发现 / 最出人意料的局限开场，再回头讲问题→方法→结果",
+}
+
+
+def _build_committee_prompt(tag: str, ctx: dict[str, Any]) -> str:
+    """Paper-line committee per-slice prompt — assigns the `paper-draft-id`
+    (A/B/C) and its 讲法 path so the three digest-writer slices actually
+    diverge in HOW they explain (not WHAT — the fact layer stays identical to
+    the one ledger). Without this the three slices got the generic prompt and
+    came out near-identical (committee's "pick best of 3 distinct 讲法" premise
+    collapses). The full path spec lives in agents/papers/digest-writer.md;
+    here we only assign which slice this dispatch is."""
+    scratch: Path = ctx["scratch_dir"]
+    path_gloss = _PAPER_COMMITTEE_PATHS.get(tag, "")
+    parts = [
+        f"# digest-writer —— pipeline step: committee 稿-{tag}",
+        "",
+        f"Show: {ctx['show']}   Date: {ctx['date']}",
+        f"Scratch dir (在这里读输入、写产物): {scratch}",
+        "",
+        f"**paper-draft-id: {tag}** —— 你是 committee 稿-{tag}，走【稿 {tag}：{path_gloss}】。",
+        "三稿事实层必须完全一致（同一份事实账、同一套数字、同一套局限集合），"
+        f"只在讲法/比喻/切入点上走稿-{tag} 的路径——绝不改观点、不改事实、不漏局限。",
+        "",
+        "读取以下输入文件 (scratch dir 下，作为唯一事实来源):",
+        f"- {scratch / 'paper-ledger.json'}",
+        "",
+        f"把你的产物写到 scratch dir 下的: draft-{tag}.md",
+    ]
+    return "\n".join(parts)
+
+
 def _build_step_prompt(
     step: dict[str, Any],
     ctx: dict[str, Any],
@@ -1887,10 +1926,11 @@ def _build_step_prompt(
     The step-7 drafts prompt is the only one that threads
     `writing-brief-X.json` + the covered-ground `avoid_memo` (the
     anti-homogenization channel; DP-001=A retired the legacy
-    `recent_anchors` union in favor of the covered-ground memo). Every
-    other step gets a minimal context-aware prompt — the persona's own
-    system prompt (read by dispatch_persona from `agents/<name>.md`)
-    carries the actual instructions.
+    `recent_anchors` union in favor of the covered-ground memo). The paper
+    `committee` step threads the per-slice `paper-draft-id` + 讲法 path
+    (`_build_committee_prompt`). Every other step gets a minimal
+    context-aware prompt — the persona's own system prompt (read by
+    dispatch_persona from `agents/<name>.md`) carries the actual instructions.
     """
     name = step["name"]
     if name == "drafts" and tag:
@@ -1901,6 +1941,9 @@ def _build_step_prompt(
             candidate = ctx["scratch_dir"] / f"writing-brief-{tag}.json"
             brief_path = candidate if candidate.exists() else None
         return _build_draft_prompt(tag, brief_path, ctx["scratch_dir"], ctx)
+    if name == "committee" and tag:
+        # Paper line only — opinion has no "committee" step → zero-change.
+        return _build_committee_prompt(tag, ctx)
 
     # Generic agent prompt: point the persona at its scratch INPUT files +
     # OUTPUT path, instead of relying on it to self-locate (several persona

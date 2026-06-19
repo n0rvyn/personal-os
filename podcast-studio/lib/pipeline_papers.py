@@ -48,6 +48,12 @@ PAPER_AGENT_WHITELIST = frozenset({
     "digest-scorer",
     "finalizer",
     "faithfulness-judge",
+    # publish side (P4): 口播改写 + TTS. BOTH must be here or load_papers_pipeline
+    # raises at validate_pipeline (pipeline.py:739) — `jay` lives in the OPINION
+    # AGENT_WHITELIST, not here, and the paper line dispatches from agents/papers/
+    # (no fallback to agents/), so the paper line needs its own jay persona + entry.
+    "broadcaster",
+    "jay",
 })
 
 
@@ -102,6 +108,24 @@ def _build_paper_steps() -> list[dict[str, Any]]:
             "skip_when": None,
             "fail_soft": None,
         },
+        # --- step 2a: same-day guard (code — P4, DP-404=A) ----------------
+        # One episode per line per day: if the paper episodes dir already has
+        # a {date}-*.md, fail-fast (mirrors opinion `stance-card-exists`).
+        # No artifact; the executor returns a halt dict on a hit. Keyed on
+        # EPISODE presence (not paper-log) so a log-then-publish-fail leaves
+        # no episode → guard passes → curator dedup skips the logged paper.
+        {
+            "name": "same-day-guard",
+            "kind": "code",
+            "agent": None,
+            "inputs": ["{date}"],
+            "artifact": None,
+            "gate": None,
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
         # --- step 3: discovery (code) -------------------------------------
         # fetch_candidates returns a list[dict]; the persona (curator) reads
         # the list from scratch + selects 1.
@@ -117,14 +141,34 @@ def _build_paper_steps() -> list[dict[str, Any]]:
             "skip_when": None,
             "fail_soft": None,
         },
+        # --- step 3a: paper-log-read (code — P4, DP-403=A) ----------------
+        # Stages the paper-log for the curator (writes paper-log.json — the
+        # curator's REAL dedup input, replacing the literal-string stub) AND
+        # drops covered arXiv ids from candidates.json IN PLACE (hard dedup).
+        # Fail-closed read (corrupt paper-log → halt). Must run AFTER discovery
+        # (needs candidates.json) and BEFORE curator (feeds it).
+        {
+            "name": "paper-log-read",
+            "kind": "code",
+            "agent": None,
+            "inputs": ["candidates.json"],
+            "artifact": "paper-log.json",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
         # --- step 4: curator (agent — 选题判官) ----------------------------
-        # Reads candidates.json + a (possibly empty) paper-log dedup input;
-        # writes chosen-arxiv-id.json carrying the pick + one-line rationale.
+        # Reads the deduped candidates.json + the real paper-log.json (for
+        # concept-level soft-avoidance); writes chosen-arxiv-id.json carrying
+        # the pick + one-line rationale. (arXiv-id hard dedup already applied
+        # by paper-log-read; the curator does the concept near-dedup judgment.)
         {
             "name": "curator",
             "kind": "agent",
             "agent": "curator",
-            "inputs": ["candidates.json", "paper-log"],
+            "inputs": ["candidates.json", "paper-log.json"],
             "artifact": "chosen-arxiv-id.json",
             "gate": [{"fn": "check_artifact"}],
             "parallel": None,
@@ -279,6 +323,88 @@ def _build_paper_steps() -> list[dict[str, Any]]:
             "gate": [{"fn": "check_faithfulness"}],
             "parallel": None,
             "retry": 1,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # ===================================================================
+        # PUBLISH HALF (P4) — broadcast-script → tts → paper-log-write →
+        # publish → cleanup. (paper-log-write + publish + cleanup land in
+        # Task 5/6; this Task adds the口播稿 + TTS pair.)
+        # ===================================================================
+        # --- step 13: broadcast-script (agent — 口播改写) ------------------
+        # 讲解者口吻把过了忠实门的 body 改成念稿。论文线自己的 broadcaster
+        # persona（agents/papers/broadcaster.md），不引主播声音/观点。
+        {
+            "name": "broadcast-script",
+            "kind": "agent",
+            "agent": "broadcaster",
+            "inputs": ["finalize-result.json", "papers-voice.md"],
+            "artifact": "broadcast-script-{date}.txt",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 14: tts (agent=jay, skip_when=no_tts) -------------------
+        # 复用 opinion 的 TTS 机制（synth-auto 经 tts skill）+ skip_when="no_tts"
+        # 跳过语义（runner.py:1175 既有，不改）。论文线自己的 jay persona
+        # （agents/papers/jay.md — agent_dir 隔离，不回退 agents/）。
+        {
+            "name": "tts",
+            "kind": "agent",
+            "agent": "jay",
+            "inputs": ["broadcast-script-{date}.txt"],
+            "artifact": "audio-files.mp3",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": "no_tts",
+            "fail_soft": None,
+        },
+        # --- step 15: paper-log-write (code — record dedup BEFORE airing) -
+        # DP-601=B: append {arxiv_id,title,date,concepts} to papers/state/
+        # paper-log.yaml BEFORE publish, so a write failure halts before any
+        # .md/.mp3 is aired (no aired-but-unlogged duplicate window; D-009/D-013).
+        # Blocking gate (check_artifact) — NOT fail-soft (dedup命脉).
+        {
+            "name": "paper-log-write",
+            "kind": "code",
+            "agent": None,
+            "inputs": ["chosen-arxiv-id.json", "finalize-result.json", "{date}"],
+            "artifact": None,
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 16: publish (code — write .md + move mp3) ---------------
+        # Writes the finalize body → {papers_episodes}/{date}-{slug}.md and moves
+        # audio-files.mp3 (unless no_tts). Resolves the PAPER episodes dir, not
+        # opinion's. Runs AFTER paper-log-write (DP-601=B: log before airing).
+        {
+            "name": "publish",
+            "kind": "code",
+            "agent": None,
+            "inputs": ["finalize-result.json", "{date}", "{show}"],
+            "artifact": None,
+            "gate": None,
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": None,
+        },
+        # --- step 17: cleanup (code — no-op; runner finally does teardown) -
+        {
+            "name": "cleanup",
+            "kind": "code",
+            "agent": None,
+            "inputs": [],
+            "artifact": None,
+            "gate": None,
+            "parallel": None,
+            "retry": None,
             "skip_when": None,
             "fail_soft": None,
         },

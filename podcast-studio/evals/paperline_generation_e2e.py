@@ -80,7 +80,8 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
                             expect_ok: bool = True, label: str = "faithful",
                             short_slice: str | None = None, short_finalize: bool = False,
                             expect_failed_step: str | None = None,
-                            expect_finalize_dispatches: int | None = None) -> bool:
+                            expect_finalize_dispatches: int | None = None,
+                            out_root_override: "Path | None" = None) -> bool:
     """The generation chain runs through run_pipeline with a fake dispatch that
     stages each agent station's artifact.
 
@@ -107,7 +108,11 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
     from lib.paperline import discovery as _disc, fetch as _ft
 
     print("\n[e2e] Part B — generation chain through run_pipeline('papers'):")
-    scratch = tmp / "b-chain"
+    # Label-keyed dirs so each scenario is isolated: Part B (faithful) PUBLISHES
+    # a 2026-06-18 episode, and the same-day guard (DP-404=A) would then halt any
+    # later scenario sharing the same papers episodes dir + date. Per-label dirs
+    # keep the guard's real behavior without cross-contaminating the scenarios.
+    scratch = tmp / f"b-chain-{label}"
     _stage_common(scratch)
     # Deterministic: skip load_config (pass a config) + stub the collection
     # stations' network so the chain reaches the generation half offline.
@@ -117,8 +122,21 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
     # Give vault.output_dir a REAL path so the runner's output-subdir resolution
     # (Path(str(config.vault.output_dir))) doesn't stringify a MagicMock into a
     # junk "<MagicMock ...>" directory in the repo.
-    (tmp / "b-out").mkdir(parents=True, exist_ok=True)
-    config.vault.output_dir = str(tmp / "b-out")
+    out_root = out_root_override if out_root_override is not None else tmp / f"b-out-{label}"
+    out_root.mkdir(parents=True, exist_ok=True)
+    config.vault.output_dir = str(out_root)
+    # P4: the publish-half code stations (same-day-guard / paper-log-read /
+    # paper-log-write / publish) resolve the PAPER subdirs via
+    # `_paper_subdir` → config.vault.papers_<kind>_dir. Set them to REAL tmp
+    # paths (else MagicMock stringifies them into junk "<MagicMock ...>" dirs).
+    papers_episodes = out_root / "papers" / "episodes"
+    papers_state = out_root / "papers" / "state"
+    papers_reports = out_root / "papers" / "reports"
+    for _d in (papers_episodes, papers_state, papers_reports):
+        _d.mkdir(parents=True, exist_ok=True)
+    config.vault.papers_episodes_dir = str(papers_episodes)
+    config.vault.papers_state_dir = str(papers_state)
+    config.vault.papers_reports_dir = str(papers_reports)
     _FEED = (
         b"<feed xmlns='http://www.w3.org/2005/Atom' xmlns:arxiv='http://arxiv.org/schemas/atom'>"
         b"<entry><id>http://arxiv.org/abs/2606.19341v1</id><title>t</title><summary>s</summary>"
@@ -158,8 +176,13 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
         dispatched.append(agent)
         sd = Path(scratch_dir)
         if agent == "curator":
+            # Emit concepts (as curator.md now does) so the non-empty concepts
+            # path is exercised end-to-end: curator → chosen-arxiv-id.json →
+            # paper-log-write → paper-log.yaml carries them (review should-fix #2).
             (sd / artifact_name).write_text(
-                json.dumps({"arxiv_id": "2606.19341v1", "rationale": "stub"}), encoding="utf-8")
+                json.dumps({"arxiv_id": "2606.19341v1", "rationale": "stub",
+                            "concepts": ["视频理解", "agent 循环"]}, ensure_ascii=False),
+                encoding="utf-8")
         elif agent == "ledger-writer":
             # ledger-write produces the INNER 4-section ledger (problem/method/
             # key_results/limitations) — what ledger-verify + 忠实门 read.
@@ -188,6 +211,10 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
                 encoding="utf-8")
         elif agent == "faithfulness-judge":
             (sd / artifact_name).write_text(json.dumps({"claims": [], "faithful": True}), encoding="utf-8")
+        elif agent == "broadcaster":
+            # P4: 口播改写 → spoken script (plain text). no_tts skips the jay
+            # TTS step downstream, so content is nominal — just non-empty.
+            (sd / artifact_name).write_text("各位听众，今天我们聊一篇论文……", encoding="utf-8")
         else:
             (sd / artifact_name).write_text("{}", encoding="utf-8")
         return {"ok": True}
@@ -213,8 +240,23 @@ def part_b_generation_chain(tmp: Path, *, finalize_body: str = "faithful",
     if expect_finalize_dispatches is not None:
         checks["finalize_dispatches"] = (dispatched.count("finalizer") == expect_finalize_dispatches)
     if expect_ok:
-        # Happy path must walk the whole chain through the 忠实门.
+        # Happy path must walk the whole chain through the 忠实门 AND the P4
+        # publish half: the .md lands in the PAPER episodes dir and the paper is
+        # recorded in paper-log (DP-601=B: log written BEFORE publish).
         checks["full_chain"] = ("finalizer" in dispatched and "faithfulness-judge" in dispatched)
+        published = list(papers_episodes.glob("2026-06-18-*.md"))
+        checks["published_md_in_papers_dir"] = bool(published)
+        try:
+            from lib.paperline.paperlog import is_covered, load_paperlog
+            _log = load_paperlog(str(papers_state))
+            checks["paper_logged"] = is_covered(_log, "2606.19341v1")
+            # Concepts path e2e (review should-fix #2): the curator-emitted
+            # concepts must reach the paper-log entry (non-empty).
+            _entry = next((e for e in _log if e.get("arxiv_id") == "2606.19341v1"), None)
+            checks["paper_concepts_recorded"] = bool(_entry and _entry.get("concepts"))
+        except Exception:
+            checks["paper_logged"] = False
+            checks["paper_concepts_recorded"] = False
     ok = all(checks.values())
     failed = [k for k, v in checks.items() if not v]
     print(f"  [{label}] {'PASS' if ok else 'FAIL'}  run_pipeline "
@@ -236,12 +278,25 @@ def main() -> int:
     print("\n[e2e] Part E — a too-short finalize BODY floors + retries (3) then halts AT finalize:")
     e = part_b_generation_chain(tmp, short_finalize=True, expect_ok=False, label="short-finalize",
                                 expect_failed_step="finalize", expect_finalize_dispatches=4)
+    # Part F — two runs into the SAME paper output root: run 1 publishes today's
+    # episode; run 2 (same date) must fail-fast at the same-day guard (DP-404=A,
+    # one episode per line per day). Proves the continuity guard at run_pipeline
+    # level, not just unit (the GOAL's "同日护栏").
+    print("\n[e2e] Part F — same-day re-run fail-fast (two run_pipeline calls, shared output root):")
+    shared = tmp / "f-shared-out"
+    f1 = part_b_generation_chain(tmp, finalize_body="faithful", expect_ok=True,
+                                 label="run1-publish", out_root_override=shared)
+    f2 = part_b_generation_chain(tmp, finalize_body="faithful", expect_ok=False,
+                                 label="run2-sameday", out_root_override=shared,
+                                 expect_failed_step="same-day-guard")
+    f = f1 and f2
     print(f"\n[e2e] DONE  Part A (忠实门 gate blocks)={'PASS' if a else 'FAIL'}  "
           f"Part B (happy chain)={'PASS' if b else 'FAIL'}  "
           f"Part C (engine-level block + retry-then-stop)={'PASS' if c else 'FAIL'}  "
           f"Part D (short discarded draft → no halt)={'PASS' if d else 'FAIL'}  "
-          f"Part E (short body → finalize floor + retry×3 → halt)={'PASS' if e else 'FAIL'}")
-    return 0 if (a and b and c and d and e) else 1
+          f"Part E (short body → finalize floor + retry×3 → halt)={'PASS' if e else 'FAIL'}  "
+          f"Part F (same-day re-run fail-fast)={'PASS' if f else 'FAIL'}")
+    return 0 if (a and b and c and d and e and f) else 1
 
 
 if __name__ == "__main__":

@@ -289,11 +289,19 @@ def test_executor_each_code_station_uses_ctx(tmp_path, monkeypatch):
         # The return shape is one of:
         #   - None (no-op body, gate will read artifact from ctx/scratch)
         #   - Path (the artifact the gate validates)
-        #   - some non-Path truthy artifact the gate reads via ctx
-        # A TypeError or non-None non-truthy return is a contract break.
-        assert result is None or isinstance(result, Path), (
+        #   - a halt dict ({"status": "halted", ...}) — the P4 fail-closed code
+        #     stations (same-day-guard / paper-log-read / paper-log-write) return
+        #     this when their preconditions aren't met (here the minimal ctx has
+        #     no output_dir, so paper-log-write can't resolve the state dir);
+        #     _execute_step propagates it (runner.py:1201). A valid shape.
+        # A TypeError or any other return is a contract break.
+        assert (
+            result is None
+            or isinstance(result, Path)
+            or (isinstance(result, dict) and result.get("status") == "halted")
+        ), (
             f"executor {station_name!r} returned {type(result).__name__}: "
-            f"{result!r}; expected None or Path"
+            f"{result!r}; expected None, Path, or a halt dict"
         )
 
 
@@ -459,3 +467,220 @@ def _fulltext_for_ledger(staged_path: Path, payload: dict) -> str:
     if html_head.exists():
         return html_head.read_text(encoding="utf-8")
     return ""
+
+# ---------------------------------------------------------------------------
+# P4 Task 3: same-day-guard + paper-log-read executors
+# ---------------------------------------------------------------------------
+
+def _p4_ctx(tmp_path, date="2026-06-19"):
+    """Build a paper-line ctx whose papers subdirs fall back to
+    tmp_path/papers/<kind> (no full config injected — exercises the
+    output_dir fallback in _paper_subdir)."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    return {
+        "show": "papers", "date": date, "scratch_dir": scratch,
+        "output_dir": str(tmp_path),
+    }
+
+
+def test_same_day_guard_passes_when_no_episode(tmp_path):
+    from lib.paperline.executors import _same_day_guard_executor
+    assert _same_day_guard_executor(_p4_ctx(tmp_path)) is None
+
+
+def test_same_day_guard_halts_on_existing_episode(tmp_path):
+    from lib.paperline.executors import _same_day_guard_executor
+    ctx = _p4_ctx(tmp_path, date="2026-06-19")
+    ep = tmp_path / "papers" / "episodes"
+    ep.mkdir(parents=True)
+    (ep / "2026-06-19-some-title.md").write_text("x", encoding="utf-8")
+    result = _same_day_guard_executor(ctx)
+    assert isinstance(result, dict) and result.get("status") == "halted"
+    assert result.get("failed_step") == "same-day-guard"
+
+
+def test_same_day_guard_ignores_other_dates(tmp_path):
+    from lib.paperline.executors import _same_day_guard_executor
+    ctx = _p4_ctx(tmp_path, date="2026-06-19")
+    ep = tmp_path / "papers" / "episodes"
+    ep.mkdir(parents=True)
+    (ep / "2026-06-18-yesterday.md").write_text("x", encoding="utf-8")
+    assert _same_day_guard_executor(ctx) is None
+
+
+def test_paper_log_read_writes_json_and_filters_covered(tmp_path):
+    from lib.paperline.executors import _paper_log_read_executor
+    from lib.paperline.paperlog import append_paper
+    ctx = _p4_ctx(tmp_path)
+    state = tmp_path / "papers" / "state"
+    state.mkdir(parents=True)
+    append_paper(str(state), {"arxiv_id": "2606.19341", "title": "Covered",
+                              "date": "2026-06-17", "concepts": ["c"]})
+    (ctx["scratch_dir"] / "candidates.json").write_text(json.dumps([
+        {"arxiv_id": "2606.19341", "title": "Covered"},
+        {"arxiv_id": "2606.99999", "title": "Fresh"},
+    ]), encoding="utf-8")
+    _paper_log_read_executor(ctx)
+    pl = json.loads((ctx["scratch_dir"] / "paper-log.json").read_text(encoding="utf-8"))
+    assert any(e["arxiv_id"] == "2606.19341" for e in pl)
+    cands = json.loads((ctx["scratch_dir"] / "candidates.json").read_text(encoding="utf-8"))
+    assert {c["arxiv_id"] for c in cands} == {"2606.99999"}, (
+        "covered id must be dropped, fresh id kept (DP-403=A hard dedup)"
+    )
+
+
+def test_paper_log_read_empty_log_keeps_all(tmp_path):
+    from lib.paperline.executors import _paper_log_read_executor
+    ctx = _p4_ctx(tmp_path)
+    (ctx["scratch_dir"] / "candidates.json").write_text(json.dumps([
+        {"arxiv_id": "2606.11111", "title": "A"},
+        {"arxiv_id": "2606.22222", "title": "B"},
+    ]), encoding="utf-8")
+    _paper_log_read_executor(ctx)
+    cands = json.loads((ctx["scratch_dir"] / "candidates.json").read_text(encoding="utf-8"))
+    assert len(cands) == 2
+    assert json.loads((ctx["scratch_dir"] / "paper-log.json").read_text(encoding="utf-8")) == []
+
+
+def test_paper_log_read_all_covered_halts(tmp_path):
+    from lib.paperline.executors import _paper_log_read_executor
+    from lib.paperline.paperlog import append_paper
+    ctx = _p4_ctx(tmp_path)
+    state = tmp_path / "papers" / "state"
+    state.mkdir(parents=True)
+    append_paper(str(state), {"arxiv_id": "2606.11111", "title": "A",
+                              "date": "2026-06-17", "concepts": ["c"]})
+    (ctx["scratch_dir"] / "candidates.json").write_text(json.dumps([
+        {"arxiv_id": "2606.11111", "title": "A"},
+    ]), encoding="utf-8")
+    result = _paper_log_read_executor(ctx)
+    assert isinstance(result, dict) and result.get("status") == "halted"
+    assert result.get("failed_step") == "paper-log-read"
+
+
+def test_paper_log_read_corrupt_log_raises(tmp_path):
+    from lib.paperline.executors import _paper_log_read_executor
+    ctx = _p4_ctx(tmp_path)
+    state = tmp_path / "papers" / "state"
+    state.mkdir(parents=True)
+    (state / "paper-log.yaml").write_text("a: b: c: : :", encoding="utf-8")
+    (ctx["scratch_dir"] / "candidates.json").write_text(
+        json.dumps([{"arxiv_id": "2606.99999"}]), encoding="utf-8")
+    with pytest.raises(Exception):
+        _paper_log_read_executor(ctx)
+
+
+# ---------------------------------------------------------------------------
+# P4 Task 5: publish executor (write .md + move mp3 into paper episodes dir)
+# ---------------------------------------------------------------------------
+
+def test_paper_publish_writes_md_from_finalize_body(tmp_path):
+    from lib.paperline.executors import _paper_publish_executor
+    ctx = _p4_ctx(tmp_path)
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "让7B模型看赢72B", "body": "# 标题\n\n正文内容"}, ensure_ascii=False),
+        encoding="utf-8")
+    out = _paper_publish_executor(ctx)
+    assert out is not None and out.exists(), "published .md must exist"
+    # Lands in the PAPER episodes dir (output_dir/papers/episodes), NOT opinion's
+    assert "papers" in str(out) and "episodes" in str(out)
+    assert out.read_text(encoding="utf-8") == "# 标题\n\n正文内容"
+    assert out.name.startswith("2026-06-19-")
+
+
+def test_paper_publish_moves_mp3_when_tts(tmp_path):
+    from lib.paperline.executors import _paper_publish_executor
+    ctx = _p4_ctx(tmp_path)  # no_tts defaults to False (key absent)
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "T", "body": "B"}, ensure_ascii=False), encoding="utf-8")
+    (ctx["scratch_dir"] / "audio-files.mp3").write_text("MP3BYTES", encoding="utf-8")
+    out = _paper_publish_executor(ctx)
+    mp3 = out.with_suffix(".mp3")
+    assert mp3.exists(), "mp3 must be moved next to the .md"
+    assert not (ctx["scratch_dir"] / "audio-files.mp3").exists(), "scratch mp3 moved away"
+
+
+def test_paper_publish_skips_mp3_when_no_tts(tmp_path):
+    from lib.paperline.executors import _paper_publish_executor
+    ctx = _p4_ctx(tmp_path)
+    ctx["no_tts"] = True
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "T", "body": "B"}, ensure_ascii=False), encoding="utf-8")
+    (ctx["scratch_dir"] / "audio-files.mp3").write_text("MP3", encoding="utf-8")
+    out = _paper_publish_executor(ctx)
+    assert out.exists() and not out.with_suffix(".mp3").exists(), "no_tts: .md only, no mp3 move"
+
+
+def test_paper_publish_empty_title_falls_back_to_date_papers(tmp_path):
+    from lib.paperline.executors import _paper_publish_executor
+    ctx = _p4_ctx(tmp_path)
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "", "body": "B"}, ensure_ascii=False), encoding="utf-8")
+    out = _paper_publish_executor(ctx)
+    assert out.name == "2026-06-19-papers.md", (
+        f"empty title must fall back to {{date}}-papers, got {out.name}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P4 Task 6: paper-log-write executor (record BEFORE publish — DP-601=B)
+# ---------------------------------------------------------------------------
+
+def test_paper_log_write_appends_entry(tmp_path):
+    from lib.paperline.executors import _paper_log_write_executor
+    from lib.paperline.paperlog import is_covered, load_paperlog
+    ctx = _p4_ctx(tmp_path)
+    (ctx["scratch_dir"] / "chosen-arxiv-id.json").write_text(
+        json.dumps({"arxiv_id": "2606.19341", "rationale": "r", "concepts": ["agent loop"]}),
+        encoding="utf-8")
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "T", "body": "B"}, ensure_ascii=False), encoding="utf-8")
+    out = _paper_log_write_executor(ctx)
+    # Returns the paper-log.yaml path (gated by check_artifact)
+    assert out is not None and "paper-log.yaml" in str(out)
+    log = load_paperlog(str(tmp_path / "papers" / "state"))
+    assert is_covered(log, "2606.19341"), "the chosen paper must be recorded"
+    entry = next(e for e in log if e["arxiv_id"] == "2606.19341")
+    assert entry["title"] == "T" and entry["date"] == "2026-06-19"
+    assert entry["concepts"] == ["agent loop"]
+
+
+def test_paper_log_write_missing_chosen_halts(tmp_path):
+    from lib.paperline.executors import _paper_log_write_executor
+    ctx = _p4_ctx(tmp_path)  # no chosen-arxiv-id.json staged
+    result = _paper_log_write_executor(ctx)
+    assert isinstance(result, dict) and result.get("status") == "halted"
+    assert result.get("failed_step") == "paper-log-write"
+
+
+def test_paper_log_write_invalid_arxiv_id_propagates(tmp_path):
+    """append_paper fail-closes on a bad arxiv_id → the executor propagates
+    (no silent skip — the dedup命脉 must not admit dirty data)."""
+    from lib.paperline.executors import _paper_log_write_executor
+    ctx = _p4_ctx(tmp_path)
+    (ctx["scratch_dir"] / "chosen-arxiv-id.json").write_text(
+        json.dumps({"arxiv_id": "not-an-arxiv-id"}), encoding="utf-8")
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "T", "body": "B"}), encoding="utf-8")
+    with pytest.raises(Exception):
+        _paper_log_write_executor(ctx)
+
+
+def test_paper_log_write_then_curator_dedup_roundtrip(tmp_path):
+    """End-to-end dedup: write a paper, then paper-log-read drops it from a
+    fresh candidates list (the next-run dedup the curator sees)."""
+    from lib.paperline.executors import _paper_log_write_executor, _paper_log_read_executor
+    ctx = _p4_ctx(tmp_path)
+    (ctx["scratch_dir"] / "chosen-arxiv-id.json").write_text(
+        json.dumps({"arxiv_id": "2606.19341", "concepts": []}), encoding="utf-8")
+    (ctx["scratch_dir"] / "finalize-result.json").write_text(
+        json.dumps({"title": "T", "body": "B"}), encoding="utf-8")
+    _paper_log_write_executor(ctx)
+    # next run: candidates include the covered id + a fresh one
+    (ctx["scratch_dir"] / "candidates.json").write_text(json.dumps([
+        {"arxiv_id": "2606.19341"}, {"arxiv_id": "2606.88888"},
+    ]), encoding="utf-8")
+    _paper_log_read_executor(ctx)
+    cands = json.loads((ctx["scratch_dir"] / "candidates.json").read_text(encoding="utf-8"))
+    assert {c["arxiv_id"] for c in cands} == {"2606.88888"}, "covered paper must be deduped out"

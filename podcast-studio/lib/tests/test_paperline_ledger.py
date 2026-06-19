@@ -233,3 +233,115 @@ def test_verify_anchors_flags_multiple():
     assert len(flagged) == 2
     sections = {e.get("section") for e in flagged}
     assert sections == {"problem", "limitations"}
+
+
+# ---------- verify_anchors: PASSES faithful paraphrase (DP-001) ----------
+
+def test_verify_anchors_passes_faithful_paraphrase():
+    """A faithful paraphrase that preserves all key numbers and proper nouns
+    but rearranges word order (e.g. putting the context phrase up front
+    instead of as a trailing relative clause) MUST pass. This is the
+    central contract shift in DP-001: from "verbatim substring" to
+    "numbers + proper nouns grounded, prose free".
+
+    Uses the REAL pdftotext fixture (not a hand-written sample) because
+    pdftotext rearranges whitespace in ways a hand-written sample can't
+    mimic. The anchor mirrors what the live ledger-writer actually wrote
+    when paraphrasing the source sentence into a tighter claim.
+
+    Real source (line 156-159 of the pdftotext output):
+        "Notably, our 7B agent outperforms the 10× larger Qwen2.5-VL-72B
+         on LVBench (50.5% vs. 47.3%) with 73% fewer frames, ..."
+
+    Faithful paraphrase anchor (live writer output):
+        "On LVBench, our 7B agent outperforms the 10× larger
+         Qwen2.5-VL-72B (50.5% vs. 47.3%)"
+
+    All numbers (7B, 10×, 50.5%, 47.3%, 72B) and proper nouns (LVBench,
+    Qwen2.5-VL-72B) appear in the fulltext. This MUST pass under DP-001
+    (the new grounded-by-tokens gate). It will FAIL under the old verbatim
+    substring gate (rearranges word order — no exact substring).
+    """
+    from lib.paperline.ledger import verify_anchors
+
+    fixture_path = (
+        PLUGIN_ROOT / ".claude" / "p2-samples" / "arxiv-2606.19341-pdftotext.txt"
+    )
+    fulltext = fixture_path.read_text(encoding="utf-8")
+
+    ledger = {
+        "problem": [
+            {"text": "x", "anchor": "passive end-to-end processing"},
+        ],
+        "method": [
+            {"text": "y", "anchor": "first native omni-modal agent"},
+        ],
+        "key_results": [
+            {
+                "text": "On LVBench, 7B OmniAgent beats 10x larger 72B with fewer frames.",
+                "anchor": (
+                    "On LVBench, our 7B agent outperforms the 10× "
+                    "larger Qwen2.5-VL-72B (50.5% vs. 47.3%)"
+                ),
+            },
+        ],
+        "limitations": [
+            {"text": "w", "anchor": "computational cost scales super-linearly"},
+        ],
+    }
+
+    result = verify_anchors(ledger, fulltext)
+    assert result["ok"] is True, (
+        f"expected ok=True (faithful paraphrase), got flagged={result.get('flagged')!r}"
+    )
+    assert result["flagged"] == []
+
+
+# ---------- verify_anchors: FLAGS fabricated numbers (DP-001) ----------
+
+def test_verify_anchors_flags_fabricated_number():
+    """A paraphrase that changes a real number to a fake one MUST be
+    flagged. The "numbers zero-tolerance" half of DP-001: any anchor
+    whose number-bearing tokens are not all in the fulltext fails the
+    gate. This is what catches an agent that "remembers" a different
+    metric than the paper actually reports.
+    """
+    from lib.paperline.ledger import verify_anchors
+
+    # Short, hand-written fulltext — only used to anchor the fabrication
+    # check (we test the change of one number, not the paraphrase shape).
+    fulltext = (
+        "On LVBench, our 7B agent outperforms the 10× larger "
+        "Qwen2.5-VL-72B (50.5% vs. 47.3%) with 73% fewer frames."
+    )
+
+    ledger = {
+        "problem": [
+            {"text": "p", "anchor": "On LVBench, our 7B agent"},
+        ],
+        "method": [
+            {"text": "m", "anchor": "outperforms the 10× larger"},
+        ],
+        "key_results": [
+            {
+                "text": "Fabricated result: changed 50.5% to 60.5%.",
+                # 60.5% is NOT in fulltext (real number is 50.5%).
+                "anchor": (
+                    "On LVBench, our 7B agent outperforms the 10× "
+                    "larger Qwen2.5-VL-72B (60.5% vs. 47.3%)"
+                ),
+            },
+        ],
+        "limitations": [
+            {"text": "l", "anchor": "with 73% fewer frames"},
+        ],
+    }
+
+    result = verify_anchors(ledger, fulltext)
+    assert result["ok"] is False
+    flagged = result["flagged"]
+    assert len(flagged) == 1
+    assert flagged[0]["section"] == "key_results"
+    # The bad anchor (with the fabricated number) is what should be
+    # recorded — that's the locator a human can chase down.
+    assert "60.5%" in (flagged[0].get("anchor") or "")

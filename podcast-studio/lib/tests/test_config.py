@@ -727,6 +727,121 @@ def test_papers_section_present_type_validated(tmp_path, monkeypatch):
     assert "max_candidates" in str(exc.value)
 
 
+# ---------- Phase 4 (paper line): papers output subdirs derived when papers.* present ----------
+
+def test_papers_output_subdirs_derived_when_papers_section_present(tmp_path, monkeypatch):
+    """P4: when `papers.*` is present, the config resolver derives three papers
+    output subdirs (`output_dir/papers/{episodes,state,reports}`) and creates
+    them on disk AFTER the output_dir fail-closed check. Gated on `papers.*`
+    presence — opinion-only configs stay zero-change (no papers/ directory)."""
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+        papers:
+          categories:
+            - cs.CL
+            - cs.LG
+          max_candidates: 30
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+
+    # Accessors expose papers output subdirs on the VaultConfig (or a sibling
+    # accessor surface). The exact attribute name is part of the contract —
+    # gating: when papers is configured, three subdirs exist and are mkdir'd.
+    out = Path(dirs['output_dir'])
+    papers_root = out / "papers"
+
+    # The papers subdirs MUST resolve to output_dir/papers/{episodes,state,reports}.
+    # Try a few conventional names — the implementation picks one and the test
+    # asserts whichever shape is exposed (cfg.vault attribute OR a cfg.papers
+    # sibling accessor).
+    candidates = (
+        # VaultConfig attributes (preferred per plan "与现有 episodes_dir 等同款")
+        ("vault", "papers_episodes_dir"),
+        ("vault", "papers_state_dir"),
+        ("vault", "papers_reports_dir"),
+    )
+    # If the implementation puts them on cfg.papers instead, allow that too.
+    alt_candidates = (
+        ("papers", "episodes_dir"),
+        ("papers", "state_dir"),
+        ("papers", "reports_dir"),
+    )
+
+    def _resolve(attr_owner: str, attr_name: str):
+        owner = getattr(cfg, attr_owner, None)
+        if owner is None:
+            return None
+        return getattr(owner, attr_name, None)
+
+    resolved = {}
+    for owner, name in candidates + alt_candidates:
+        v = _resolve(owner, name)
+        if v is not None:
+            resolved[(owner, name)] = v
+
+    # We expect at least one coherent shape: 3 paths under output_dir/papers/.
+    papers_subdir_paths = [v for v in resolved.values() if isinstance(v, str)]
+    assert len(papers_subdir_paths) >= 3, (
+        f"expected at least 3 papers output subdir accessors, found {resolved!r}"
+    )
+    for v in papers_subdir_paths:
+        assert v.startswith(str(papers_root)), (
+            f"papers subdir must resolve under {papers_root}, got {v!r}"
+        )
+        assert Path(v).exists() and Path(v).is_dir(), (
+            f"papers subdir not auto-created: {v}"
+        )
+
+    # The three required subdirs MUST be created.
+    assert (papers_root / "episodes").exists()
+    assert (papers_root / "state").exists()
+    assert (papers_root / "reports").exists()
+
+
+def test_opinion_only_config_has_no_papers_subdir(tmp_path, monkeypatch):
+    """P4 regression shield: an opinion-only config (no `papers.*`) MUST NOT
+    create a `papers/` subdir under output_dir. Zero-change for opinion
+    configs is the load-bearing contract."""
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: volc
+          host_voice: BV001_streaming
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+
+    cfg = load_config()
+
+    # The opinion-only config still resolves.
+    assert cfg.tts.provider == "volc"
+    assert cfg.vault.output_dir.endswith("output")
+
+    # No `papers/` subdir created under output_dir.
+    out = Path(dirs['output_dir'])
+    papers_root = out / "papers"
+    assert not papers_root.exists(), (
+        f"opinion-only config must NOT create {papers_root} (no papers.* key)"
+    )
+
+    # cfg.papers stays None / falsy (no `papers.*` configured).
+    assert not cfg.papers
+
+
 def test_require_papers_raises_when_absent(tmp_path, monkeypatch):
     """require_papers(cfg) on a papers-less config raises ConfigError naming
     papers.categories — the paper-line fail-closed use site, not a resolve-time

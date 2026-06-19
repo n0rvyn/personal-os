@@ -2234,8 +2234,8 @@ def _cli() -> int:
     parser.add_argument(
         "--show",
         required=True,
-        choices=("morning", "evening"),
-        help="Editorial branch: morning or evening.",
+        choices=("morning", "evening", "papers"),
+        help="Show: morning / evening (opinion line) or papers (论文科普 line).",
     )
     parser.add_argument(
         "--date",

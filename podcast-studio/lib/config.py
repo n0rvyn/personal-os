@@ -53,6 +53,13 @@ class VaultConfig:
     # as a VOICE reference, not a CONTENT/topic source). When unset, the bible
     # falls back to subjective_dir. Existence-checked (fail-closed) when present.
     voice_corpus_dir: str | None = None
+    # Phase 4 (paper line): derived subdirs of `output_dir/papers/`. Created
+    # ONLY when the `papers.*` section is present (DP-402=A). Same shape as
+    # the opinion episodes_dir/state_dir/reports_dir trio. `None` when the
+    # papers section is absent — opinion-only configs stay zero-change.
+    papers_episodes_dir: str | None = None
+    papers_state_dir: str | None = None
+    papers_reports_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,7 +230,9 @@ def _minimal_nested_yaml(text: str) -> dict[str, Any]:
     return out
 
 
-def _validate_vault_paths(vault_raw: dict[str, str]) -> VaultConfig:
+def _validate_vault_paths(
+    vault_raw: dict[str, str], has_papers: bool = False
+) -> VaultConfig:
     for key in REQUIRED_VAULT_KEYS:
         if key not in vault_raw:
             raise ConfigError(f"missing required key: vault.{key}")
@@ -253,6 +262,23 @@ def _validate_vault_paths(vault_raw: dict[str, str]) -> VaultConfig:
         d.mkdir(parents=True, exist_ok=True)
         resolved[f"{sub}_dir"] = str(d)
 
+    # Phase 4 (paper line): when `papers.*` is configured, derive and create
+    # the papers output subdirs (DP-402=A). Gated on has_papers — opinion-only
+    # configs (no papers.*) stay zero-change (no `papers/` subdir created).
+    # Same mkdir-after-existence discipline: output_dir is already validated
+    # above, so this can safely mkdir under it.
+    papers_resolved: dict[str, str | None] = {
+        "papers_episodes_dir": None,
+        "papers_state_dir": None,
+        "papers_reports_dir": None,
+    }
+    if has_papers:
+        papers_root = out_path / "papers"
+        for sub in ("episodes", "state", "reports"):
+            d = papers_root / sub
+            d.mkdir(parents=True, exist_ok=True)
+            papers_resolved[f"papers_{sub}_dir"] = str(d)
+
     # Optional vault.root — type-validated when present, but NOT existence-checked:
     # recall degrades gracefully (empty) on a missing root, so this stays lenient.
     root_raw = vault_raw.get("root")
@@ -281,7 +307,12 @@ def _validate_vault_paths(vault_raw: dict[str, str]) -> VaultConfig:
             raise ConfigError(f"vault.voice_corpus_dir is not a directory: {vpath}")
         voice_resolved = str(vpath)
 
-    return VaultConfig(root=root_resolved, voice_corpus_dir=voice_resolved, **resolved)
+    return VaultConfig(
+        root=root_resolved,
+        voice_corpus_dir=voice_resolved,
+        **papers_resolved,
+        **resolved,
+    )
 
 
 def _validate_tts(tts_raw: dict[str, Any]) -> TtsConfig:
@@ -362,7 +393,6 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     if "tts" not in raw or not isinstance(raw["tts"], dict):
         raise ConfigError("missing required section: tts")
 
-    vault = _validate_vault_paths(raw["vault"])
     tts = _validate_tts(raw["tts"])
 
     # exchange_dir: fail-soft. A non-empty str is expanded + resolved to
@@ -376,10 +406,15 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     # Phase 2 (paper line): optional `papers.*` section. When absent the
     # field stays `None` so opinion configs resolve zero-change. The paper
     # line's use site calls `require_papers(cfg)` for its fail-closed check.
+    # `has_papers` feeds the Phase 4 paper output subdir derivation
+    # (gated on `papers.*` presence — opinion-only configs stay zero-change).
     papers_raw = raw.get("papers")
+    has_papers = papers_raw is not None
     papers: PapersConfig | None = None
-    if papers_raw is not None:
+    if has_papers:
         papers = _validate_papers(papers_raw)
+
+    vault = _validate_vault_paths(raw["vault"], has_papers=has_papers)
 
     return PodcastTeamConfig(
         vault=vault, tts=tts, exchange_dir=exchange_dir, papers=papers

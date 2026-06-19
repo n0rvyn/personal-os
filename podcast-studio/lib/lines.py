@@ -55,6 +55,12 @@ class LineBundle:
       OPINION_LINE carries the opinion `AGENT_WHITELIST`, PAPER_LINE carries
       `PAPER_AGENT_WHITELIST` from `lib.pipeline_papers` (single-sourced).
     - `floor_fn(show)` → the per-show min-chars length floor.
+    - `output_root_fn(ctx)` → the per-line output root resolver (P4 §output
+      isolation). Opinion returns `ctx['output_dir']` (byte-identical to
+      pre-P4). Paper returns `ctx['output_dir']/papers` (DP-402=A — physical
+      isolation, D-015 firewall). Used by same-day-guard, publish,
+      paper-log-write, etc. — any executor that needs to know WHERE the line
+      writes its outputs.
     """
 
     line_id: str
@@ -65,6 +71,7 @@ class LineBundle:
     agent_dir: str
     whitelist: "frozenset[str]"
     floor_fn: Callable[[str], int]
+    output_root_fn: Callable[[dict], str]
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +114,17 @@ def _opinion_floor(show: str) -> int:
     return floor_chars_for_show(show)
 
 
+def _opinion_output_root(ctx: dict) -> str:
+    """Opinion-line output root (P4 §output isolation).
+
+    Returns `ctx['output_dir']` byte-identically — opinion's outputs have
+    always lived at `output_dir/{episodes,state,reports}` (pre-P4), and P4
+    preserves that path zero-change. The runner + opinion-line executors
+    call this whenever they need to resolve the line's output root.
+    """
+    return ctx["output_dir"]
+
+
 OPINION_LINE = LineBundle(
     line_id="opinion",
     topology=_opinion_topology,
@@ -116,6 +134,7 @@ OPINION_LINE = LineBundle(
     agent_dir="agents",
     whitelist=AGENT_WHITELIST,
     floor_fn=_opinion_floor,
+    output_root_fn=_opinion_output_root,
 )
 
 
@@ -191,6 +210,22 @@ def _paper_floor(show: str) -> int:
     return 4500
 
 
+def _paper_output_root(ctx: dict) -> str:
+    """Paper-line output root (P4 §output isolation, DP-402=A).
+
+    Returns `ctx['output_dir']/papers` — physical isolation from opinion
+    (D-015 firewall). The runner + paper-line executors call this to
+    resolve the line's output root (same-day-guard reads
+    `<output_root>/episodes/`, publish writes `<output_root>/episodes/`,
+    paper-log-write writes `<output_root>/state/paper-log.yaml`, etc.).
+
+    The `papers` subdir is created on disk by `_validate_vault_paths`
+    when `papers.*` is configured — this resolver just appends the
+    subpath; it does NOT create the directory.
+    """
+    return f"{ctx['output_dir']}/papers"
+
+
 PAPER_LINE = LineBundle(
     line_id="paper",
     topology=_paper_topology,
@@ -200,6 +235,7 @@ PAPER_LINE = LineBundle(
     agent_dir="agents/papers",
     whitelist=PAPER_AGENT_WHITELIST,
     floor_fn=_paper_floor,
+    output_root_fn=_paper_output_root,
 )
 
 

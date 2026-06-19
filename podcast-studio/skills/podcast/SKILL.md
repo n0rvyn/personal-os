@@ -30,7 +30,7 @@ fan-out (drafts/critiques/polishes at 7/8/9) and gate-retry loops (12↔12a,
 this skill is a thin wrapper that calls:
 
 ```bash
-python -m lib.runner --show <morning|evening> [--date YYYY-MM-DD] [--no-tts]
+python -m lib.runner --show <morning|evening|papers> [--date YYYY-MM-DD] [--no-tts]
 ```
 
 The runner is responsible for step ordering, gate enforcement, halt-on-miss,
@@ -50,6 +50,20 @@ and injected into each persona dispatch by the runner's step-2 loader.
   the morning's open questions forward — Phase 3 read hook surfaces the
   morning's open_questions in the evening writing brief, and the finalize
   hook writes both episodes' stance cards).
+- `/podcast papers` — produces the daily AI 论文科普 (论文线, a SEPARATE line
+  from morning/evening). Autonomously picks one recent arXiv paper, fetches the
+  FULL text, writes a faithful 4-段 explainer (问题→方法→结果→意义+局限) in the
+  讲解者 voice (NO host opinion — 主播观点退场), and passes a 忠实门 (溯源 +
+  不夸大 + 保留局限) before publishing. Outputs land in the paper line's OWN dir
+  (`output_dir/papers/episodes/`), physically isolated from morning/evening so
+  the two lines never overwrite each other. Continuity is `paper-log`
+  (`output_dir/papers/state/paper-log.yaml`): a covered paper (arXiv id) is never
+  re-selected, and a same-day re-run fail-fasts (one episode per line per day).
+  - **Third slot / cadence**: cadence is via Claude Code `/loop` (no cron). A
+    suggested default is **midday**, between the morning and evening slots
+    (e.g. a `/loop` schedule that fires `/podcast papers` once per day around
+    noon) — adjust to your own rhythm. The paper line is independent: running
+    it does not touch morning/evening state or output.
 
 ## Pipeline (the deterministic spine)
 

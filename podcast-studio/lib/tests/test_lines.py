@@ -215,3 +215,60 @@ def test_bundle_has_whitelist_field():
         "opinion and paper whitelists must be distinct objects "
         "(no shared mutable state)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — LineBundle.output_root_fn: line-specific output root resolver.
+#
+# The runner (and paper-line executors) need to know WHERE this line's
+# output goes — opinion stays at output_dir (byte-identical to pre-P4);
+# paper goes to output_dir/papers (physical isolation, D-015 firewall).
+# The contract mirrors floor_fn: a (ctx) -> str callable on the bundle.
+# ---------------------------------------------------------------------------
+
+def test_opinion_line_output_root_is_output_dir():
+    """Byte-identical pin (P4 §output isolation): the opinion bundle's
+    output-root resolver, given any ctx with `output_dir`, returns that
+    SAME output_dir — zero behavioral change for morning/evening."""
+    bundle = get_line("morning")
+    assert callable(getattr(bundle, "output_root_fn", None)), (
+        "LineBundle must expose `output_root_fn` callable (mirrors floor_fn shape)"
+    )
+
+    ctx = {"output_dir": "/tmp/some/output"}
+    assert bundle.output_root_fn(ctx) == "/tmp/some/output", (
+        f"opinion output_root_fn must return ctx['output_dir'] byte-identically, "
+        f"got {bundle.output_root_fn(ctx)!r}"
+    )
+
+    # Evening resolves to the SAME opinion bundle → byte-identical.
+    assert get_line("evening").output_root_fn(ctx) == "/tmp/some/output"
+
+
+def test_paper_line_output_root_is_papers_subdir():
+    """P4 §DP-402=A: the paper bundle's output-root resolver returns
+    `output_dir/papers` — physical isolation from opinion (which lives at
+    `output_dir`). Used by same-day-guard, publish, paper-log-write, etc."""
+    bundle = get_line("papers")
+    assert callable(getattr(bundle, "output_root_fn", None)), (
+        "paper LineBundle must expose `output_root_fn` callable"
+    )
+
+    ctx = {"output_dir": "/tmp/some/output"}
+    assert bundle.output_root_fn(ctx) == "/tmp/some/output/papers", (
+        f"paper output_root_fn must return ctx['output_dir']/papers, "
+        f"got {bundle.output_root_fn(ctx)!r}"
+    )
+
+    # Opinion and paper output roots MUST diverge for the same ctx
+    # (the firewall half — no chance of cross-line writes).
+    opinion_root = get_line("morning").output_root_fn(ctx)
+    paper_root = bundle.output_root_fn(ctx)
+    assert opinion_root != paper_root, (
+        "opinion and paper output roots must differ for the same ctx "
+        "(firewall — no shared root)"
+    )
+    assert paper_root.startswith(opinion_root + "/"), (
+        f"paper root must be under opinion root with a subpath, "
+        f"got opinion={opinion_root!r} paper={paper_root!r}"
+    )

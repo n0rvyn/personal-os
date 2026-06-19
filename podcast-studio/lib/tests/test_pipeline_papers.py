@@ -43,10 +43,12 @@ PAPER_AGENT_WHITELIST = {"curator", "ledger-writer"}
 # fetch (full text) -> ledger (persona writes the fact-ledger) ->
 # ledger-verify (code: validate_ledger + verify_anchors gate).
 EXPECTED_STATION_ORDER = [
-    # collection half (P2)
+    # collection half (P2) + P4 front-段 continuity stations
     "config",
     "scratch",
+    "same-day-guard",   # P4 (DP-404=A): one-episode-per-day fail-fast
     "discovery",
+    "paper-log-read",   # P4 (DP-403=A): stage paper-log + arXiv-id dedup pre-filter
     "curator",
     "fetch",
     "ledger-write",
@@ -57,6 +59,13 @@ EXPECTED_STATION_ORDER = [
     "digest-select",
     "finalize",
     "faithfulness",
+    # publish half (P4) — DP-601=B order: broadcast-script → tts →
+    # paper-log-write (record dedup BEFORE airing) → publish → cleanup
+    "broadcast-script",
+    "tts",
+    "paper-log-write",
+    "publish",
+    "cleanup",
 ]
 
 
@@ -126,14 +135,17 @@ def test_topology_has_expected_kind_distribution():
     assert set(agent_names) == {
         "curator", "ledger-write",                       # collection
         "committee", "digest-score", "finalize", "faithfulness",  # generation
+        "broadcast-script", "tts",                       # P4 publish (broadcaster / jay)
     }, (
-        f"agent stations must be the 2 collection + 4 generation personas, got {agent_names}"
+        f"agent stations must be the 2 collection + 4 generation + 2 publish personas, got {agent_names}"
     )
     assert set(code_names) == {
         "config", "scratch", "discovery", "fetch", "ledger-verify",  # collection
+        "same-day-guard", "paper-log-read",                          # P4 front-段
         "digest-select",                                              # generation
+        "paper-log-write", "publish", "cleanup",                     # P4 publish
     }, (
-        f"code stations must be the 5 collection + digest-select, got {code_names}"
+        f"code stations must be the collection + P4 + digest-select set, got {code_names}"
     )
 
 
@@ -362,3 +374,112 @@ def test_finalize_gate_carries_body_length_floor_with_retry():
         f"finalize retry must be 3 (re-derive a too-short body up to 3× then "
         f"halt), got {finalize.get('retry')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# P4 Task 3: front-段 continuity stations (same-day-guard + paper-log-read)
+# ---------------------------------------------------------------------------
+
+def test_same_day_guard_between_scratch_and_discovery():
+    """same-day-guard (DP-404=A) is a code station between scratch and discovery
+    — fail-fast on a same-day re-run before any discovery/dispatch work."""
+    from lib.pipeline_papers import _build_paper_steps
+    names = [s["name"] for s in _build_paper_steps()]
+    assert "same-day-guard" in names, "same-day-guard station must exist (DP-404=A)"
+    assert names.index("scratch") < names.index("same-day-guard") < names.index("discovery"), (
+        f"same-day-guard must sit between scratch and discovery, got {names}"
+    )
+    g = _paper_step("same-day-guard")
+    assert g["kind"] == "code" and g["agent"] is None
+
+
+def test_paper_log_read_between_discovery_and_curator():
+    """paper-log-read (DP-403=A) is a code station between discovery and curator:
+    it needs candidates.json (from discovery) and feeds the curator."""
+    from lib.pipeline_papers import _build_paper_steps
+    names = [s["name"] for s in _build_paper_steps()]
+    assert "paper-log-read" in names, "paper-log-read station must exist (DP-403=A)"
+    assert names.index("discovery") < names.index("paper-log-read") < names.index("curator"), (
+        f"paper-log-read must sit between discovery and curator, got {names}"
+    )
+    r = _paper_step("paper-log-read")
+    assert r["kind"] == "code" and r["artifact"] == "paper-log.json", (
+        f"paper-log-read must produce paper-log.json, got {r.get('artifact')!r}"
+    )
+
+
+def test_curator_input_is_real_paperlog_file_not_stub():
+    """DP-403=A: the curator reads the REAL paper-log.json (staged by
+    paper-log-read), NOT the literal-string "paper-log" stub — the shared
+    runner's `_CONCEPTUAL` set does not special-case "paper-log", so the old
+    input was injected as raw text with no file behind it."""
+    c = _paper_step("curator")
+    assert "paper-log.json" in c["inputs"], (
+        f"curator must read the real paper-log.json, got {c['inputs']}"
+    )
+    assert "paper-log" not in c["inputs"], (
+        f"curator must NOT carry the literal-string 'paper-log' stub, got {c['inputs']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P4 Task 4: 口播稿 (broadcaster) + TTS (jay) publish-half stations
+# ---------------------------------------------------------------------------
+
+def test_broadcast_script_station_is_broadcaster_after_faithfulness():
+    """broadcast-script is an agent station (agent=broadcaster, the paper-line
+    口播改写 persona) downstream of faithfulness."""
+    from lib.pipeline_papers import _build_paper_steps
+    names = [s["name"] for s in _build_paper_steps()]
+    assert "broadcast-script" in names
+    assert names.index("faithfulness") < names.index("broadcast-script")
+    s = _paper_step("broadcast-script")
+    assert s["kind"] == "agent" and s["agent"] == "broadcaster", (
+        f"broadcast-script must dispatch the broadcaster persona, got {s.get('agent')!r}"
+    )
+    assert s["artifact"] == "broadcast-script-{date}.txt"
+
+
+def test_tts_station_is_jay_with_no_tts_skip():
+    """tts is agent=jay, artifact audio-files.mp3, skip_when='no_tts'
+    (mirrors opinion); runs after broadcast-script."""
+    from lib.pipeline_papers import _build_paper_steps
+    names = [s["name"] for s in _build_paper_steps()]
+    assert names.index("broadcast-script") < names.index("tts")
+    s = _paper_step("tts")
+    assert s["kind"] == "agent" and s["agent"] == "jay"
+    assert s["artifact"] == "audio-files.mp3"
+    assert s["skip_when"] == "no_tts", (
+        f"tts must carry skip_when='no_tts' (no-TTS mode), got {s.get('skip_when')!r}"
+    )
+
+
+def test_publish_half_agents_in_whitelist_load_time():
+    """LOAD-time guard (verifier must-revise#2): broadcaster AND jay must be in
+    PAPER_AGENT_WHITELIST, or load_papers_pipeline raises at validate_pipeline."""
+    from lib.pipeline_papers import PAPER_AGENT_WHITELIST, load_papers_pipeline
+    assert "broadcaster" in PAPER_AGENT_WHITELIST
+    assert "jay" in PAPER_AGENT_WHITELIST  # jay is opinion-only by default; paper line needs its own entry
+    # Must not raise (every agent step's agent is whitelisted):
+    load_papers_pipeline("papers")
+
+
+# ---------------------------------------------------------------------------
+# P4 Task 6: paper-log-write (DP-601=B — BEFORE publish) + cleanup
+# ---------------------------------------------------------------------------
+
+def test_paper_log_write_before_publish_dp601():
+    """DP-601=B: paper-log-write records dedup BEFORE publish airs anything.
+    Order must be …tts → paper-log-write → publish → cleanup."""
+    from lib.pipeline_papers import _build_paper_steps
+    names = [s["name"] for s in _build_paper_steps()]
+    for s in ("paper-log-write", "publish", "cleanup"):
+        assert s in names, f"{s} station must exist"
+    assert names.index("tts") < names.index("paper-log-write") < names.index("publish") < names.index("cleanup"), (
+        f"DP-601=B tail order violated, got {names}"
+    )
+    w = _paper_step("paper-log-write")
+    assert w["kind"] == "code"
+    # Blocking gate (NOT fail-soft — dedup命脉, D-013)
+    assert w.get("fail_soft") in (None, False)
+    assert w.get("gate"), "paper-log-write must carry a blocking gate (check_artifact)"

@@ -375,6 +375,280 @@ def check_faithfulness(path: Any, ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# P4: front-段 continuity stations — same-day guard + paper-log-read.
+# Both resolve the PAPER line's own output subdirs (`output_dir/papers/...`) —
+# NEVER `ctx["episodes_dir"]`/`ctx["state_dir"]`, which the runner sets to the
+# OPINION line's `output_dir/{episodes,state}` (the shared engine ctx is
+# opinion-shaped; runner.py:2123). Using opinion's subdir would collide the
+# two lines' outputs — the exact D-015 firewall violation P4 must avoid.
+# ---------------------------------------------------------------------------
+def _paper_subdir(ctx: dict[str, Any], kind: str) -> "Path | None":
+    """Resolve the paper line's `<output_dir>/papers/<kind>` dir.
+
+    Prefers the config's derived `papers_<kind>_dir` (lib.config Task 1,
+    created when the `papers.*` section is present); falls back to
+    `<output_dir>/papers/<kind>` from ctx/cfg. Returns None when no output
+    root is resolvable (a partial test ctx) — callers degrade gracefully.
+    `kind` ∈ {"episodes", "state", "reports"}.
+    """
+    cfg = ctx.get("config") or ctx.get("cfg")
+    vault = getattr(cfg, "vault", None) if cfg is not None else None
+    if vault is None and isinstance(cfg, dict):
+        vault = cfg.get("vault")
+    if vault is not None:
+        d = getattr(vault, f"papers_{kind}_dir", None)
+        if d is None and isinstance(vault, dict):
+            d = vault.get(f"papers_{kind}_dir")
+        if d:
+            return Path(str(d))
+    output_dir = ctx.get("output_dir")
+    if not output_dir and vault is not None:
+        output_dir = getattr(vault, "output_dir", None)
+        if output_dir is None and isinstance(vault, dict):
+            output_dir = vault.get("output_dir")
+    if output_dir:
+        return Path(str(output_dir)) / "papers" / kind
+    return None
+
+
+def _same_day_guard_executor(ctx: dict[str, Any]) -> Any:
+    """`same-day-guard` code station (DP-404=A): one episode per line per day.
+
+    Fail-CLOSED: if the paper line already published an episode TODAY
+    (a `{date}-*.md` exists in the paper episodes dir), HALT — re-running
+    must not ship-then-orphan a second episode (mirrors the opinion line's
+    `stance-card-exists` discipline). Keyed on EPISODE PRESENCE, not paper-log
+    presence: a prior run that logged-then-failed-to-publish leaves no episode,
+    so this guard correctly passes and the run proceeds (the logged paper is
+    skipped by the curator's arXiv-id dedup instead — DP-601=B coherence).
+
+    Returns a halt dict on a hit; None otherwise.
+    """
+    episodes = _paper_subdir(ctx, "episodes")
+    date = ctx.get("date")
+    if episodes is None or not date:
+        return None  # no output root / date resolvable (partial test ctx) → cannot guard
+    if episodes.is_dir():
+        hits = sorted(episodes.glob(f"{date}-*.md"))
+        if hits:
+            return {
+                "status": "halted",
+                "failed_step": "same-day-guard",
+                "reason": (
+                    f"paper line already published an episode for {date} "
+                    f"({hits[0].name}); one episode per line per day (DP-404=A). "
+                    "Re-running would ship-then-orphan a duplicate."
+                ),
+            }
+    return None
+
+
+def _paper_log_read_executor(ctx: dict[str, Any]) -> Any:
+    """`paper-log-read` code station: stage paper-log for the curator + apply
+    the arXiv-id hard dedup pre-filter (DP-403=A).
+
+    Reads `<output_dir>/papers/state/paper-log.yaml` (fail-CLOSED: corrupt →
+    `load_paperlog` raises → surfaces as a halt; a silent-empty log would let
+    the curator re-select a covered paper). Writes the entries to
+    `<scratch>/paper-log.json` — the curator's REAL input, replacing the former
+    literal-string stub (`_CONCEPTUAL` in the shared runner does NOT special-case
+    "paper-log", so the curator step's input is now this real scratch file).
+    Then drops every candidate whose `arxiv_id` is already covered from
+    `candidates.json` IN PLACE, so the curator only sees selectable papers;
+    concept-level near-dedup stays the curator persona's judgment (paper-log.json).
+
+    Returns the `paper-log.json` Path; a halt dict when every candidate is
+    already covered (nothing fresh to digest today).
+    """
+    from lib.paperline.paperlog import is_covered, load_paperlog  # lazy: sibling
+
+    scratch: Path = ctx["scratch_dir"]
+    state = _paper_subdir(ctx, "state")
+    # missing → [] ; corrupt → raises (fail-closed, propagates as a named halt)
+    paperlog = load_paperlog(str(state)) if state is not None else []
+
+    (scratch / "paper-log.json").write_text(
+        json.dumps(paperlog, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    candidates_path = scratch / "candidates.json"
+    if candidates_path.exists():
+        try:
+            candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            return {
+                "status": "halted",
+                "failed_step": "paper-log-read",
+                "reason": f"candidates.json unparseable: {e}",
+            }
+        if isinstance(candidates, list):
+            fresh = [
+                c for c in candidates
+                if not (isinstance(c, dict) and is_covered(paperlog, c.get("arxiv_id", "")))
+            ]
+            if not fresh:
+                return {
+                    "status": "halted",
+                    "failed_step": "paper-log-read",
+                    "reason": (
+                        f"every arXiv candidate is already in paper-log "
+                        f"({len(candidates)} candidates, all covered) — nothing "
+                        "fresh to digest today (DP-403=A dedup)."
+                    ),
+                }
+            candidates_path.write_text(
+                json.dumps(fresh, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+    return scratch / "paper-log.json"
+
+
+def _paper_publish_executor(ctx: dict[str, Any]) -> Any:
+    """`publish` code station (P4): write the listener `.md` + move the mp3 into
+    the PAPER line's own episodes dir.
+
+    Mirrors `lib.runner._publish_step` but resolves the PAPER episodes dir
+    (`output_dir/papers/episodes`, via `_paper_subdir` — NEVER `ctx["episodes_dir"]`,
+    which is opinion's) and reuses `lib.episode`'s line-neutral pure helpers
+    (`episode_paths` / `sanitize_title` via the title slug). The reader `.md` is
+    the finalize `body` (D-009: the published body is the deliverable). The mp3 is
+    moved from scratch unless `no_tts`. Title is read directly from
+    `finalize-result.json` (NOT via `lib.runner._read_finalize_title` — the paper
+    line must not import the shared runner; D-015 firewall). Empty/garbled title →
+    `episode_paths` falls back to `{date}-papers`.
+
+    Returns the published `.md` Path (best-effort: a partial test ctx with no
+    resolvable episodes dir returns None, mirroring the opinion `_publish_step`).
+    """
+    from lib.episode import episode_paths  # lazy: line-neutral pure helper
+
+    episodes = _paper_subdir(ctx, "episodes")
+    date = ctx.get("date")
+    show = ctx.get("show") or "papers"
+    scratch: Path = ctx["scratch_dir"]
+    no_tts: bool = ctx.get("no_tts", False)
+    if episodes is None or not date:
+        return None  # no episodes dir / date resolvable (partial test ctx)
+    episodes.mkdir(parents=True, exist_ok=True)
+
+    title, body = "", ""
+    finalize_path = scratch / "finalize-result.json"
+    if finalize_path.exists():
+        try:
+            obj = json.loads(finalize_path.read_text(encoding="utf-8"))
+            if isinstance(obj, dict):
+                title = obj.get("title") or ""
+                body = obj.get("body") or ""
+        except (ValueError, OSError):
+            pass
+
+    try:
+        paths = episode_paths(episodes, date, title, show)
+    except (FileNotFoundError, NotADirectoryError, ValueError, OSError):
+        return None
+
+    if body:
+        try:
+            paths["script"].write_text(body, encoding="utf-8")
+        except OSError:
+            pass
+
+    if not no_tts:
+        audio_src = scratch / "audio-files.mp3"
+        if audio_src.exists():
+            try:
+                audio_src.replace(paths["audio"])
+            except OSError:
+                pass
+
+    return paths["script"]
+
+
+def _paper_log_write_executor(ctx: dict[str, Any]) -> Any:
+    """`paper-log-write` code station (P4, D-013, DP-601=B): record this paper in
+    the append-only paper-log — BEFORE publish, so a write failure halts before
+    anything airs (no aired-but-unlogged duplicate window).
+
+    Assembles `{arxiv_id, title, date, concepts}`:
+      - arxiv_id ← scratch/chosen-arxiv-id.json (the curator's pick; required —
+        missing → halt, can't record the dedup命脉)
+      - title    ← finalize-result.json `title` (empty allowed)
+      - date     ← ctx["date"]
+      - concepts ← chosen-arxiv-id.json `concepts` (curator best-effort 核心概念
+        tags for the next run's concept soft-avoid; default [] — DP-403=A makes
+        arXiv-id the hard gate, so empty concepts is acceptable)
+    Appends via `paperlog.append_paper` (fail-closed schema/format validation +
+    atomic write), then RE-LOADS and verifies the id landed (blocking guarantee).
+
+    Returns the paper-log.yaml Path (gated by check_artifact); a halt dict when
+    the chosen-arxiv-id is missing, the state dir is unresolvable, or the post-
+    write verify fails. (append_paper itself raises on a bad entry → propagates
+    as a named halt — fail-closed.)
+    """
+    from lib.paperline.paperlog import append_paper, is_covered, load_paperlog  # lazy: sibling
+
+    scratch: Path = ctx["scratch_dir"]
+    state = _paper_subdir(ctx, "state")
+    if state is None:
+        return {
+            "status": "halted",
+            "failed_step": "paper-log-write",
+            "reason": "cannot resolve paper state dir (output_dir/papers/state) — "
+                      "refusing to publish without recording the dedup log (D-013)",
+        }
+
+    chosen_path = scratch / "chosen-arxiv-id.json"
+    if not chosen_path.exists():
+        return {
+            "status": "halted",
+            "failed_step": "paper-log-write",
+            "reason": f"missing {chosen_path} — cannot record paper-log without the chosen arxiv_id",
+        }
+    chosen = json.loads(chosen_path.read_text(encoding="utf-8"))
+    arxiv_id = chosen.get("arxiv_id") if isinstance(chosen, dict) else None
+    concepts = chosen.get("concepts") if isinstance(chosen, dict) else None
+    if not isinstance(concepts, list):
+        concepts = []
+
+    title = ""
+    finalize_path = scratch / "finalize-result.json"
+    if finalize_path.exists():
+        try:
+            obj = json.loads(finalize_path.read_text(encoding="utf-8"))
+            if isinstance(obj, dict):
+                title = obj.get("title") or ""
+        except (ValueError, OSError):
+            pass
+
+    entry = {
+        "arxiv_id": arxiv_id,
+        "title": title,
+        "date": ctx.get("date") or "",
+        "concepts": concepts,
+    }
+    # append_paper raises on a bad entry (invalid arxiv_id/date, etc.) → fail-closed halt.
+    append_paper(str(state), entry)
+
+    # Blocking guarantee: re-load and confirm the id is now covered.
+    if not is_covered(load_paperlog(str(state)), arxiv_id):
+        return {
+            "status": "halted",
+            "failed_step": "paper-log-write",
+            "reason": f"paper-log append did not persist arxiv_id {arxiv_id!r} — "
+                      "refusing to publish (dedup命脉 not recorded, D-013)",
+        }
+    return Path(str(state)) / "paper-log.yaml"
+
+
+def _paper_cleanup_executor(ctx: dict[str, Any]) -> Any:
+    """`cleanup` code station: no-op. The real scratch teardown is the runner's
+    `finally` (`cleanup_scratch` on a clean run, preserve on halt — runner.py:2216).
+    This station exists for topology completeness (design step 16); returning
+    None keeps it a gate-free pass-through (mirrors the opinion `_noop_executor`)."""
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Map builders (the surface the LineBundle calls)
 # ---------------------------------------------------------------------------
 
@@ -390,6 +664,9 @@ def paper_executor_map() -> dict[str, Any]:
         # collection (P2)
         "config": _config_executor,
         "scratch": _scratch_executor,
+        # P4 front-段 continuity (same-day guard + paper-log-read dedup)
+        "same-day-guard": _same_day_guard_executor,
+        "paper-log-read": _paper_log_read_executor,
         "discovery": _discovery_executor,
         "fetch": _fetch_executor,
         "ledger-verify": _ledger_verify_executor,
@@ -397,6 +674,12 @@ def paper_executor_map() -> dict[str, Any]:
         # digest-score / finalize / faithfulness are AGENT stations dispatched by
         # the runner (not via the executor map).
         "digest-select": _digest_select_executor,
+        # publish (P4): code stations. DP-601=B order = paper-log-write (record
+        # dedup BEFORE airing) → publish (.md+mp3) → cleanup (no-op; runner
+        # finally does the real scratch teardown).
+        "paper-log-write": _paper_log_write_executor,
+        "publish": _paper_publish_executor,
+        "cleanup": _paper_cleanup_executor,
     }
 
 

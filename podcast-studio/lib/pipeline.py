@@ -142,6 +142,7 @@ AGENT_WHITELIST = frozenset({
     "jay",
     "zhijianyuan",
     "scorecard",
+    "stance-distiller",
 })
 
 
@@ -534,12 +535,43 @@ def _build_steps() -> list[dict[str, Any]]:
             "skip_when": None,
             "fail_soft": None,
         },
+        # --- step 15c: stance-distill (ISOLATED stance-card distiller) ----
+        # Produces stance-card.json — the LLM extraction of the host's woven
+        # falsifiable bets / open questions / named concepts / settlements /
+        # resonance FROM the finalized body. CUSTOM executor
+        # (_stance_distill_step), same shape as bible-distill: the inputs
+        # (finalize body + continuity due_bets/carried_open_questions) are
+        # composed by the executor (NOT scratch files the generic resolver
+        # looks up), and the artifact is consumed by the next code station
+        # (stance-write) which calls write_card. This is the station that was
+        # MISSING after the prose→coded-DAG migration: without it
+        # _stance_write_step hardcoded an empty card every run (continuity
+        # went dark). The custom executor returns None and the name-intercept
+        # bypasses the gate (same as bible-distill), so the run NEVER halts
+        # here; the `gate`/`fail_soft` fields below are documentary. The real
+        # fail-soft is in _stance_write_step: a missing / malformed
+        # stance-card.json degrades to the deterministic thin card.
+        {
+            "name": "stance-distill",
+            "kind": "agent",
+            "agent": "stance-distiller",
+            "inputs": ["finalize-result.json", "continuity"],
+            "artifact": "stance-card.json",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": True,
+        },
         # --- step 16: stance-write (stance.write_card) ------------------
         # write_card raises on overwrite / fabricated ref / future date /
         # numeric resonance — its own validation is the gate. The runner
-        # also injects a deterministic `apparatus_used` (intersection of
+        # merges stance-card.json (step 15c) into the card (bets /
+        # open_questions / topics / named_concept / settles / resonance) and
+        # injects a deterministic `apparatus_used` (intersection of
         # store-known anchors with the finalize body + card named_concept)
-        # before the write — fail-soft to [] on any extraction error.
+        # before the write — fail-soft to the empty card on any extraction
+        # error (missing/malformed stance-card.json).
         {
             "name": "stance-write",
             "kind": "code",

@@ -456,21 +456,40 @@ and injected into each persona dispatch by the runner's step-2 loader.
     `.mp3` have already shipped; record the returned
     `{"action": "accept", "topics_appended": N}` and proceed. A non-zero exit
     (e.g. malformed `--approved-topics`) is surfaced to the user, not swallowed.
-16. **Stance card finalize hook (Phase 3, SOLE writer)** — assemble the
-    episode's stance card and write it by calling `write_card(...)`
-    (from `lib.stance`):
+15c. **Stance distill (`stance-distiller` persona, custom executor)** — the LLM
+    extraction station that produces the stance card's editorial content. A
+    custom executor (`_stance_distill_step`, mirroring `bible-distill`)
+    dispatches `agents/stance-distiller.md` fed the finalized body + the
+    continuity inputs (due bets it may settle + carried open-questions it may
+    continue); the persona writes `stance-card.json` to scratch (bets /
+    open_questions / topics / named_concept / settles / resonance). It extracts
+    ONLY judgments genuinely in the body (no凑数 fabrication — `bets: []` when the
+    episode made none) and may reference ONLY the provided due-bet ids in
+    `settles`. **This is the station that was DROPPED in the prose→coded-runner
+    migration** — without it step 16 hardcoded an empty card every run and
+    cross-episode continuity went dark.
+
+16. **Stance card finalize hook (Phase 3, SOLE writer)** — `_stance_write_step`
+    MERGES + sanitizes the step-15c `stance-card.json` (assigns globally-unique
+    bet ids via `new_bet_id`, drops malformed bets, pre-filters `settles` to the
+    provided due-bet ids) and writes the card by calling `write_card(...)` (from
+    `lib.stance`). **fail-soft**: a missing / malformed `stance-card.json`
+    degrades to the deterministic thin card (empty bets/questions/topics, with
+    `apparatus_used` + `resonance`) so a card ALWAYS lands and the 16a gate
+    passes. The card fields:
     - `episode`: `{date, show}` (from the run)
     - `bets[]`: the 1–N falsifiable bets the host actually made this episode —
       **distilled FROM THE FINALIZED BODY**, not copied from a「我下注」section.
       As of the 2026-06-13 anti-repetition refactor the listener-facing body has
       NO dedicated下注 section (D-104); the host's falsifiable judgments are
-      woven into ③/④ (morning) or ②/③ (evening). This step reads the body and
-      extracts each woven judgment ("我赌 X 在 Y 时间窗内不发生，因为…") into a
-      bet. Extract only judgments that are genuinely IN the body — if the
-      episode made no falsifiable judgment, `bets` is `[]` (do NOT fabricate one
-      to satisfy a template; the section's凑数 pressure is exactly what the
-      refactor removed). Each bet has `id` (use `lib/stance.new_bet_id(date,
-      show, n)` for globally unique ids), `claim` (free text — the host's view,
+      woven into ③/④ (morning) or ②/③ (evening). The step-15c `stance-distiller`
+      reads the body and extracts each woven judgment ("我赌 X 在 Y 时间窗内不发生，
+      因为…") into a bet. Extract only judgments that are genuinely IN the body —
+      if the episode made no falsifiable judgment, `bets` is `[]` (do NOT
+      fabricate one to satisfy a template; the section's凑数 pressure is exactly
+      what the refactor removed). Each bet's `id` is assigned by the runner
+      (`lib/stance.new_bet_id(date, show, n)`, globally unique — the persona does
+      NOT write it); `claim` (free text — the host's view,
       qualitative, no confidence number), `horizon` (e.g. `"3d"` / `"7d"`),
       `settle_by` (ISO date, computed absolute from horizon + today),
       `status: "open"`. `lib/stance.write_card` is unchanged — it takes whatever
@@ -649,7 +668,8 @@ before invoking a vendored script.
 | 15   | episode.py   | output_dir, date, title, show        | 3 named paths                      | `episode_paths` returns      |
 | 15a  | resonance-gate | finalized script                   | in-memory `resonance` str\|list[str] (forward / re-listen self-critique) | non-empty value OR explicit `""`; field is required when writing the stance card |
 | 15b  | orchestrator | published `.md` + chosen brief `approved_topics` | `topic_log.yaml` appended (cross-day cooldown) | `finalize` returns `action=accept`; non-zero exit surfaced |
-| 16   | stance-write | card dict (incl. `resonance`)         | `{date}-{show}.stance.yaml`        | `write_card` raises on overwrite/fabricated ref/future date / numeric `resonance` |
+| 15c  | stance-distiller (custom executor `_stance_distill_step`, fail-soft) | finalize body + continuity (due_bets + carried_open_questions) → woven bets / open_questions / topics / named_concept / settles / resonance | `stance-card.json` (scratch) | name-intercept returns None (gate documentary); a dispatch miss → step 16 thin-card fallback |
+| 16   | stance-write (`_stance_write_step` merges 15c json) | sanitized `stance-card.json` (bet ids assigned, settles pre-filtered to due ids) + `apparatus_used` | `{date}-{show}.stance.yaml`        | `write_card` raises on overwrite/fabricated ref/future date / numeric `resonance`; **fail-soft** to thin card on missing/malformed 15c json |
 | 17   | episode.py   | scratch                              | (removed)                          | (cleanup is idempotent)      |
 | 18   | coveredground-distiller (ISOLATED, **post-publish, fail-soft**) | published body + recent bodies + covered-ground store (read-only) → 本期用过的招牌锚/类比/框架 (Phase 2) | `coveredground-apparatus.json` (scratch) | `check_artifact`; **`fail_soft: True` — a distiller failure NEVER halts the already-published episode** |
 | 19   | coveredground-update (code, **post-publish, fail-soft**) | `coveredground-apparatus.json` + embeddings (`lib.embed`, NLContextualEmbedding / n-gram fallback) | `{output_dir}/covered-ground.yaml` updated (count/last_used/decay/embedding) | none; try/except fail-soft — store skips this round on any error |

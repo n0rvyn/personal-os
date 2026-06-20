@@ -51,6 +51,7 @@ AGENT_WHITELIST = frozenset({
     "jay",
     "zhijianyuan",
     "scorecard",
+    "stance-distiller",
 })
 
 

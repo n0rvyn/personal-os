@@ -71,6 +71,7 @@ from lib.stance import (
     carried_open_questions,
     due_bets,
     load_cards,
+    new_bet_id,
     stance_card_exists,
     write_card,
 )
@@ -798,28 +799,253 @@ def _topic_log_step(ctx: dict[str, Any]) -> Optional[Path]:
     return topic_log_path if topic_log_path.exists() else None
 
 
-def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
-    """Step 16 — assemble a minimal card_dict and call write_card.
-    The runner constructs a bare-bones card (bets=[] when no body
-    extraction is available); a real run would have a persona step
-    that distills the woven judgments from the body. write_card is the
-    sole writer (append-only) and validates shape + anti-fabrication.
+def _build_stance_distill_prompt(
+    body: str,
+    due: "list[dict[str, Any]]",
+    carried: "list[str]",
+    today: str,
+) -> str:
+    """Compose the stance-distiller user prompt: the finalized body (the sole
+    fact source) + the continuity inputs (due bets the episode may settle +
+    carried open-questions it may continue). The persona's system prompt
+    (agents/stance-distiller.md) carries the JSON contract + anti-fabrication
+    rules; this body just hands it the material."""
+    parts: list[str] = [
+        "下面是本期【已定稿正文】。请从正文里忠实提炼主播这一期真正做过的可证伪下注、"
+        "留下的待答问题、命名、话题，以及对到期下注的结算，按系统提示的契约输出严格 JSON。",
+        f"今天的日期 (today): {today} —— 用它把每条下注的 horizon 折算成绝对的 settle_by ISO 日期。",
+    ]
+    if due:
+        parts.append(
+            "\n## 到期待结算下注 (due_bets) —— settles[].ref 只能引用下面这些 id："
+        )
+        for b in due:
+            if isinstance(b, dict):
+                parts.append(f"- id={b.get('id', '')} :: {b.get('claim', '')}")
+    else:
+        parts.append("\n## 到期待结算下注 (due_bets)：无 —— 因此 settles 必须为 []。")
+    if carried:
+        parts.append("\n## 今早遗留、可继续推进的问题 (carried_open_questions)：")
+        for q in carried:
+            if isinstance(q, str) and q.strip():
+                parts.append(f"- {q}")
+    parts.append("\n===== 已定稿正文 开始 =====")
+    parts.append(body)
+    parts.append("===== 已定稿正文 结束 =====")
+    return "\n".join(parts)
 
-    Phase 2 (covered-ground, DP-001=A): the card carries an
-    `apparatus_used` audit field — the deterministic best-effort list
-    of signature anchors/analogies/frames the episode used, derived
-    from the intersect of store-known anchors with the finalize body
-    (unioned with the card's `named_concept` if any). The authoritative
-    extraction lives in the post-publish LLM distiller
-    (coveredground-distill + coveredground-update); this field is the
-    self-description audit trail. fail-soft: any extraction error
-    falls back to an empty list — the card still writes.
+
+def _stance_distill_step(
+    step: dict[str, Any],
+    ctx: dict[str, Any],
+    dispatch_fn: Callable[..., dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """Step 15c — stance-card distiller (custom executor, mirrors
+    _bible_distill_step). Dispatches `stance-distiller` fed the finalized body
+    + continuity (due_bets + carried_open_questions); the persona writes
+    `stance-card.json` to scratch. The next code station (stance-write /
+    step 16) merges + sanitizes that JSON into the card and calls write_card.
+
+    A CUSTOM executor (not the generic agent path) because the prompt must
+    COMPOSE the body + continuity (continuity is not a scratch file the
+    generic input-resolver can supply).
+
+    fail-soft (the run NEVER halts here): an empty / unreadable body skips the
+    dispatch entirely; a dispatch failure leaves no artifact. Either way this
+    returns None (the name-intercept bypasses the step gate, same as
+    bible-distill), and `_stance_write_step` falls back to the deterministic
+    thin card when stance-card.json is missing / malformed.
+    """
+    scratch: Path = ctx["scratch_dir"]
+    plugin_root = ctx["plugin_root"]
+
+    # The finalize body is the distiller's sole fact source. By topology it is
+    # ALWAYS present here (step 12 halts on a finalize miss — not fail-soft —
+    # and gates ≥6500 chars), so we only skip when the file is entirely absent
+    # (a degenerate / resume state); otherwise dispatch unconditionally so the
+    # station behaves like every other agent step.
+    finalize_path = scratch / "finalize-result.json"
+    if not finalize_path.exists():
+        print(
+            "runner: stance-distill skipped (no finalize-result.json) — "
+            "stance-write will land the thin card",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        body = load_finalize_body(finalize_path) or ""
+    except Exception:  # noqa: BLE001 — an unreadable body must not halt
+        body = ""
+
+    continuity = ctx.get("continuity") or {}
+    due = continuity.get("due_bets") or []
+    carried = continuity.get("carried_open_questions") or []
+
+    prompt = _build_stance_distill_prompt(body, due, carried, ctx["date"])
+    timeout = _STEP_TIMEOUTS.get("stance-distill", _DEFAULT_TIMEOUT)
+    from lib.lines import get_line  # local import for leaf-ness (matches bible)
+    line = get_line(ctx["show"])
+    dispatch_result = _run_dispatch(
+        dispatch_fn, step, prompt, scratch, plugin_root, tag=None, timeout=timeout,
+        agent_dir=line.agent_dir, whitelist=line.whitelist,
+    )
+    if not dispatch_result.get("ok"):
+        print(
+            f"runner: stance-distill dispatch failed (fail-soft — stance-write "
+            f"falls back to thin card): {dispatch_result.get('reason')}",
+            file=sys.stderr,
+        )
+    return None
+
+
+def _distilled_stance_fields(
+    scratch: Optional[Path],
+    date_str: str,
+    show: str,
+    due_bet_ids: "set[str]",
+) -> dict[str, Any]:
+    """Read scratch/stance-card.json (step 15c stance-distiller output) and
+    return SANITIZED card fields. fail-soft: a missing / malformed JSON →
+    all-empty defaults (the caller then writes the deterministic thin card —
+    exactly the pre-distiller behavior, so a distiller miss never halts).
+
+    The runner owns sanitization (NOT the persona):
+      - bets: assign a globally-unique `id` via `new_bet_id` (ignore any id
+        the persona emitted); drop a bet missing claim/horizon or whose
+        settle_by is not a valid ISO date.
+      - settles: keep only entries whose `ref` is in `due_bet_ids` (the
+        anti-fabrication floor; write_card re-enforces this, but pre-filtering
+        means one stray ref can't reject the whole card).
+      - resonance: str | list[str]; anything else → None (caller falls back
+        to ctx resonance).
+      - open_questions / topics / named_concept: list of non-empty str.
+    """
+    empty: dict[str, Any] = {
+        "bets": [],
+        "open_questions": [],
+        "topics": [],
+        "named_concept": [],
+        "settles": [],
+        "resonance": None,
+    }
+    if scratch is None:
+        return empty
+    p = scratch / "stance-card.json"
+    if not p.exists():
+        return empty
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return empty
+    if not isinstance(obj, dict):
+        return empty
+
+    from datetime import date as _date  # leaf import (matches module style)
+
+    def _str_list(v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [s.strip() for s in v if isinstance(s, str) and s.strip()]
+
+    bets: list[dict[str, Any]] = []
+    raw_bets = obj.get("bets")
+    if isinstance(raw_bets, list):
+        for b in raw_bets:
+            if not isinstance(b, dict):
+                continue
+            claim = b.get("claim")
+            horizon = b.get("horizon")
+            settle_by = b.get("settle_by")
+            if not (isinstance(claim, str) and claim.strip()):
+                continue
+            if not (isinstance(horizon, str) and horizon.strip()):
+                continue
+            if not isinstance(settle_by, str):
+                continue
+            try:
+                _date.fromisoformat(settle_by)
+            except ValueError:
+                continue
+            bets.append({
+                "id": new_bet_id(date_str, show, len(bets) + 1),
+                "claim": claim.strip(),
+                "horizon": horizon.strip(),
+                "settle_by": settle_by,
+                "status": "open",
+            })
+
+    settles: list[dict[str, Any]] = []
+    raw_settles = obj.get("settles")
+    if isinstance(raw_settles, list):
+        for s in raw_settles:
+            if not isinstance(s, dict):
+                continue
+            ref = s.get("ref")
+            if not (isinstance(ref, str) and ref in due_bet_ids):
+                continue
+            entry: dict[str, Any] = {"ref": ref}
+            if isinstance(s.get("verdict"), str):
+                entry["verdict"] = s["verdict"]
+            if isinstance(s.get("evidence"), str):
+                entry["evidence"] = s["evidence"]
+            settles.append(entry)
+
+    resonance = obj.get("resonance")
+    if isinstance(resonance, list):
+        resonance = [s.strip() for s in resonance if isinstance(s, str) and s.strip()]
+    elif not isinstance(resonance, str):
+        resonance = None
+
+    return {
+        "bets": bets,
+        "open_questions": _str_list(obj.get("open_questions")),
+        "topics": _str_list(obj.get("topics")),
+        "named_concept": _str_list(obj.get("named_concept")),
+        "settles": settles,
+        "resonance": resonance,
+    }
+
+
+def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
+    """Step 16 — merge the step-15c stance-distiller output (stance-card.json)
+    into the card and call write_card. write_card is the sole writer
+    (append-only) and validates shape + anti-fabrication.
+
+    The card's editorial content (bets / open_questions / topics /
+    named_concept / settles / resonance) comes from the LLM distiller at
+    step 15c; this code station SANITIZES + merges it (`_distilled_stance_fields`)
+    and lands it. **fail-soft**: a missing / malformed stance-card.json
+    degrades to the deterministic thin card (empty bets/questions/topics) —
+    the pre-distiller behavior — so the stance-card gate (16a) always has a
+    card to read and the run never halts on a distiller miss. resonance
+    prefers the distiller's value, falling back to ctx (step 15a).
+
+    Phase 2 (covered-ground, DP-001=A): the card also carries an
+    `apparatus_used` audit field — the deterministic best-effort list of
+    signature anchors/analogies/frames the episode used, derived from the
+    intersect of store-known anchors with the finalize body (unioned with the
+    card's `named_concept`). fail-soft: any extraction error → empty list.
     """
     episodes_dir = _subdir(ctx, "episodes")
     state_dir = _subdir(ctx, "state")
     date_str: str = ctx["date"]
     show: str = ctx["show"]
-    resonance = ctx.get("resonance", "")
+
+    # --- merge the distiller output (sanitized, fail-soft) ---------------
+    continuity = ctx.get("continuity") or {}
+    due_bet_ids = {
+        b.get("id")
+        for b in (continuity.get("due_bets") or [])
+        if isinstance(b, dict) and isinstance(b.get("id"), str)
+    }
+    distilled = _distilled_stance_fields(
+        ctx.get("scratch_dir"), date_str, show, due_bet_ids
+    )
+
+    # resonance: prefer the distiller's; fall back to ctx (step 15a stub "")
+    resonance = distilled["resonance"]
+    if resonance is None:
+        resonance = ctx.get("resonance", "")
 
     apparatus_used: list[str] = []
     try:
@@ -845,30 +1071,49 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
         if body and anchors:
             apparatus_used = [a for a in anchors if a and a in body]
 
-        # Union with the card's named_concept (if any) so a card that
-        # already names a concept surfaces it as audit evidence.
-        nc = ctx.get("named_concept") or []
-        for concept in nc:
-            if isinstance(concept, str) and concept and concept not in apparatus_used:
+        # Union with the card's named_concept (from the distiller) so a card
+        # that names a concept surfaces it as audit evidence.
+        for concept in distilled["named_concept"]:
+            if concept and concept not in apparatus_used:
                 apparatus_used.append(concept)
     except Exception:
         apparatus_used = []
 
     card: dict[str, Any] = {
         "episode": {"date": date_str, "show": show},
-        "bets": [],
-        "open_questions": [],
-        "topics": [],
+        "bets": distilled["bets"],
+        "open_questions": distilled["open_questions"],
+        "topics": distilled["topics"],
         "resonance": resonance,
     }
+    if distilled["named_concept"]:
+        card["named_concept"] = distilled["named_concept"]
+    if distilled["settles"]:
+        card["settles"] = distilled["settles"]
     if apparatus_used:
         card["apparatus_used"] = apparatus_used
 
     try:
-        path = write_card(episodes_dir, date_str, show, card)
+        return write_card(episodes_dir, date_str, show, card)
     except Exception:
-        return None
-    return path
+        # Distilled card rejected (e.g. an unexpected validation miss) →
+        # fall back to the deterministic thin card so a card ALWAYS lands
+        # (the 16a gate is blocking; a missing card breaks continuity worse
+        # than a thin one). write_card is atomic + raises before writing, so
+        # the target still does not exist on this second attempt.
+        thin: dict[str, Any] = {
+            "episode": {"date": date_str, "show": show},
+            "bets": [],
+            "open_questions": [],
+            "topics": [],
+            "resonance": resonance if isinstance(resonance, (str, list)) else "",
+        }
+        if apparatus_used:
+            thin["apparatus_used"] = apparatus_used
+        try:
+            return write_card(episodes_dir, date_str, show, thin)
+        except Exception:
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -1191,6 +1436,14 @@ def _execute_step(
     # in state_dir (not scratch). fail-soft + always-lands: returns None.
     if name == "bible-distill":
         return _bible_distill_step(step, ctx, dispatch_fn)
+
+    # step 15c stance-distill: custom executor. NOT the generic agent path —
+    # the prompt COMPOSES the finalized body + continuity (due_bets /
+    # carried_open_questions), which the generic input-resolver can't supply.
+    # Returns None (fail-soft, never halts); the next station (stance-write)
+    # merges stance-card.json or falls back to the deterministic thin card.
+    if name == "stance-distill":
+        return _stance_distill_step(step, ctx, dispatch_fn)
 
     # Run the step body
     if step["kind"] == "code":

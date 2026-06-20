@@ -63,6 +63,7 @@ AGENT_WHITELIST = {
     "jay",
     "zhijianyuan",
     "scorecard",
+    "stance-distiller",
 }
 
 
@@ -3187,3 +3188,180 @@ def test_runner_threads_paper_agent_dir_and_whitelist(tmp_path, monkeypatch):
             f"paper dispatch must receive whitelist=PAPER_AGENT_WHITELIST, "
             f"got {kwargs['whitelist']!r} (call agent={call['agent']!r})"
         )
+
+
+# ===========================================================================
+# Step 15c stance-distill + step 16 stance-write merge (the de-stub fix)
+#
+# These pin the station that was MISSING after the prose→coded-DAG migration:
+# without it, `_stance_write_step` hardcoded an empty card every run and
+# cross-episode continuity went dark. Coverage:
+#   - the sanitizer `_distilled_stance_fields` (bet-id assignment, per-bet
+#     validation, settles anti-fabrication pre-filter, resonance shapes,
+#     fail-soft on missing/malformed JSON);
+#   - `_stance_write_step` merges a real stance-card.json into a rich card;
+#   - fail-soft to the deterministic thin card when the distiller output is
+#     absent OR when write_card rejects the merged card;
+#   - structural: stance-distill dispatches immediately before stance-write.
+# ===========================================================================
+def _stance_ctx(tmp_path, *, date="2026-06-20", show="evening",
+                due_bets=None, resonance=""):
+    episodes = tmp_path / "out" / "episodes"
+    episodes.mkdir(parents=True, exist_ok=True)
+    state = tmp_path / "out" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    ctx = {
+        "episodes_dir": str(episodes),
+        "state_dir": str(state),
+        "scratch_dir": scratch,
+        "date": date,
+        "show": show,
+        "continuity": {"due_bets": due_bets or []},
+        "resonance": resonance,
+    }
+    return ctx, episodes, scratch
+
+
+def test_distilled_stance_fields_sanitizes_and_assigns_ids(tmp_path):
+    from lib.runner import _distilled_stance_fields
+
+    scratch = tmp_path
+    (scratch / "stance-card.json").write_text(json.dumps({
+        "bets": [
+            {"claim": "好下注", "horizon": "7d", "settle_by": "2027-01-01",
+             "status": "open", "id": "persona-supplied-IGNORED"},
+            {"claim": "缺 settle_by", "horizon": "7d"},          # dropped
+            {"claim": "坏日期", "horizon": "7d", "settle_by": "not-a-date"},  # dropped
+            {"horizon": "7d", "settle_by": "2027-01-01"},        # no claim → dropped
+        ],
+        "open_questions": ["q1", "  ", 5, "q2"],
+        "topics": ["t1", "t2", ""],
+        "named_concept": ["概念X"],
+        "settles": [
+            {"ref": "bet-prior-1", "verdict": "hit", "evidence": "e"},  # kept
+            {"ref": "bet-NOT-due", "verdict": "miss"},                   # dropped
+        ],
+        "resonance": ["r1", "r2"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    out = _distilled_stance_fields(scratch, "2026-06-20", "evening",
+                                   {"bet-prior-1"})
+    # only the one valid bet survives; id is runner-assigned (persona id ignored)
+    assert len(out["bets"]) == 1
+    assert out["bets"][0]["id"] == "bet-20260620evening-1"
+    assert out["bets"][0]["claim"] == "好下注"
+    assert out["bets"][0]["status"] == "open"
+    assert out["open_questions"] == ["q1", "q2"]
+    assert out["topics"] == ["t1", "t2"]
+    assert out["named_concept"] == ["概念X"]
+    # settles anti-fabrication: only the ref in due_bet_ids survives
+    assert [s["ref"] for s in out["settles"]] == ["bet-prior-1"]
+    assert out["resonance"] == ["r1", "r2"]
+
+
+def test_distilled_stance_fields_failsoft_missing_and_malformed(tmp_path):
+    from lib.runner import _distilled_stance_fields
+    empty = {"bets": [], "open_questions": [], "topics": [],
+             "named_concept": [], "settles": [], "resonance": None}
+    # missing file
+    assert _distilled_stance_fields(tmp_path, "2026-06-20", "evening", set()) == empty
+    # malformed JSON
+    (tmp_path / "stance-card.json").write_text("not json {", encoding="utf-8")
+    assert _distilled_stance_fields(tmp_path, "2026-06-20", "evening", set()) == empty
+    # None scratch
+    assert _distilled_stance_fields(None, "2026-06-20", "evening", set()) == empty
+
+
+def test_stance_write_merges_distilled_card(tmp_path):
+    from lib.runner import _stance_write_step
+    from lib.stance import load_cards
+
+    ctx, episodes, scratch = _stance_ctx(tmp_path, resonance="ctx-fallback")
+    (scratch / "finalize-result.json").write_text(
+        json.dumps({"title": "t", "body": "正文里出现 概念X 这个命名。"},
+                   ensure_ascii=False), encoding="utf-8")
+    (scratch / "stance-card.json").write_text(json.dumps({
+        "bets": [{"claim": "我赌X在7天内不发生", "horizon": "7d",
+                  "settle_by": "2026-06-27", "status": "open"}],
+        "open_questions": ["还没想明白的问题"],
+        "topics": ["话题A"],
+        "named_concept": ["概念X"],
+        "settles": [],
+        "resonance": ["会让人转发的点"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    path = _stance_write_step(ctx)
+    assert path is not None and path.exists()
+    card = load_cards(episodes)[-1]
+    assert len(card["bets"]) == 1
+    assert card["bets"][0]["id"] == "bet-20260620evening-1"
+    assert card["open_questions"] == ["还没想明白的问题"]
+    assert card["named_concept"] == ["概念X"]
+    # resonance prefers the distiller's list over the ctx fallback
+    assert card["resonance"] == ["会让人转发的点"]
+    # apparatus_used unions named_concept (concept appears in the body too)
+    assert "概念X" in card.get("apparatus_used", [])
+
+
+def test_stance_write_thin_card_when_no_distill(tmp_path):
+    """No stance-card.json → deterministic thin card (pre-distiller behavior),
+    resonance from ctx. The card STILL lands so the 16a gate passes."""
+    from lib.runner import _stance_write_step
+    from lib.stance import load_cards
+
+    ctx, episodes, scratch = _stance_ctx(tmp_path, resonance="ctx-reso")
+    (scratch / "finalize-result.json").write_text(
+        json.dumps({"title": "t", "body": "正文"}, ensure_ascii=False),
+        encoding="utf-8")
+    # NO stance-card.json staged
+    path = _stance_write_step(ctx)
+    assert path is not None and path.exists()
+    card = load_cards(episodes)[-1]
+    assert card["bets"] == []
+    assert card["open_questions"] == []
+    assert card["topics"] == []
+    assert card["resonance"] == "ctx-reso"
+
+
+def test_stance_write_failsoft_when_writecard_rejects(tmp_path):
+    """A settles ref that survives the due-bet pre-filter but has NO prior card
+    makes write_card reject the merged card → _stance_write_step falls back to
+    the thin card. A card ALWAYS lands (16a gate is blocking)."""
+    from lib.runner import _stance_write_step
+    from lib.stance import load_cards
+
+    ctx, episodes, scratch = _stance_ctx(
+        tmp_path, due_bets=[{"id": "bet-orphan-1", "claim": "无主卡的下注"}])
+    (scratch / "finalize-result.json").write_text(
+        json.dumps({"title": "t", "body": "正文"}, ensure_ascii=False),
+        encoding="utf-8")
+    (scratch / "stance-card.json").write_text(json.dumps({
+        "bets": [{"claim": "一条下注", "horizon": "7d",
+                  "settle_by": "2026-06-27", "status": "open"}],
+        "open_questions": ["q"],
+        # ref is in due_bet_ids (pre-filter keeps it) but no prior card holds
+        # it → write_card's anti-fabrication rejects → thin-card fallback.
+        "settles": [{"ref": "bet-orphan-1", "verdict": "hit", "evidence": "e"}],
+        "resonance": "r",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    path = _stance_write_step(ctx)
+    assert path is not None and path.exists()
+    card = load_cards(episodes)[-1]
+    # fell back to the thin card — no fabricated settles shipped
+    assert card["bets"] == []
+    assert "settles" not in card or card["settles"] == []
+
+
+def test_stance_distill_precedes_stance_write_in_topology():
+    """Structural regression guard: the stance-distill station must exist and
+    run immediately before stance-write (else a future migration could drop it
+    again and re-stub the empty card without any test going red)."""
+    from lib.lines import get_line
+    for show in ("morning", "evening"):
+        names = [s["name"] for s in get_line(show).topology(show)]
+        assert "stance-distill" in names, f"{show}: stance-distill station missing"
+        assert names.index("stance-distill") == names.index("stance-write") - 1, (
+            f"{show}: stance-distill must immediately precede stance-write")

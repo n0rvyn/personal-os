@@ -52,6 +52,7 @@ AGENT_WHITELIST = {
     "jay",
     "zhijianyuan",
     "scorecard",
+    "stance-distiller",
 }
 
 

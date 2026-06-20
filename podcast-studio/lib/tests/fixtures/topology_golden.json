@@ -443,6 +443,25 @@
       "fail_soft": null
     },
     {
+      "name": "stance-distill",
+      "kind": "agent",
+      "agent": "stance-distiller",
+      "inputs": [
+        "finalize-result.json",
+        "continuity"
+      ],
+      "artifact": "stance-card.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
       "name": "stance-write",
       "kind": "code",
       "agent": null,
@@ -975,6 +994,25 @@
       "retry": null,
       "skip_when": null,
       "fail_soft": null
+    },
+    {
+      "name": "stance-distill",
+      "kind": "agent",
+      "agent": "stance-distiller",
+      "inputs": [
+        "finalize-result.json",
+        "continuity"
+      ],
+      "artifact": "stance-card.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
     },
     {
       "name": "stance-write",

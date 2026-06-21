@@ -1521,6 +1521,7 @@ def _execute_step(
                         "status": "halted",
                         "failed_step": f"{name}:{tag}" if tag else name,
                         "reason": gate_result.get("reason", "unknown gate failure"),
+                        "flagged": gate_result.get("flagged"),
                     }
     return None
 
@@ -2282,6 +2283,23 @@ def _build_step_prompt(
         parts.append("")
         parts.append("## 本档编辑规范 (结构/长度以此为准；成品不得低于 6500 非空白字)")
         parts.append(ctx["editorial"])
+    # Self-heal plumbing (Task 1-impl): on a factcheck-miss retry the runner
+    # threads `ctx["factcheck_flagged"]` (the untraceable claims) into the
+    # re-dispatched finalize prompt, so the parent knows which claims to
+    # soften (or back-source) on the retry pass. Empty ctx → byte-identical
+    # output (the appends below are skipped).
+    if name == "finalize" and ctx.get("factcheck_flagged"):
+        parts.append("")
+        parts.append("## 去假门退回:以下客观断言无法溯源到「当日新闻背景」,逐条二选一处理")
+        for claim in ctx["factcheck_flagged"]:
+            parts.append(f"- {claim.get('claim', claim)}")
+        parts.append(
+            "处理方式(每条二选一):① 软化为定性——删掉数字/删掉具名事件,只留方向性表述;"
+            "② 在 material-summary 以 `- **<lead>**: <fact> (source: <url>, <date>)` "
+            "补来源条目,并让正文引用该 lead。不得保留无源的量化/具名断言。"
+            "**软化后正文仍不得低于 6500 非空白字**——删数字腾出的篇幅靠收紧论证/"
+            "补一层视角补足,不靠填充。"
+        )
     return "\n".join(parts)
 
 
@@ -2429,11 +2447,25 @@ def run_pipeline(
                     # stance-write) regenerates the artifact the gate station
                     # re-checks, making the retry self-healing as the plan
                     # specifies (Task 3-impl step 6).
+                    #
+                    # Self-heal plumbing (Task 1-impl): thread `flagged`
+                    # through ctx so the parent re-dispatch's prompt can
+                    # carry the untraceable claims + a softening instruction.
+                    # Only the factcheck branch does this — `stance-card-gate`
+                    # and `faithfulness` don't carry actionable flagged
+                    # content for their parent re-dispatch, and broadening
+                    # the gate would pollute those paths.
+                    if name == "factcheck" and result.get("flagged"):
+                        ctx["factcheck_flagged"] = result["flagged"]
                     parent_name = _RETRY_PARENT.get(name)
                     if parent_name is not None:
                         parent_step = steps_by_name.get(parent_name)
                         if parent_step is not None:
                             _execute_step(parent_step, ctx, gates, dispatch)
+                    # Pop AFTER the parent re-dispatch consumes the thread,
+                    # so the next finalize call (or the 16a stance retry)
+                    # does not see a stale list.
+                    ctx.pop("factcheck_flagged", None)
                     continue
                 # Defensive: _execute_step should not return other shapes
                 break

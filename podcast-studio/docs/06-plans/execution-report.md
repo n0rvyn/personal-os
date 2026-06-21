@@ -189,3 +189,23 @@ Sandbox: `Content/Podcasts/.e2e-sandbox-phase2` (real PKOS inputs, seeded with 6
 **COMPLETE — 5/5 tasks; verify-plan approved (2 MR folded); implementation-reviewer 0 must-fix, 3 nice-to-have deferred (SF-1 plan verb "Modify" for new evals file / SF-2 dup `its` in `_STOP` / SF-3 None-fulltext defended at `_norm_match` boundary).** 474 lib passed/1 skipped.
 
 **✅ Real-path verify DONE + GREEN (live un-staged ledger, `LIVE_LEDGER=1`, --model sonnet→9090→MiniMax, 789s):** status=ok, `.md` `2026-06-19-看得少反而答得对.md` (6822字) published to papers/episodes + paper-logged; 忠实门 passed first try. **Relaxation proven load-bearing:** the live writer produced 3 non-verbatim anchors (incl. the exact "On LVBench…" failure that halted the first fully-live run + reflowed math notation) — OLD verbatim gate would flag all 3 → halt; NEW gate ok=True/0 flagged; faithfulness judge faithful=True/0 dropped/15 clean claims. Fix resolves the P3-handoff ledger-writer verbatim-anchor flakiness.
+
+---
+
+**Plan:** docs/06-plans/2026-06-21-runner-factcheck-selfheal-resume-plan.md
+**Status:** complete
+**Tasks:** 3 total — 3 completed / 0 blocked / 0 failed
+
+### Task Results
+
+- Task 1-tests: 去假自愈失败测试先行 ✅ — `test_factcheck_selfheal_resoftens_flagged_claim` 写入；pre-impl FAIL-first（halted/factcheck，traceable=0 flagged=1 untraceable=1）
+- Task 1-impl: flagged 串到 finalize 重派 ✅ — runner.py 3 处：(1) `_execute_step` halt 返回带 `flagged`（:1524）；(2) 重试循环 `name=="factcheck"` 注入 `ctx["factcheck_flagged"]` + 消费后 pop（:2458-2468，name-gated 防污染 16a/faithfulness 共用 parent）；(3) `_build_step_prompt` finalize 追加软化块、保留 6500字 floor、空 ctx 字节不变（:2291-2298）
+- Task 2: 版本号对齐 ✅ — plugin.json + marketplace.json `0.5.1 → 0.6.0`（提交/发布由用户触发）
+
+**COMPLETE — 3/3 tasks; verify-plan approved cycle-2（0 must-revise，2 advisory folded：heal-path 6500字约束 + name-gate 精确匹配）。**
+
+**Fix-pass note:** Workflow 把 1-impl 标 blocked，根因是 **TEST bug**（`_finalize_inspect` 作为 `inspect_call` 在每次 dispatch 都写 `expected_artifact`，clobber 了 collect 的 `material-summary.md` → check_factcheck 零来源 → 永久 halt）。runner.py 实现经独立核验正确；fix-pass 在 `_finalize_inspect` 顶部加 `if expected_artifact != "finalize-result.json": return` 守卫修好测试 bug（未削弱任何断言）。
+
+**测试:** `pytest -k "factcheck_selfheal or order or resume"` = 3 passed；**full lib/tests = 481 passed, 1 skipped**（baseline 480+1，本次 +1 自愈测试，零回归）。
+
+**⚠️ 需用户验证（1-impl Real path）:** 真实 MiniMax/headless 环境跑一次有去假 miss 的真 episode，确认自愈端到端（单元层用 fake 覆盖逻辑）。

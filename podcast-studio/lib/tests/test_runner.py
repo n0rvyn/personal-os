@@ -3365,3 +3365,206 @@ def test_stance_distill_precedes_stance_write_in_topology():
         assert "stance-distill" in names, f"{show}: stance-distill station missing"
         assert names.index("stance-distill") == names.index("stance-write") - 1, (
             f"{show}: stance-distill must immediately precede stance-write")
+
+
+# ---------------------------------------------------------------------------
+# 1-tests: 去假自愈——失败测试先行
+#
+# Pins (per task-1-tests):
+# - A factcheck verdict whose claim is untraceable to material-summary must
+#   NOT halt the pipeline on the first attempt — the runner must self-heal
+#   by re-dispatching finalize (the parent), this time with the flagged
+#   claim text + a softening instruction threaded into the prompt, so the
+#   second factcheck attempt passes (the body has been softened to a
+#   traceable form, e.g. by referencing the soft fact from material-summary).
+# - On the self-healing path the SECOND finalize dispatch must receive a
+#   prompt containing the flagged claim text (proves the runner plumbed
+#   `ctx["factcheck_flagged"]` into `_build_step_prompt`).
+# - The softened body must still clear the 6500 non-whitespace char floor
+#   (`check_min_chars` does NOT cross-check the factcheck gate; without the
+#   floor the heal could ship a short body — verifier heuristic).
+# ---------------------------------------------------------------------------
+
+def test_factcheck_selfheal_resoftens_flagged_claim(monkeypatch, tmp_path):
+    """去假门判出一条无法溯源的客观断言时,流水线不再直接停摆——它把那条
+    断言带回定稿步重做一次(软化),第二次过门,节目继续产出。
+
+    Test topology (mirrors `_build_paper_steps` discipline — drive with a
+    MINIMAL injected topology rather than the real morning pipeline so the
+    test pins the load-bearing retry plumbing without depending on every
+    upstream station):
+        finalize → factcheck
+    `finalize` writes a factcheck-verdict.json whose claim cites a fact_id
+    that traces (or doesn't) to the material-summary, so the REAL
+    `check_factcheck` gate can flag (or pass) the body. Body content also
+    depends on the user_prompt:
+      - first call (no flagged thread): claim cites `Q2-增长-18%` (NOT in
+        material-summary) → untraceable → flagged → halt-and-retry
+      - second call (prompt contains the flagged claim text): claim cites
+        the soft fact `行业增速放缓` (IS in material-summary) → traceable
+        → ok
+    """
+    from lib.runner import run_pipeline
+    from lib.factcheck import check_factcheck as _real_check_factcheck
+
+    scratch = _bootstrap_scratch(tmp_path)
+
+    # material-summary backs ONLY the soft fact the softened body cites.
+    # The first-pass quantifier ("Q2 增长 18%") has NO backing → untraceable.
+    soft_fact_lead = "行业增速放缓"
+    soft_fact_text = "行业增速放缓,方向性表述"
+    (scratch / "material-summary.md").write_text(
+        f"## 当日新闻背景\n- **{soft_fact_lead}**: {soft_fact_text} (source: vault, 2026-06-14)\n",
+        encoding="utf-8",
+    )
+
+    flagged_claim_text = "市场在 Q2 增长 18%"
+
+    # The first-pass body contains the UNTRACEABLE quantifier claim; the
+    # second-pass body removes the quantifier and references the SOFT fact
+    # from material-summary (which the second factcheck run resolves).
+    first_pass_body = (
+        "正文开头一句铺垫。" * 500
+        + f" 关键数据:{flagged_claim_text},引用 vault。"
+        + " 正文继续展开论述。" * 500
+    )
+    # Softened body: drop the quantifier, cite the soft fact → traceable.
+    second_pass_body = (
+        "正文开头一句铺垫。" * 500
+        + f" 关键论断:{soft_fact_text},引用 vault 来源。"
+        + " 正文继续展开论述。" * 500
+    )
+
+    # factcheck-verdict.json shape: first call cites the untraceable quantifier;
+    # second call cites the soft fact (which IS in material-summary → traceable).
+    def _write_factcheck_verdict(text_body: str) -> None:
+        if flagged_claim_text in text_body:
+            # First-pass verdict: cites a fact_id NOT in material-summary.
+            (scratch / "factcheck-verdict.json").write_text(
+                json.dumps({"claims": [
+                    {"claim": flagged_claim_text,
+                     "cited_fact_id": "市场 Q2 增长 18%",
+                     "verdict": "fail"},
+                ]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        else:
+            # Second-pass verdict: cites the soft fact (IS in material-summary).
+            (scratch / "factcheck-verdict.json").write_text(
+                json.dumps({"claims": [
+                    {"claim": soft_fact_text,
+                     "cited_fact_id": soft_fact_lead,
+                     "verdict": "pass"},
+                ]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+    finalize_call_count = {"n": 0}
+
+    # Dispatch fake: route the finalize station to our handler via
+    # `inspect_call` (fires AFTER the default `__call__` records to
+    # `fake.calls` — so the prompt is captured in `calls[i]["user_prompt"]`
+    # for the assertion below). Other stations fall through to the default
+    # stub path (artifact written, ok=True).
+    fake = _FakeDispatch()
+
+    def _finalize_inspect(agent_name: str, user_prompt: str, scratch_dir: Any,
+                          expected_artifact: str, **kwargs: Any) -> None:
+        """Run on finalize dispatch — mutate finalize-result.json body
+        based on call count + write the matching factcheck verdict.
+
+        inspect_call fires on EVERY dispatch, so guard to the finalize
+        station only: without this, the collect step (artifact
+        material-summary.md) would be clobbered with the finalize JSON
+        body, wiping the bootstrapped 当日新闻背景 source that the real
+        check_factcheck gate traces against → every claim untraceable →
+        permanent halt regardless of the self-heal plumbing."""
+        if expected_artifact != "finalize-result.json":
+            return
+        finalize_call_count["n"] += 1
+        body = first_pass_body if finalize_call_count["n"] == 1 else second_pass_body
+        result_path = Path(str(scratch_dir)) / expected_artifact
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps({"title": "测试标题", "body": body}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _write_factcheck_verdict(body)
+
+    fake.inspect_call = _finalize_inspect
+
+    # Use the REAL check_factcheck gate (reads factcheck-verdict.json +
+    # material-summary.md, recomputes sourcing). Other gates are the
+    # default fakes (so the run is insulated from upstream stations
+    # not under test).
+    gates = _make_gate_map()
+    gates["check_factcheck"] = _real_check_factcheck
+    config = _make_config_stub()
+
+    result = run_pipeline(
+        "morning",
+        date="2026-06-14",
+        no_tts=True,
+        dispatch=fake,
+        gates=gates,
+        config=config,
+        scratch_dir=scratch,
+    )
+
+    # --- FAIL-FIRST CONTRACT (pre-impl) ---
+    # Before task-1-impl lands the fix, run_pipeline returns
+    # status=="halted" failed_step=="factcheck": the retry re-runs
+    # finalize but `_build_step_prompt` doesn't thread the flagged
+    # claim into the second finalize prompt (no `ctx["factcheck_flagged"]`
+    # plumbing), so the second factcheck run still sees the untraceable
+    # quantifier → cap exhausted → halt.
+    # After task-1-impl, this assertion flips: status=="ok".
+    assert result.get("status") == "ok", (
+        f"去假自愈(flagged → 软化重派 → 过门)必须完成;若仍 halted,则是 "
+        f"1-impl 未把 flagged 串到 finalize 重派 prompt。got "
+        f"status={result.get('status')!r} failed_step={result.get('failed_step')!r} "
+        f"reason={result.get('reason')!r}; "
+        f"finalize_calls={finalize_call_count['n']}"
+    )
+
+    # finalize was dispatched ≥2 times (initial + retry after first
+    # factcheck miss).
+    assert finalize_call_count["n"] >= 2, (
+        f"self-heal must re-dispatch finalize (initial+retry); got "
+        f"{finalize_call_count['n']} call(s)"
+    )
+
+    # The SECOND finalize dispatch's prompt must contain the flagged
+    # claim text — proves the runner threaded the flagged list into
+    # `_build_step_prompt` for the retry pass.
+    finalize_prompts = [
+        c["user_prompt"] for c in fake.calls
+        if str(c.get("step", "")).startswith("finalize")
+    ]
+    assert len(finalize_prompts) >= 2, (
+        f"finalize must have been dispatched at least twice; got "
+        f"{len(finalize_prompts)} prompt(s)"
+    )
+    assert any(flagged_claim_text in p for p in finalize_prompts), (
+        f"second finalize prompt must carry the flagged claim text "
+        f"{flagged_claim_text!r} (proves ctx['factcheck_flagged'] → "
+        f"_build_step_prompt wiring); prompts={[p[:200] for p in finalize_prompts]!r}"
+    )
+
+    # The softened body must clear the 6500 non-whitespace char floor.
+    # `check_min_chars` does NOT cross-check the factcheck gate (gate
+    # only checks sourcing), so a softened-but-truncated body could
+    # ship through the heal — the test pins this risk (verifier
+    # heuristic in plan task-1-impl step 3).
+    final_body_path = scratch / "finalize-result.json"
+    assert final_body_path.exists(), (
+        f"finalize-result.json must exist on self-heal path; "
+        f"scratch contents: {sorted(p.name for p in scratch.iterdir())!r}"
+    )
+    final_body = json.loads(final_body_path.read_text(encoding="utf-8"))["body"]
+    non_ws = sum(1 for ch in final_body if not ch.isspace())
+    assert non_ws >= 6500, (
+        f"softened body must remain ≥6500 non-whitespace chars "
+        f"(check_min_chars does NOT cross-check factcheck gate); got "
+        f"{non_ws}"
+    )

@@ -1,0 +1,8 @@
+{
+  "name": "video-studio",
+  "version": "0.0.1",
+  "description": "教材 PDF → 结构化视频专栏 一键成片流水线（ffmpeg 引擎 + MiniMax 图/视频/语音）",
+  "author": {
+    "name": "Norvyn"
+  }
+}

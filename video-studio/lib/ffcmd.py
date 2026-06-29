@@ -242,3 +242,18 @@ def mux_final_ass_cmd(
         "-ac", "2",
         out_mp4,
     ]
+
+
+# Light narration polish: gentle compression for level evenness + loudnorm to a
+# broadcast target. Tonal EQ/exciter add no audible value on clean TTS (verified
+# by ear in a loudness-matched A/B), so we keep only the "invisible but correct"
+# loudness consistency — which also stabilizes the BGM sidechain ducking.
+LIGHT_VOICE_AF = (
+    "acompressor=threshold=-20dB:ratio=2:attack=10:release=150,"
+    "loudnorm=I=-16:TP=-1.5:LRA=11"
+)
+
+
+def voice_polish_cmd(in_mp3: str, out_mp3: str) -> list[str]:
+    """argv to apply the light narration polish (consistency + loudness)."""
+    return ["-i", in_mp3, "-af", LIGHT_VOICE_AF, out_mp3]

@@ -20,23 +20,27 @@ import sys
 from . import mmclient
 
 
-# Single voice id for v1; Stage 1 will move this into config.
-VOICE_ID = "male-qn-qingse"
+# Host voice. male-qn-jingying-jingpin (精英青年-精品, MiniMax 2nd-gen) — chosen
+# for premium timbre + natural phrasing, and consistency with the user's podcast
+# (same host voice across formats). Env-overridable now; Stage 1 moves it to
+# per-show config (different shows/topics can use different MiniMax voices —
+# pricing is per-character × model, NOT per voice_id, so switching is free).
+VOICE_ID = os.environ.get("VIDEO_VOICE_ID", "male-qn-jingying-jingpin")
 
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def synth(text: str, out_path: str, timeout: int = 120) -> int:
+def synth(text: str, out_path: str, timeout: int = 120, voice_id: str | None = None) -> int:
     """Synthesize `text` to an mp3 file and return its real length in ms.
 
     Args:
-        text: Narration text for this beat (Chinese by default; the voice
-            is locked to a single v1 id, see VOICE_ID).
+        text: Narration text for this beat (Chinese by default).
         out_path: Local file path to write the mp3 to. Parent directory
             must already exist.
         timeout: Request timeout in seconds.
+        voice_id: Override the host voice for this call (defaults to VOICE_ID).
 
     Returns:
         Integer audio length in milliseconds, taken from
@@ -52,7 +56,7 @@ def synth(text: str, out_path: str, timeout: int = 120) -> int:
         "text": text,
         "stream": False,
         "voice_setting": {
-            "voice_id": VOICE_ID,
+            "voice_id": voice_id or VOICE_ID,
             "speed": 1.0,
             "vol": 1.0,
             "pitch": 0,

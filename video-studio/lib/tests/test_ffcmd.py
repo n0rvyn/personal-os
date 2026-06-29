@@ -23,6 +23,7 @@ from lib.ffcmd import (
     concat_cmd,
     mux_final_cmd,
     mux_final_ass_cmd,
+    voice_polish_cmd,
 )
 
 
@@ -363,3 +364,11 @@ def test_mux_final_ass_burns_ass_and_ducks_bgm():
     assert "-map [aout]" in s, f"ducked audio not mapped: {s}"
     assert "subtitles=" not in s, f"should use ass= not subtitles=: {s}"
     assert isinstance(argv, list)  # no shell=True
+
+
+def test_voice_polish_cmd_loudnorm_and_compress():
+    argv = voice_polish_cmd("/t/in.mp3", "/t/out.mp3")
+    s = _joined(argv)
+    assert "-i /t/in.mp3" in s and argv[-1] == "/t/out.mp3"
+    assert "loudnorm" in s and "acompressor" in s
+    assert isinstance(argv, list)

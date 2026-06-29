@@ -171,9 +171,13 @@ def main() -> int:
         bid = beat["id"]
         vtype = beat["visual_type"]
 
-        # ---- 2. narration -> mp3 + audio_length ----
+        # ---- 2. narration -> mp3 (synth + light loudness polish) ----
         mp3 = os.path.join(SPIKE, f"{bid}.mp3")
-        reported_ms = media_tts.synth(beat["text"], mp3)
+        raw_mp3 = os.path.join(SPIKE, f"{bid}.raw.mp3")
+        reported_ms = media_tts.synth(beat["text"], raw_mp3)
+        # Light polish: consistency + broadcast loudness (NOT tonal — vendor
+        # voice is already mastered; voice choice is the real timbre lever).
+        _run_ff(ffcmd.voice_polish_cmd(raw_mp3, mp3), f"{bid}-voice")
         # Timing is driven by the ACTUAL mp3 duration, not the API-reported
         # audio_length (they differ by ~tens of ms). The video segment runs on
         # the real audio, so the srt must too — otherwise subtitles drift.

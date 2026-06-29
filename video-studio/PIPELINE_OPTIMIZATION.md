@@ -16,7 +16,7 @@
 | 1 | 脚本/文案（Stage 0 规划器） | ⬜ | 现用手写 fixture；PDF→大纲→分集脚本是 Stage 1 |
 | 2 | 分镜/配图（storyboard） | ✅ | LLM 读台词建场景 + 变机位 + 空镜 + 连续性 |
 | 3 | 人物一致 | ✅ | subject_reference，88s/~20图 不漂 |
-| 4 | 视频镜头 S2V | 🟡 | S2V-01 真验过、720p、不稳回退静图；同人待验(POC7) |
+| 4 | 视频镜头 S2V | ✅ | S2V-01 真验过；同人一致验过(POC7)；选择性增强(只关键动作镜) |
 | 5 | 图表 | ✅ | matplotlib 真渲染；数据动效是后续 |
 | 6 | 动态字幕 | ✅ | ASS 样式B + LLM 选择性关键词强调 |
 | 7 | 旁白音色 | ✅ | 选 voice 5 + 轻响度归一 |
@@ -53,12 +53,15 @@
 - **当前程度**：✅ image-01 `subject_reference` 锚定 character_ref。
 - **已做 & 结论**：88s、约 20 张不同生成图，开头/中段/结尾同一个人，不漂。
 - **失败/教训**：subject_reference 视频用 `image:[url]` 数组、图用 `image_file` 标量——格式不同（见 SPIKE_FINDINGS）。
+- **下载存盘按真实类型（bug 修，2026-06-29）**：MiniMax 返回的是 **JPEG 字节**，旧代码一律存成 `.png` 名——文件名撒谎。改 `media_image._download` 嗅探魔数（FFD8=jpg/89504E47=png/WEBP/GIF）按真实扩展名落盘并**返回实际路径**，`gen_still` 返回该路径、driver 用返回值喂 ffmpeg（不再假设 `.png`）。真机验过：请求 `.png` → 落 `.jpg`、`file` 认 JPEG、短片渲染绿。
 - **后续方向**：S2V 用同一 ref 验真一致（#4/POC7）；风格固定下的人物库。
 
 ## 4. 视频镜头 S2V
-- **当前程度**：🟡 `lib/media_video.py`，S2V-01 真跑通、下载、6s。
+- **当前程度**：✅ `lib/media_video.py`，S2V-01 真跑通、下载、6s；同人一致验过（POC7）。
 - **已做 & 结论**：**模型必须 `S2V-01`**（Hailuo T2V/I2V 报 2013 不支持）；响应扁平（task_id/status/file_id 顶层、download_url 在 file 下）；**实际出 720p**（ffmpeg 放大到1080p）；不稳/超时**回退静图**（6 分支判定，已验）。额度 21/周。
-- **后续方向**：POC7 同 ref 验人物一致 → 决定 S2V 进不进默认；多 S2V 镜头的预算门；时长/分辨率协商。
+- **POC7 同人一致（验过）**：同一 character_ref → 静图人物镜 + S2V 动态视频，肉眼同一人（脸型/眼镜/外套/气质一致），无身份漂移。帧间轻微变化（眼镜偶尔不明显）但识别始终同人。装置 `.spike/poc7_probe.py`，对比图 `.spike/poc7_consistency.png`。
+- **决策（用户拍板 2026-06-29）：S2V = 选择性增强**。只给关键动作镜（如跑姿示范），一条片 1–2 个，其余静图 Ken Burns。现 pipeline 已是此法（仅 `visual_type=video` beat 走 S2V），明确为默认策略。21/周额度不够每镜都用。
+- **后续方向**：多 S2V 镜头的预算门（Stage 1，单片 S2V 数上限）；时长/分辨率协商。
 
 ## 5. 图表
 - **当前程度**：✅ `lib/media_chart.py` matplotlib 真渲染，PingFang，1920×1080。
@@ -170,6 +173,8 @@
 - POC6 镜头节奏 ✅ 并入（content-driven 镜头数/停留 + MIN_DWELL 地板 + storyboard JSON 容错；98 测试绿、长片 drift 0.03s、UX PASS）。**副作用**：金句长留镜多给人物 → 加重"大B脸"，转 #14/POC8 治
 - **POC8 提前**：用户实测大B脸仍重，优先级提到 POC7 前
 - POC8 空镜/人物镜比例 ✅ 并入（内容忠实取代配额；长片 人5:空9=空镜64%，脸只在开场/金句/结尾；用户认可）。**教训**：先用硬配额两头甩(33%→85%)，用户点破"分镜按内容拆、不该规定出镜率"，改 content-faithful 才对
+- POC7 S2V 同人 ✅ 验过（同 ref 静图 vs 动态视频肉眼同人，花 1 条额度）。决策：S2V **选择性增强**（只关键动作镜）。顺手修 MiniMax 下载图存盘后缀名 bug（按真实类型落盘 + 返回实际路径）。100 测试绿
+- **八个 POC 全部完成** → next = 带全部增强的 E2E 完整验证 → `/write-dev-guide` 进 Stage 1
 - POC7 S2V 同人 ⬜
 - POC8 空镜/人物镜比例 ⬜
 - → 八个并完做一次带全部增强的 **E2E 完整验证**，再 `/write-dev-guide` 进 Stage 1。

@@ -186,7 +186,9 @@ def main() -> int:
         for j, (sh, slice_s) in enumerate(zip(shots, durs)):
             spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
             ref = ref_url if sh.get("with_character", True) else None
-            media_image.gen_still(sh["prompt"], ref, spng)
+            # gen_still returns the ACTUAL path (real extension, e.g. .jpg) —
+            # use it for ffmpeg, don't assume the .png name we passed in.
+            spng = media_image.gen_still(sh["prompt"], ref, spng)
             sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
             _run_ff(ffcmd.still_clip_cmd(spng, slice_s, sub, grade_vf), f"{bid}-shot{j}")
             subs.append(sub)
@@ -242,6 +244,10 @@ def main() -> int:
             _run_ff(ffcmd.still_clip_cmd(png, clip_len, clip), f"clip-{bid}")
             log(f"[{bid}] chart -> {png}")
         elif vtype == "video":
+            # S2V is a SELECTIVE enhancement (decision 2026-06-29): only beats
+            # explicitly marked visual_type=video spend an S2V credit (key motion
+            # shots like a running-form demo); everything else stays a still.
+            # Video credits are scarce (21/week), so this is NOT default-on.
             used_still = True
             vmp4 = os.path.join(SPIKE, f"{bid}.mp4")
             # Reuse hook: SPIKE_S2V_CLIP lets a re-run drop in an already-paid
@@ -292,21 +298,25 @@ def main() -> int:
     tcfg = {**cards.DEFAULT_TITLE, **card_cfg.get("title", {})}
     ecfg = {**cards.DEFAULT_END, **card_cfg.get("end", {})}
 
-    title_bg = os.path.join(SPIKE, "card_title_bg.png")
-    end_bg = os.path.join(SPIKE, "card_end_bg.png")
     # Reuse hooks (mirror SPIKE_S2V_CLIP): point at an already-generated card bg
     # so POC5–8 / rebuild runs don't regenerate the backgrounds every time.
-    for hook, prompt, out in (("SPIKE_CARD_TITLE_BG", tcfg["bg_prompt"], title_bg),
-                              ("SPIKE_CARD_END_BG", ecfg["bg_prompt"], end_bg)):
+    def _card_bg(hook: str, prompt: str, out: str) -> str:
         reuse = os.environ.get(hook)
         if reuse:
             import shutil
             if os.path.abspath(reuse) != os.path.abspath(out):
                 shutil.copy(reuse, out)
             log(f"[card] reusing bg {reuse}")
-        else:
-            media_image.gen_still(prompt, None, out)
-            log(f"[card] gen bg -> {out}")
+            return out
+        # gen_still returns the ACTUAL saved path (real extension) — use it.
+        actual = media_image.gen_still(prompt, None, out)
+        log(f"[card] gen bg -> {actual}")
+        return actual
+
+    title_bg = _card_bg("SPIKE_CARD_TITLE_BG", tcfg["bg_prompt"],
+                        os.path.join(SPIKE, "card_title_bg.png"))
+    end_bg = _card_bg("SPIKE_CARD_END_BG", ecfg["bg_prompt"],
+                      os.path.join(SPIKE, "card_end_bg.png"))
 
     title_ass = os.path.join(SPIKE, "card_title.ass")
     with open(title_ass, "w", encoding="utf-8") as f:

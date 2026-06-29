@@ -68,35 +68,58 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def _download(url: str, out_path: str, timeout: int = 120) -> None:
-    """Download `url` to `out_path` with timeout and size cap.
+def _ext_for_magic(head: bytes) -> str | None:
+    """Real image extension from leading magic bytes, or None if unrecognised.
+    MiniMax returns JPEG bytes even when we ask to save as .png — we honour the
+    real type instead of letting the on-disk filename lie about the format."""
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head[:4] in (b"GIF8",):
+        return ".gif"
+    return None
 
-    Streams in chunks so we can abort early on oversize responses.
+
+def _download(url: str, out_path: str, timeout: int = 120) -> str:
+    """Download `url`, save it under a path whose extension matches the REAL
+    content type (sniffed from magic bytes — the remote often sends JPEG for a
+    .png request), and return that actual path. Streams in chunks with a size
+    cap so we can abort early on oversize responses.
     """
     req = urllib.request.Request(url, headers={"User-Agent": "video-studio/0.0.1"})
     written = 0
+    dest = out_path
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            with open(out_path, "wb") as fh:
-                while True:
-                    chunk = resp.read(64 * 1024)
-                    if not chunk:
-                        break
+            first = resp.read(64 * 1024)
+            ext = _ext_for_magic(first[:16])
+            if ext:
+                stem, cur = os.path.splitext(out_path)
+                if cur.lower() != ext:
+                    dest = stem + ext
+            with open(dest, "wb") as fh:
+                chunk = first
+                while chunk:
                     written += len(chunk)
                     if written > _MAX_DOWNLOAD_BYTES:
                         fh.close()
                         try:
-                            os.remove(out_path)
+                            os.remove(dest)
                         except OSError:
                             pass
                         raise RuntimeError(
                             f"download from {url} exceeded {_MAX_DOWNLOAD_BYTES} bytes"
                         )
                     fh.write(chunk)
+                    chunk = resp.read(64 * 1024)
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"download HTTP {e.code} from {url}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"download connection error from {url}: {e}") from e
+    return dest
 
 
 def gen_character_ref(prompt: str, out_path: str) -> str:
@@ -124,7 +147,7 @@ def gen_character_ref(prompt: str, out_path: str) -> str:
     url = _request_image_url(payload)
 
     _log(f"[media_image] downloading character_ref to {out_path}")
-    _download(url, out_path)
+    _download(url, out_path)  # saved under its real extension; ref is used via url
     return url
 
 
@@ -140,7 +163,9 @@ def gen_still(prompt: str, character_ref_url: str | None, out_path: str) -> str:
         out_path: Local file path to write the downloaded PNG to.
 
     Returns:
-        out_path (the local file path).
+        The ACTUAL local path written — its extension matches the real content
+        type (e.g. `.jpg` when the remote returns JPEG for a `.png` request), so
+        callers must use this return value, not the path they passed in.
 
     Raises:
         RuntimeError: on API failure, missing image_urls, or download failure.
@@ -160,8 +185,7 @@ def gen_still(prompt: str, character_ref_url: str | None, out_path: str) -> str:
     url = _request_image_url(payload)
 
     _log(f"[media_image] downloading still to {out_path}")
-    _download(url, out_path)
-    return out_path
+    return _download(url, out_path)
 
 
 # ---------------------------------------------------------------------------

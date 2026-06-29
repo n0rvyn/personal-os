@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 
-from lib import media_image, media_tts, media_video, media_chart, ffcmd
+from lib import media_image, media_tts, media_video, media_chart, ffcmd, cards
 from lib.subtitle import build_ass
 from spike_acceptance import measure_gap
 
@@ -123,7 +123,11 @@ def main() -> int:
     clip_durs: list[float] = []
     mp3s: list[str] = []
     srt_beats: list[dict] = []
-    start_ms = 0
+    # The title card occupies the front of the timeline (TITLE_DUR of silent
+    # narration), so the first beat's audio + subtitles start at TITLE_DUR, not
+    # 0. Pre-offsetting start_ms here shifts EVERY beat subtitle by the card
+    # length — otherwise the whole subtitle track drifts earlier by ~2.6s.
+    start_ms = round(cards.TITLE_DUR * 1000)
 
     # ---- optional storyboard (分镜): content-aware, shot-varied, continuous ----
     sb = None
@@ -239,7 +243,65 @@ def main() -> int:
         clip_durs.append(clip_len)
         mp3s.append(mp3)
 
-    total_audio_ms = start_ms
+    # ---- 3b. title + end cards (POC4): AI background + code design layer ----
+    # Cards are video-only clips that join the xfade chain exactly like beats;
+    # their narration slots are filled with silence so the body audio/subtitles
+    # stay aligned (start_ms was pre-offset by TITLE_DUR above). gen_still with
+    # character_ref=None makes a character-less (空镜) background.
+    card_cfg = fixture.get("cards", {})
+    tcfg = {**cards.DEFAULT_TITLE, **card_cfg.get("title", {})}
+    ecfg = {**cards.DEFAULT_END, **card_cfg.get("end", {})}
+
+    title_bg = os.path.join(SPIKE, "card_title_bg.png")
+    end_bg = os.path.join(SPIKE, "card_end_bg.png")
+    # Reuse hooks (mirror SPIKE_S2V_CLIP): point at an already-generated card bg
+    # so POC5–8 / rebuild runs don't regenerate the backgrounds every time.
+    for hook, prompt, out in (("SPIKE_CARD_TITLE_BG", tcfg["bg_prompt"], title_bg),
+                              ("SPIKE_CARD_END_BG", ecfg["bg_prompt"], end_bg)):
+        reuse = os.environ.get(hook)
+        if reuse:
+            import shutil
+            if os.path.abspath(reuse) != os.path.abspath(out):
+                shutil.copy(reuse, out)
+            log(f"[card] reusing bg {reuse}")
+        else:
+            media_image.gen_still(prompt, None, out)
+            log(f"[card] gen bg -> {out}")
+
+    title_ass = os.path.join(SPIKE, "card_title.ass")
+    with open(title_ass, "w", encoding="utf-8") as f:
+        f.write(cards.build_title_ass(tcfg["tag"], tcfg["title"], tcfg["subtitle"]))
+    end_ass = os.path.join(SPIKE, "card_end.ass")
+    with open(end_ass, "w", encoding="utf-8") as f:
+        f.write(cards.build_end_ass(ecfg["tag"], ecfg["bullets"], ecfg["footer"]))
+
+    # Card clip length = on-screen dur + fade (the overlap the xfade consumes),
+    # same convention as a beat clip.
+    title_clip = os.path.join(SPIKE, "clip_title.mp4")
+    end_clip = os.path.join(SPIKE, "clip_end.mp4")
+    title_len = cards.TITLE_DUR + ffcmd.DISSOLVE_FADE
+    end_len = cards.END_DUR + ffcmd.DISSOLVE_FADE
+    _run_ff(ffcmd.still_card_cmd(title_bg, title_len, title_ass, title_clip), "card-title")
+    _run_ff(ffcmd.still_card_cmd(end_bg, end_len, end_ass, end_clip), "card-end")
+
+    # Silence segments (mono/32k mp3, matching the TTS beats) fill the cards'
+    # narration slots so mux's -shortest doesn't truncate them.
+    sil_title = os.path.join(SPIKE, "card_sil_title.mp3")
+    sil_end = os.path.join(SPIKE, "card_sil_end.mp3")
+    _run_ff(ffcmd.silence_mp3_cmd(cards.TITLE_DUR, sil_title), "card-sil-title")
+    _run_ff(ffcmd.silence_mp3_cmd(cards.END_DUR, sil_end), "card-sil-end")
+
+    # Prepend the title / append the end card to BOTH tracks.
+    vid_clips = [title_clip] + vid_clips + [end_clip]
+    clip_durs = [title_len] + clip_durs + [end_len]
+    mp3s = [sil_title] + mp3s + [sil_end]
+
+    # start_ms after the loop = TITLE + Σbeats; add the trailing end-card silence
+    # so total_audio_ms (drives meta + the acceptance duration check) covers the
+    # full timeline: TITLE + Σbeats + END.
+    total_audio_ms = start_ms + round(cards.END_DUR * 1000)
+    log(f"[card] title {cards.TITLE_DUR}s + body + end {cards.END_DUR}s "
+        f"-> total {total_audio_ms}ms")
 
     # ---- 4. assemble base.mp4: xfade video chain + hard-concat narration ----
     a_list = os.path.join(SPIKE, "narration.txt")

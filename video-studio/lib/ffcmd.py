@@ -278,6 +278,31 @@ def still_clip_cmd(png: str, dur_s: float, out_mp4: str) -> list[str]:
     ]
 
 
+def still_card_cmd(bg_png: str, dur_s: float, ass: str, out_mp4: str) -> list[str]:
+    """Video-only title/end card clip: Ken Burns push-in on the AI background,
+    with the libass design overlay (`ass`) burned in the same pass. No audio —
+    the card joins the xfade dissolve chain like a still clip; its narration
+    slot is filled by a matching silence segment (see silence_mp3_cmd)."""
+    vf = _still_or_chart_filtergraph(dur_s) + f",ass={ass}"
+    return [
+        "-loop", "1", "-i", bg_png, "-t", str(dur_s), "-r", "30", "-vf", vf,
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
+    ]
+
+
+def silence_mp3_cmd(dur_s: float, out_mp3: str) -> list[str]:
+    """Generate a silence mp3 matching the MiniMax TTS narration params
+    (mono, 32000 Hz, mp3) so it concats cleanly with the beat mp3s in the
+    narration track. Used to pad the front/back of the narration for the
+    (silent) title/end cards so mux's -shortest doesn't truncate them."""
+    return [
+        "-f", "lavfi",
+        "-i", "anullsrc=channel_layout=mono:sample_rate=32000",
+        "-t", str(dur_s), "-ar", "32000", "-ac", "1",
+        "-c:a", "libmp3lame", out_mp3,
+    ]
+
+
 def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str) -> list[str]:
     """Video-only S2V clip normalized to 1920x1080/30 and padded to dur_s."""
     vf = (

@@ -23,7 +23,7 @@
 | 8 | 声音设计（SFX/环境/BGM情绪） | ❌/🟡 | 合成SFX验为负(放弃)；真BGM=后期优化项 |
 | 9 | 转场 | ✅ | beat 间 0.3s 叠化；剪辑点跳过 |
 | 10 | 调色（LUT） | ⬜ | POC5 待做 |
-| 11 | 片头/片尾卡 | 🟡 | 设计版B（AI背景+分栏+总结卡）原型过，待并入 |
+| 11 | 片头/片尾卡 | ✅ | 设计版B 并入 pipeline；卡进 xfade 链 + 静音补轨 + 字幕偏移 |
 | 12 | 封面（thumbnail） | ⬜ | 约定 title/end 定稿后做 |
 | 13 | 镜头节奏 | ⬜ | POC6 待做（动态镜头数/避雷同） |
 | 14 | 空镜/人物镜比例 | ⬜ | POC8 待做 |
@@ -90,9 +90,10 @@
 - **后续方向**：统一 LUT/曲线压住各图色温漂移、建立视觉签名（ffmpeg lut3d/curves）。
 
 ## 11. 片头/片尾卡
-- **当前程度**：🟡 设计版 **B** 原型验过（`.spike/poc_cards2.py`），待并入 pipeline。
+- **当前程度**：✅ 设计版 **B** 并入 pipeline（`lib/cards.py` 纯 ASS 构建器 + `ffcmd.still_card_cmd`/`silence_mp3_cmd` + `spike_run.py` 接线）。
 - **已做 & 结论**：v1（文字叠照片）缺设计感 → B = **AI 按主题出背景（主体偏位、留白给字）+ 代码设计层**（分栏、金色色条、类型层级、统一强调色）。结尾卡 = **"本期3要点"总结卡**（可截图、有获得感、利传播）。**AI 出图只管背景，做不了版式/文字**（AI 写字乱码）。
-- **后续方向**：并入 driver（片头淡入进正片、片尾从尾镜淡出）；文案/要点/栏目名进 config；要点由分镜那步从台词自动汇总；想更高一档上 **C（HTML/CSS 模板渲染）**设计自由度拉满。
+- **接线要点（并入时实测）**：① 卡是 video-only clip，和 beat 一样进 `xfade_chain_cmd`（clip 长 = 卡时长 + DISSOLVE_FADE）；② 卡无旁白 → narration 轨前后补**等长静音 mp3**（mono/32k 对齐 TTS，否则 concat demuxer 错时），不然 mux `-shortest` 截掉卡；③ **字幕 `start_ms` 预偏移 `TITLE_DUR`**，否则全轨字幕早漂 2.6s（首句应在 0:00:02.60，已验）；④ 背景一遍过烧字（Ken Burns + `ass=` 同 `-vf`），不用两道 ffmpeg。复用钩子 `SPIKE_CARD_TITLE_BG/END_BG`。
+- **后续方向**：文案/要点/栏目名进 Stage 1 config；要点由分镜那步从台词自动汇总（现手写占位）；想更高一档上 **C（HTML/CSS 模板渲染）**设计自由度拉满。
 
 ## 12. 封面（thumbnail）
 - **当前程度**：⬜ 约定 title/end 定稿后做。
@@ -110,7 +111,8 @@
 ## 15. BGM 响度 / ducking
 - **当前程度**：✅ `mux_final_ass_cmd` sidechaincompress + amix；`spike_acceptance.measure_gap` 实测 gap，校准循环保证 ≥18dB。
 - **已做 & 结论**：用户历史痛点（让调小也偏大）→ 写死 dB + 实测，不靠提示词。占位 pad 当前 gap 30–40dB。
-- **后续方向**：换真音乐后重校；情绪段落动态音量。
+- **POC4 后已知交互**：`measure_gap` 对整条 base.mp4 平均测响度；并入卡片后前后多 5.6s 静音区（BGM 不被 ducking 压），会让 gap 读数偏小。占位 pad 余量大（实测 35dB、一轮过）暂不受影响；**换真 BGM 时**要把测窗口收到旁白活跃段（`TITLE_DUR .. TITLE_DUR+Σ旁白`）再校。
+- **后续方向**：换真音乐后重校（并改 measure_gap 测窗口，见上）；情绪段落动态音量。
 
 ## 16. 时间轴 / 字幕对齐
 - **当前程度**：✅ 用 **实测 mp3 时长**（ffprobe）驱动 srt + 视频，不用 API 报的 audio_length。
@@ -148,7 +150,7 @@
 - POC1 动态关键词字幕 ✅ 并入（72e3083, 02432d4）
 - POC2 声音设计 ✅ 收口（a1cb6c3；voice+响度并入，SFX放弃，真BGM后期）
 - POC3 转场 ✅ 并入（3bdb627, 5bdc853；叠化0.3s，剪辑点跳过）
-- POC4 片头/片尾卡 🟡 设计B验过、**待并入**
+- POC4 片头/片尾卡 ✅ 并入（`lib/cards.py` + `still_card_cmd`/`silence_mp3_cmd` + driver 接线；字幕偏移已验、79 测试绿、UX-001/003 PASS）
 - POC5 调色 LUT ⬜
 - POC6 镜头节奏 ⬜
 - POC7 S2V 同人 ⬜

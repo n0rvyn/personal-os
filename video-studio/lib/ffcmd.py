@@ -30,12 +30,19 @@ def _still_or_chart_filtergraph(dur_s: float) -> str:
 
     Ken Burns via zoompan (subtle 1.0 -> 1.1 over the segment), preceded by a
     scale+crop that forces the source to fill 1920x1080.
+
+    The per-frame zoom increment is derived from the segment's frame count so
+    the push-in spreads across the WHOLE segment and reaches 1.1 only on the
+    last frame. A fixed increment (e.g. 0.0015) hits the 1.1 cap in ~2.2s and
+    then freezes the image while the narration keeps playing — the late-frame
+    "image stops moving but subtitle still reading" bug.
     """
-    frames = int(dur_s * 30)
+    frames = max(int(dur_s * 30), 1)
+    inc = 0.1 / frames  # total 1.0 -> 1.1 spread evenly over the segment
     return (
         "scale=1920:1080:force_original_aspect_ratio=increase,"
         "crop=1920:1080,"
-        f"zoompan=z='min(zoom+0.0015,1.1)':d={frames}:s=1920x1080:fps=30"
+        f"zoompan=z='min(zoom+{inc:.6f},1.1)':d={frames}:s=1920x1080:fps=30"
     )
 
 

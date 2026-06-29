@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 
-from lib import media_image, media_tts, media_video, media_chart, ffcmd, cards
+from lib import media_image, media_tts, media_video, media_chart, ffcmd, cards, grade
 from lib.subtitle import build_ass
 from spike_acceptance import measure_gap
 
@@ -119,6 +119,11 @@ def main() -> int:
         ref_url = media_image.gen_character_ref(cref["prompt"], cref_out)
 
     beats = fixture["beats"]
+    # POC5: one locked color grade (the column's 冷蓝晨光 signature) applied to
+    # every photographic shot (stills / S2V / card bg) so they don't drift
+    # warm↔cool. Charts are excluded (keep data readable).
+    grade_vf = grade.grade_filter()
+    log(f"[grade] series look = {grade.SERIES_LOOK}")
     vid_clips: list[str] = []
     clip_durs: list[float] = []
     mp3s: list[str] = []
@@ -151,7 +156,7 @@ def main() -> int:
             ref = ref_url if sh.get("with_character", True) else None
             media_image.gen_still(sh["prompt"], ref, spng)
             sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
-            _run_ff(ffcmd.still_clip_cmd(spng, slice_s, sub), f"{bid}-shot{j}")
+            _run_ff(ffcmd.still_clip_cmd(spng, slice_s, sub, grade_vf), f"{bid}-shot{j}")
             subs.append(sub)
         if len(subs) == 1:
             shutil.copy(subs[0], out_clip)
@@ -199,6 +204,7 @@ def main() -> int:
             png = os.path.join(SPIKE, f"{bid}.png")
             media_chart.render_pace_table(
                 beat["chart_title"], [tuple(r) for r in beat["chart_rows"]], png)
+            # No grade on charts — keep the designed data colours readable.
             _run_ff(ffcmd.still_clip_cmd(png, clip_len, clip), f"clip-{bid}")
             log(f"[{bid}] chart -> {png}")
         elif vtype == "video":
@@ -211,13 +217,13 @@ def main() -> int:
                 import shutil
                 if os.path.abspath(reuse_clip) != os.path.abspath(vmp4):
                     shutil.copy(reuse_clip, vmp4)
-                _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip), f"clip-{bid}")
+                _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf), f"clip-{bid}")
                 used_still = False
                 log(f"[{bid}] reusing provided S2V clip {reuse_clip}")
             elif live_video:
                 res = media_video.gen_video(beat["video_prompt"], ref_url, vmp4)
                 if res.get("ok"):
-                    _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip), f"clip-{bid}")
+                    _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf), f"clip-{bid}")
                     used_still = False
                     log(f"[{bid}] S2V ok -> {vmp4} (file_id={res.get('file_id')})")
                 else:
@@ -281,8 +287,8 @@ def main() -> int:
     end_clip = os.path.join(SPIKE, "clip_end.mp4")
     title_len = cards.TITLE_DUR + ffcmd.DISSOLVE_FADE
     end_len = cards.END_DUR + ffcmd.DISSOLVE_FADE
-    _run_ff(ffcmd.still_card_cmd(title_bg, title_len, title_ass, title_clip), "card-title")
-    _run_ff(ffcmd.still_card_cmd(end_bg, end_len, end_ass, end_clip), "card-end")
+    _run_ff(ffcmd.still_card_cmd(title_bg, title_len, title_ass, title_clip, grade_vf), "card-title")
+    _run_ff(ffcmd.still_card_cmd(end_bg, end_len, end_ass, end_clip, grade_vf), "card-end")
 
     # Silence segments (mono/32k mp3, matching the TTS beats) fill the cards'
     # narration slots so mux's -shortest doesn't truncate them.

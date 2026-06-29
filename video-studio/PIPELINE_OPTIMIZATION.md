@@ -22,7 +22,7 @@
 | 7 | 旁白音色 | ✅ | 选 voice 5 + 轻响度归一 |
 | 8 | 声音设计（SFX/环境/BGM情绪） | ❌/🟡 | 合成SFX验为负(放弃)；真BGM=后期优化项 |
 | 9 | 转场 | ✅ | beat 间 0.3s 叠化；剪辑点跳过 |
-| 10 | 调色（LUT） | ⬜ | POC5 待做 |
+| 10 | 调色（LUT） | ✅ | 栏目级锁一个 look（冷蓝晨光）套实拍镜头；图表排除 |
 | 11 | 片头/片尾卡 | ✅ | 设计版B 并入 pipeline；卡进 xfade 链 + 静音补轨 + 字幕偏移 |
 | 12 | 封面（thumbnail） | ⬜ | 约定 title/end 定稿后做 |
 | 13 | 镜头节奏 | ⬜ | POC6 待做（动态镜头数/避雷同） |
@@ -86,8 +86,16 @@
 - **后续方向**：相邻同人物特写时智能改短/换硬切减鬼影；按内容选转场类型（章节用叠化、章节内硬切）。
 
 ## 10. 调色（LUT）
-- **当前程度**：⬜ POC5 待做。
-- **后续方向**：统一 LUT/曲线压住各图色温漂移、建立视觉签名（ffmpeg lut3d/curves）。
+- **当前程度**：✅ `lib/grade.py` 调色板，栏目级锁 **冷蓝晨光** 一个 look；`spike_run.py` 把这层套到所有**实拍镜头**（静图 + S2V + 卡片背景）。
+- **架构（用户拍板 2026-06-29）**：调色 = **栏目级视觉签名**，不是每集让 LLM 自由挑——每集换色 = 系列散、没牌面。一个 look 锁死 = 品牌识别。一个 look 同时绑两半：① grade 滤镜（colorbalance+curves+eq），② 出图 STYLE_PREFIX（两者同管整片长相，必须一致，所以 `media_image.STYLE_PREFIX` 改为从 `grade.style_prefix()` 取，单一真源）。
+- **已做 & 结论**：① **图表排除**（matplotlib 设计数据，套冷色白底发蓝、数字难读）——driver 里 chart 那支不传 grade，对照帧前后一模一样；② **卡片先调背景后烧字**（grade 进 `still_card_cmd` 的 ass 之前），背景变冷而金色条/白字纹丝不动（已验）；③ 嵌入渲染链（zoompan→grade→ass，curves 带空格用单引号包）能正常出片，先单帧验再跑整片。
+- **失败/教训（重要）**：**uniform grade 只"套同一层色调"，不消除镜头间的相对冷暖漂移**——金光镜 vs 冷内景套同一滤镜后，金的还是相对更暖。用户实测"效果不明显"——这是**克制取舍的预期结果**（调重了就像滤镜、破坏"平静电影感"调性）。要真把漂移压平，得上**每镜自动白平衡**（见后续），那是另一档更狠的活，不是 uniform grade 能给的。
+- **后续方向（按需求优先级）**：
+  1. **每镜自动白平衡**（gray-world / 直方图归一）——真正消除冷暖漂移；uniform grade 之上的独立一步，效果明显但风险高（可能洗掉刻意的暖调晨光）。
+  2. **强度可调** + 浓淡分档：现参数偏轻，进 config 让栏目按需调浓/淡。
+  3. **LLM 立项时推荐 look**：Stage 1 栏目立项，AI 从调色板推荐一个、人拍板锁；不是每集 re-roll。
+  4. **lut3d / .cube 外部 LUT**：接专业调色 LUT 文件（现用 curves/colorbalance 程序化，够 POC；专业级上 .cube）。
+  5. 暖金 / 橙青两个备选 look 已在板里（`grade.LOOKS`），换栏目改 `SERIES_LOOK` 即可。
 
 ## 11. 片头/片尾卡
 - **当前程度**：✅ 设计版 **B** 并入 pipeline（`lib/cards.py` 纯 ASS 构建器 + `ffcmd.still_card_cmd`/`silence_mp3_cmd` + `spike_run.py` 接线）。
@@ -151,7 +159,7 @@
 - POC2 声音设计 ✅ 收口（a1cb6c3；voice+响度并入，SFX放弃，真BGM后期）
 - POC3 转场 ✅ 并入（3bdb627, 5bdc853；叠化0.3s，剪辑点跳过）
 - POC4 片头/片尾卡 ✅ 并入（`lib/cards.py` + `still_card_cmd`/`silence_mp3_cmd` + driver 接线；字幕偏移已验、79 测试绿、UX-001/003 PASS）
-- POC5 调色 LUT ⬜
+- POC5 调色 LUT ✅ 并入（`lib/grade.py` 栏目级锁 look + 实拍镜头套色、图表排除、卡片先调后烧字；84 测试绿、UX-001/003 PASS）。**取舍**：uniform grade 效果克制（重了像滤镜）；要消除冷暖漂移得上每镜自动白平衡（见 #10 后续 1）
 - POC6 镜头节奏 ⬜
 - POC7 S2V 同人 ⬜
 - POC8 空镜/人物镜比例 ⬜

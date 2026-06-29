@@ -269,21 +269,36 @@ def voice_polish_cmd(in_mp3: str, out_mp3: str) -> list[str]:
 DISSOLVE_FADE = 0.3  # seconds of cross-dissolve between beats (0.3 ≈ less face-on-face ghosting)
 
 
-def still_clip_cmd(png: str, dur_s: float, out_mp4: str) -> list[str]:
-    """Video-only Ken Burns clip (no narration) — for the xfade assembly."""
+def still_clip_cmd(png: str, dur_s: float, out_mp4: str,
+                   grade: str | None = None) -> list[str]:
+    """Video-only Ken Burns clip (no narration) — for the xfade assembly.
+
+    `grade` (POC5): an optional color-grade filterchain appended AFTER the Ken
+    Burns push-in, so photographic stills share the series look. Pass None for
+    charts (keep the designed data readable)."""
+    vf = _still_or_chart_filtergraph(dur_s)
+    if grade:
+        vf += f",{grade}"
     return [
         "-loop", "1", "-i", png, "-t", str(dur_s), "-r", "30",
-        "-vf", _still_or_chart_filtergraph(dur_s),
+        "-vf", vf,
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
     ]
 
 
-def still_card_cmd(bg_png: str, dur_s: float, ass: str, out_mp4: str) -> list[str]:
+def still_card_cmd(bg_png: str, dur_s: float, ass: str, out_mp4: str,
+                   grade: str | None = None) -> list[str]:
     """Video-only title/end card clip: Ken Burns push-in on the AI background,
     with the libass design overlay (`ass`) burned in the same pass. No audio —
     the card joins the xfade dissolve chain like a still clip; its narration
-    slot is filled by a matching silence segment (see silence_mp3_cmd)."""
-    vf = _still_or_chart_filtergraph(dur_s) + f",ass={ass}"
+    slot is filled by a matching silence segment (see silence_mp3_cmd).
+
+    `grade` (POC5): applied to the background BEFORE the ass overlay, so the card
+    bg matches the body's look while the amber/white design layer stays pure."""
+    vf = _still_or_chart_filtergraph(dur_s)
+    if grade:
+        vf += f",{grade}"
+    vf += f",ass={ass}"
     return [
         "-loop", "1", "-i", bg_png, "-t", str(dur_s), "-r", "30", "-vf", vf,
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
@@ -303,13 +318,19 @@ def silence_mp3_cmd(dur_s: float, out_mp3: str) -> list[str]:
     ]
 
 
-def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str) -> list[str]:
-    """Video-only S2V clip normalized to 1920x1080/30 and padded to dur_s."""
+def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str,
+                   grade: str | None = None) -> list[str]:
+    """Video-only S2V clip normalized to 1920x1080/30 and padded to dur_s.
+
+    `grade` (POC5): optional color-grade filterchain so the S2V footage shares
+    the series look with the stills."""
     vf = (
         "scale=1920:1080:force_original_aspect_ratio=increase,"
         "crop=1920:1080,"
         f"tpad=stop_mode=clone:stop_duration={int(dur_s) + 1},fps=30"
     )
+    if grade:
+        vf += f",{grade}"
     return [
         "-i", src_mp4, "-t", str(dur_s), "-r", "30", "-vf", vf,
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,

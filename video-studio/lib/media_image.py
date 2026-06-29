@@ -51,11 +51,13 @@ def _request_image_url(payload: dict, timeout: int = 180, sleep_fn=time.sleep) -
     )
 
 
-# Unified style prefix for every generated still. Single style v1 per
-# video-studio crystal: 风格 = 模块级 style 前缀（v1 全同一种，同模块内强一致）.
-STYLE_PREFIX = (
-    "cinematic, cool morning light, film grain, realistic, no text"
-)
+# Unified style prefix for every generated still. The prefix is HALF of the
+# series look (the other half is the color grade); both live in lib.grade so
+# they're locked together at the column level (POC5). Sourced from the locked
+# SERIES_LOOK so the pictures are generated toward the same look the grade locks.
+from .grade import style_prefix as _series_style_prefix
+
+STYLE_PREFIX = _series_style_prefix()
 
 
 # Cap download size to defend against malicious/huge remote responses.

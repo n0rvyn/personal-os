@@ -266,7 +266,7 @@ def voice_polish_cmd(in_mp3: str, out_mp3: str) -> list[str]:
 # video cross-dissolves at each beat boundary.
 # ---------------------------------------------------------------------------
 
-DISSOLVE_FADE = 0.5  # seconds of cross-dissolve between beats
+DISSOLVE_FADE = 0.3  # seconds of cross-dissolve between beats (0.3 ≈ less face-on-face ghosting)
 
 
 def still_clip_cmd(png: str, dur_s: float, out_mp4: str) -> list[str]:

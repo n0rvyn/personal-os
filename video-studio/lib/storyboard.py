@@ -16,12 +16,18 @@ only (the model sees them so continuity flows around them).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
 
-# Per project rule: dispatched personas (claude -p) MUST be pinned to sonnet.
+# Storyboard model = real Claude Sonnet (the user disabled the sonnet→MiniMax-M3
+# ModelProxy on 2026-06-29, so `--model sonnet` now resolves to genuine Sonnet —
+# strong enough for on-topic shot prompts; the earlier off-topic drift was the
+# weak M3 backend, not the tier). Shot-variety + empty-shot quality are also
+# handled structurally (prompt rules + the driver's 空镜 no-person clamp).
 DEFAULT_MODEL = "sonnet"
+DEFAULT_EFFORT = "low"
 
 # POC6 shot-rhythm: each shot's `pace` maps to a relative dwell weight. Coarse
 # buckets (not a free float) give more consistent output from the LLM and a
@@ -50,17 +56,17 @@ def _build_prompt(beats: list[dict], character_desc: str, style: str) -> str:
 
 要求：
 1. 理解这一句在讲什么，构建一个能体现这句【内容】的具体场景，绝不要千篇一律的"教练正脸对镜头讲话"。
-2. 多变机位与景别：特写、中景、全景、过肩、手部特写、脚步特写、俯拍、跟拍、空镜（无人物的环境/细节）。
+2. 【景别以"宽"为主，远离大B脸】默认 全景 / 远景 / 中景，把人放进环境里（全身奔跑、站在跑道上的中远景、背影、剪影）。**正脸特写极少用**——仅当某句金句确实只能靠表情传递时偶尔一次，且也不要怼满整个画面。**开场第一镜【绝不】用人物正脸特写（那像遗照）**：用 establishing 的远景/全景，或纯空镜（晨雾跑道、城市苏醒、起跑线）开场。机位仍要多变：全景、远景、中景、过肩、背影、手部/脚步特写、俯拍、跟拍、空镜。
 3. 相邻段落要有【连续性】：同一地点换机位、时间或动作自然推进、色调统一，让画面像跟着内容往前走，而不是随机拼贴。
 4. 【镜头跟着内容走，不要默认正脸】先问这一句在讲的东西，用什么画面最能体现，就画那个：
    - 讲【概念 / 原理 / 数据 / 列举 / 方法步骤】（解说句占大多数）→ 画它说的【事物本身】：跑道、配速表意象、跑鞋、运动手表/表盘、地面脚步、起跑线、城市晨景、光影等空镜或动作细节（with_character=false），而不是教练正脸。
-   - 【只有】这些时刻才用人物正脸（with_character=true）：开场/结尾的直接对话、靠眼神或表情才能传递的金句、或这一句本身就在讲教练在做某个动作。
+   - 【只有】这些时刻才让人物出现（with_character=true）：开场/结尾的直接对话、靠眼神或表情才能传递的金句、或这一句本身就在讲教练在做某个动作。**且人物镜也要中景/全景、把人放在环境里（奔跑/站位/背影），不是怼脸正脸特写**。
    - 绝不要因为"不知道放什么"就默认"教练正脸对镜头讲话"——那正是"大B脸"的来源。比例不设死，让它从内容自然来。
 5. 标 [图表] 的段落已用数据图表，标 [实拍视频] 的段落已有真人跑姿视频——这两类你给的镜头仅作前后连贯参考，照常输出但driver会忽略它们的图。
 6. 【镜头节奏】按内容动态决定每段镜头数与停留长短，每个镜头标 pace ∈ {{hold, normal, quick}}：
-   - 金句 / 点题 / 强调句 → 给【1 个】镜头、慢留（pace="hold"），让观众停下来记住，不要切碎。这种长留镜按规则 4 选画面：靠眼神/表情打动就用人物，靠画面意境就用空镜——别默认一张正脸长留 5~7 秒（那是最糟的"大B脸"）。
+   - 金句 / 点题 / 强调句 → 给【1 个】镜头、慢留（pace="hold"），让观众停下来记住，不要切碎。这种长留镜按规则 2/4 选画面：靠意境就用空镜，靠人物就用中景/全景（人在环境里）——【绝不】让一张正脸特写长留 5~7 秒（那是最糟的"大B脸/遗照"）。
    - 列举 / 多个并列项 / 多动作 / 信息密集的长句 → 给【2~4 个】快切镜头（pace="quick"），每个镜头换【不同主体或角度】制造节奏，绝不是同一画面重复。
-   - 普通陈述 / 过渡 → 1~2 个常速镜头（pace="normal"）。
+   - 普通陈述 → 【2 个】不同景别/机位的常速镜头（pace="normal"），靠切换制造节奏，别让一个长镜头杵到底；只有确实极短的过渡句才给 1 个。
    pace 表示停留时长：hold 最长、normal 居中、quick 最短。
 7. 【避相邻雷同】（硬性）：相邻镜头——同段内相邻 + 跨段相接——的景别/机位必须明显不同；绝不连续两个人物正脸；列举的多个快切镜必须是不同主体或角度。
 8. with_character=true 表示画面里出现主讲人物；false 表示空镜/纯环境/细节（不出现人物）。
@@ -69,7 +75,7 @@ def _build_prompt(beats: list[dict], character_desc: str, style: str) -> str:
 只输出一个 JSON 数组，长度必须等于旁白段数({len(beats)})。每个元素形如：
 {{"shots":[{{"prompt":"具体画面描述(中文,简洁,视觉化,不含台词文字)","shot_type":"机位/景别","with_character":true,"pace":"normal"}}],"keywords":["乳酸阈"]}}
 严格 JSON 规则：所有 key 和字符串值用标准英文双引号；prompt 值内部【绝对不要】出现任何英文双引号，需要分隔就用顿号、或逗号；分隔符用半角逗号。
-不要输出任何解释、不要 markdown 代码块，只要纯 JSON 数组。
+【关键】你的唯一任务就是直接把这个 JSON 数组作为回复正文输出。绝对不要使用任何工具、不要写文件、不要运行代码、不要做质量审计/自查/分析、不要任何前后缀说明或 markdown 代码块——第一个字符就是 [，最后一个字符就是 ]。
 
 旁白段落：
 {listing}
@@ -148,17 +154,21 @@ def build_storyboard(
     model: str = DEFAULT_MODEL,
     timeout: int = 360,
     retries: int = 3,
+    effort: str = DEFAULT_EFFORT,
 ) -> list[dict]:
     """Generate per-beat shot lists via claude -p, retrying on a malformed
     response or a slow call. Raises after `retries` failed attempts."""
     prompt = _build_prompt(beats, character_desc, style)
+    # CLAUDE_EFFORT controls the print-mode reasoning effort; low keeps the
+    # shot-prompt pass cheap + fast while Opus handles the topic understanding.
+    sub_env = {**os.environ, "CLAUDE_EFFORT": effort}
     last = "unknown"
     data = None
     for attempt in range(retries):
         try:
             proc = subprocess.run(
                 ["claude", "-p", prompt, "--model", model],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True, text=True, timeout=timeout, env=sub_env,
             )
         except subprocess.TimeoutExpired:
             # claude -p can run long; retry instead of crashing the whole run.

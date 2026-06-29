@@ -174,9 +174,16 @@
 - **POC8 提前**：用户实测大B脸仍重，优先级提到 POC7 前
 - POC8 空镜/人物镜比例 ✅ 并入（内容忠实取代配额；长片 人5:空9=空镜64%，脸只在开场/金句/结尾；用户认可）。**教训**：先用硬配额两头甩(33%→85%)，用户点破"分镜按内容拆、不该规定出镜率"，改 content-faithful 才对
 - POC7 S2V 同人 ✅ 验过（同 ref 静图 vs 动态视频肉眼同人，花 1 条额度）。决策：S2V **选择性增强**（只关键动作镜）。顺手修 MiniMax 下载图存盘后缀名 bug（按真实类型落盘 + 返回实际路径）。100 测试绿
-- **八个 POC 全部完成** → next = 带全部增强的 E2E 完整验证 → `/write-dev-guide` 进 Stage 1
-- POC7 S2V 同人 ⬜
-- POC8 空镜/人物镜比例 ⬜
-- → 八个并完做一次带全部增强的 **E2E 完整验证**，再 `/write-dev-guide` 进 Stage 1。
+- **八个 POC 全部完成** → 之后做 Doubao 接入 + 评审修复轮（见下）
+
+## Doubao 接入 + 评审修复轮（2026-06-29，E2E 真跑通）
+用户切到 **Doubao（火山方舟 Ark）** 出图/视频，真机验证后并入，并按逐版评审修了一批成片质感问题。
+- **新 provider `lib/media_doubao.py`**（与 MiniMax helper 同签名）：图 = Seedream 4.5（同步 `/images/generations`，`size>=3.69Mpx`，i2i `image:[ref]` 锁人物，**质感明显好、无塑料感**）；视频 = Seedance 1.5pro（异步 tasks→`content.video_url`，`role=first_frame` 同人，~109K tok/5s）。`MEDIA_PROVIDER=doubao|minimax` 开关（默认 minimax）。Endpoint 用 `PIC_ENDPOINT`/`VIDEO_ENDPOINT`(ep-…) 当 model；key=`ARK_API_KEY`(.env)。重试只对瞬时错误、4xx 永久错立即抛（不浪费额度）。
+- **下载存盘按真实类型**（MiniMax/Doubao 都返 JPEG 存成 .png）→ `media_image._download` 嗅探魔数 + 返回实际路径，driver 用返回值。
+- **#4 S2V 不冻结**：S2V 固定 5s 短于旁白(8.7s)，旧 tpad 克隆末帧=冻结。改 `video_clip_cmd` 传源时长，短则 setpts **慢放填满**（已验帧帧在动）。
+- **#2 景别治大B脸 v2**：用户骂"开场大B脸像追悼会"。根因=分镜选了正脸特写 + 运镜只有居中慢推=遗照感。改 prompt：**开场禁用正脸特写**(用远景空镜/establishing)、人物一律中景/全景放进环境、正脸特写基本不用。实测开场=远景晨雾跑道空镜、零正脸特写。
+- **#2 镜头切换**：普通段默认 **2 个不同景别**镜头(更多硬切)；空镜 prompt 强制"画面无任何人物"(治卧室冒出女人)。
+- **分镜模型**：用户关掉 sonnet→M3 代理后 `--model sonnet`=**真 Sonnet**(强、扣题)。真 Sonnet 经 `claude -p` 是完整 agent、偶尔editorialize(做审计/提权限)→ prompt 加硬约束"只吐JSON不用工具不写文件"治。**⛔ 永不提换直连 API**——这是 CC 插件，dispatch 必走 `claude -p`（用户 6/29 强烈强调）。
+- **运镜（camera movement）= 新维度、未做**：现每张图同一个居中慢推 Ken Burns，无拉远/横移/竖摇/内容匹配。用户已点名，next 候选（但要先有好构图，运镜救不了糊脸）。
 
 _相关文档：`SPIKE_FINDINGS.md`（API 契约 + 环境硬事实）。_

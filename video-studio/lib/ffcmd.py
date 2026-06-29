@@ -352,16 +352,23 @@ def silence_mp3_cmd(dur_s: float, out_mp3: str) -> list[str]:
 
 
 def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str,
-                   grade: str | None = None) -> list[str]:
-    """Video-only S2V clip normalized to 1920x1080/30 and padded to dur_s.
+                   grade: str | None = None, src_dur: float | None = None) -> list[str]:
+    """Video-only S2V clip normalized to 1920x1080/30, covering dur_s.
 
-    `grade` (POC5): optional color-grade filterchain so the S2V footage shares
-    the series look with the stills."""
-    vf = (
-        "scale=1920:1080:force_original_aspect_ratio=increase,"
-        "crop=1920:1080,"
-        f"tpad=stop_mode=clone:stop_duration={int(dur_s) + 1},fps=30"
-    )
+    `grade` (POC5): optional color-grade filterchain.
+    `src_dur`: the source clip's real duration. When the source is SHORTER than
+    the beat (S2V is a fixed ~5s but the narration runs longer), the clip is
+    time-stretched (slow motion) to fill the whole beat instead of freezing on
+    the last frame — a frozen picture under continuing narration reads as a
+    glitch. If src_dur is unknown or the source is long enough, normalize + trim.
+    """
+    chain = ["scale=1920:1080:force_original_aspect_ratio=increase", "crop=1920:1080"]
+    if src_dur and src_dur < dur_s:
+        chain.append(f"setpts={dur_s / src_dur:.4f}*PTS")   # slow-mo to fill
+    else:
+        chain.append(f"tpad=stop_mode=clone:stop_duration={int(dur_s) + 1}")
+    chain.append("fps=30")
+    vf = ",".join(chain)
     if grade:
         vf += f",{grade}"
     return [

@@ -101,6 +101,17 @@ def main() -> int:
         fixture = json.load(f)
     log(f"[fixture] {fixture_path}")
 
+    # ---- media provider: minimax (default) or doubao (Seedream/Seedance) ----
+    # Same gen_character_ref / gen_still / gen_video contracts either way, so the
+    # rest of the driver is provider-agnostic. Charts + TTS stay as-is.
+    provider = os.environ.get("MEDIA_PROVIDER", "minimax").lower()
+    if provider == "doubao":
+        from lib import media_doubao
+        mimg = mvid = media_doubao
+    else:
+        mimg, mvid = media_image, media_video
+    log(f"[provider] media = {provider}")
+
     # ---- 1. character_ref ----
     # Reuse hook: SPIKE_REF_PNG + SPIKE_REF_URL let a re-run anchor on an
     # existing character_ref (e.g. one already paid for) without a new image
@@ -116,7 +127,7 @@ def main() -> int:
         log(f"[ref] reusing provided character_ref {ref_png_override}")
     else:
         log(f"[ref] generating character_ref -> {cref_out}")
-        ref_url = media_image.gen_character_ref(cref["prompt"], cref_out)
+        ref_url = mimg.gen_character_ref(cref["prompt"], cref_out)
 
     beats = fixture["beats"]
     # POC5: one locked color grade (the column's 冷蓝晨光 signature) applied to
@@ -186,9 +197,15 @@ def main() -> int:
         for j, (sh, slice_s) in enumerate(zip(shots, durs)):
             spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
             ref = ref_url if sh.get("with_character", True) else None
+            # 空镜 (no character ref): force the image model to leave people OUT,
+            # otherwise it invents a random person (e.g. a woman in a bedroom
+            # 空镜) that breaks the single-host world.
+            shot_prompt = sh["prompt"]
+            if ref is None:
+                shot_prompt += "，画面中没有任何人物，纯环境与物体细节"
             # gen_still returns the ACTUAL path (real extension, e.g. .jpg) —
             # use it for ffmpeg, don't assume the .png name we passed in.
-            spng = media_image.gen_still(sh["prompt"], ref, spng)
+            spng = mimg.gen_still(shot_prompt, ref, spng)
             sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
             _run_ff(ffcmd.still_clip_cmd(spng, slice_s, sub, grade_vf), f"{bid}-shot{j}")
             subs.append(sub)
@@ -257,13 +274,15 @@ def main() -> int:
                 import shutil
                 if os.path.abspath(reuse_clip) != os.path.abspath(vmp4):
                     shutil.copy(reuse_clip, vmp4)
-                _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf), f"clip-{bid}")
+                _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf,
+                                             _probe_ms(vmp4) / 1000.0), f"clip-{bid}")
                 used_still = False
                 log(f"[{bid}] reusing provided S2V clip {reuse_clip}")
             elif live_video:
-                res = media_video.gen_video(beat["video_prompt"], ref_url, vmp4)
+                res = mvid.gen_video(beat["video_prompt"], ref_url, vmp4)
                 if res.get("ok"):
-                    _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf), f"clip-{bid}")
+                    _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf,
+                                             _probe_ms(vmp4) / 1000.0), f"clip-{bid}")
                     used_still = False
                     log(f"[{bid}] S2V ok -> {vmp4} (file_id={res.get('file_id')})")
                 else:
@@ -309,7 +328,7 @@ def main() -> int:
             log(f"[card] reusing bg {reuse}")
             return out
         # gen_still returns the ACTUAL saved path (real extension) — use it.
-        actual = media_image.gen_still(prompt, None, out)
+        actual = mimg.gen_still(prompt, None, out)
         log(f"[card] gen bg -> {actual}")
         return actual
 

@@ -148,10 +148,21 @@ def main() -> int:
         via subject_reference; False = 空镜. Narration is muxed later (the audio
         is a separate hard-concat track so beats can cross-dissolve)."""
         import shutil
+        from lib import storyboard as _sb_mod
+        # POC6 shot-rhythm: cap shot count to what this beat's length can hold
+        # without any shot dropping below MIN_DWELL (no subliminal flashes), then
+        # split the time by each shot's pace weight (金句 hold long / 列举 quick
+        # short). Capping the count keeps the equal-split fallback safe.
+        n_max = ffcmd.max_shots(clip_len)
+        if len(shots) > n_max:
+            log(f"[{bid}] shots {len(shots)}→{n_max} (capped: clip {clip_len:.1f}s ÷ "
+                f"min dwell {ffcmd.MIN_DWELL}s)")
+            shots = shots[:n_max]
         n = len(shots)
-        slice_s = clip_len / n
+        weights = [_sb_mod.pace_weight(s.get("pace", "normal")) for s in shots]
+        durs = ffcmd.shot_durations(clip_len, weights)
         subs = []
-        for j, sh in enumerate(shots):
+        for j, (sh, slice_s) in enumerate(zip(shots, durs)):
             spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
             ref = ref_url if sh.get("with_character", True) else None
             media_image.gen_still(sh["prompt"], ref, spng)
@@ -168,8 +179,10 @@ def main() -> int:
             _run_ff(["-f", "concat", "-safe", "0", "-i", listf,
                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", out_clip],
                     f"{bid}-concat")
-        kinds = " / ".join(f"{'人' if s.get('with_character', True) else '空'}·{s.get('shot_type', '')}"
-                           for s in shots)
+        kinds = " / ".join(
+            f"{'人' if s.get('with_character', True) else '空'}·{s.get('shot_type', '')}"
+            f"·{s.get('pace', 'normal')}·{d:.1f}s"
+            for s, d in zip(shots, durs))
         log(f"[{bid}] shots×{n}: {kinds}")
 
     for i, beat in enumerate(beats):

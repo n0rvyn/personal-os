@@ -268,6 +268,39 @@ def voice_polish_cmd(in_mp3: str, out_mp3: str) -> list[str]:
 
 DISSOLVE_FADE = 0.3  # seconds of cross-dissolve between beats (0.3 ≈ less face-on-face ghosting)
 
+# POC6 shot-rhythm: shortest a single shot may dwell. A cut shorter than this
+# reads as a glitch/flash, not an edit — so it floors both the per-shot
+# duration and (via max_shots) how many shots a beat of given length can hold.
+MIN_DWELL = 0.8
+
+
+def max_shots(clip_len: float, min_dwell: float = MIN_DWELL) -> int:
+    """How many shots a beat of clip_len seconds can hold without any shot
+    dropping below min_dwell (always ≥ 1)."""
+    # +eps so an exact multiple (e.g. 2.4 / 0.8) yields 3, not 2 via float floor.
+    return max(1, int(clip_len / min_dwell + 1e-6))
+
+
+def shot_durations(clip_len: float, weights: list[float],
+                   min_dwell: float = MIN_DWELL) -> list[float]:
+    """Split clip_len across shots by relative `weights` (content-driven dwell:
+    a 金句 hold gets more time, a 列举 quick-cut less). Falls back to an EQUAL
+    split if any weighted slice would drop below min_dwell — so quick cuts never
+    become subliminal flashes. Sum is always exactly clip_len.
+
+    Caller must cap len(weights) to max_shots(clip_len) first (equal split is
+    only guaranteed ≥ min_dwell when the count fits)."""
+    n = len(weights)
+    if n <= 1:
+        return [clip_len]
+    total = sum(weights) or float(n)
+    durs = [clip_len * w / total for w in weights]
+    if min(durs) < min_dwell:
+        durs = [clip_len / n] * n
+    # absorb float remainder into the last slice so the sum is exact
+    durs[-1] = clip_len - sum(durs[:-1])
+    return durs
+
 
 def still_clip_cmd(png: str, dur_s: float, out_mp4: str,
                    grade: str | None = None) -> list[str]:

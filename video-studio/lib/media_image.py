@@ -15,10 +15,40 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
 from . import mmclient
+
+
+# image-01 occasionally returns base_resp=success but an empty image_urls
+# (observed under rapid back-to-back calls in a long run). Retry a few times
+# with backoff so one transient blank doesn't kill a 20-image pipeline.
+_IMG_RETRIES = 4
+
+
+def _request_image_url(payload: dict, timeout: int = 180, sleep_fn=time.sleep) -> str:
+    """POST /v1/image_generation and return image_urls[0], retrying on a
+    transient empty response or transient API error. Raises after _IMG_RETRIES."""
+    last = "unknown"
+    for attempt in range(_IMG_RETRIES):
+        try:
+            resp = mmclient.post_json("/v1/image_generation", payload, timeout=timeout)
+            data = resp.get("data")
+            urls = data.get("image_urls") if isinstance(data, dict) else None
+            if isinstance(urls, list) and urls and isinstance(urls[0], str) and urls[0]:
+                return urls[0]
+            last = f"empty image_urls (base_resp={resp.get('base_resp')})"
+        except RuntimeError as e:
+            last = str(e)
+        if attempt < _IMG_RETRIES - 1:
+            _log(f"[media_image] image_generation transient: {last} "
+                 f"— retry {attempt + 1}/{_IMG_RETRIES}")
+            sleep_fn(2 * (attempt + 1))
+    raise RuntimeError(
+        f"MiniMax image_generation failed after {_IMG_RETRIES} attempts: {last}"
+    )
 
 
 # Unified style prefix for every generated still. Single style v1 per
@@ -89,17 +119,7 @@ def gen_character_ref(prompt: str, out_path: str) -> str:
         "response_format": "url",
         "n": 1,
     }
-    resp = mmclient.post_json("/v1/image_generation", payload, timeout=180)
-
-    data = resp.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("MiniMax image_generation: missing 'data' object")
-    urls = data.get("image_urls")
-    if not isinstance(urls, list) or not urls:
-        raise RuntimeError("MiniMax image_generation: empty 'image_urls'")
-    url = urls[0]
-    if not isinstance(url, str) or not url:
-        raise RuntimeError("MiniMax image_generation: invalid image_url")
+    url = _request_image_url(payload)
 
     _log(f"[media_image] downloading character_ref to {out_path}")
     _download(url, out_path)
@@ -133,17 +153,7 @@ def gen_still(prompt: str, character_ref_url: str, out_path: str) -> str:
             {"type": "character", "image_file": character_ref_url}
         ],
     }
-    resp = mmclient.post_json("/v1/image_generation", payload, timeout=180)
-
-    data = resp.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("MiniMax image_generation: missing 'data' object")
-    urls = data.get("image_urls")
-    if not isinstance(urls, list) or not urls:
-        raise RuntimeError("MiniMax image_generation: empty 'image_urls'")
-    url = urls[0]
-    if not isinstance(url, str) or not url:
-        raise RuntimeError("MiniMax image_generation: invalid image_url")
+    url = _request_image_url(payload)
 
     _log(f"[media_image] downloading still to {out_path}")
     _download(url, out_path)

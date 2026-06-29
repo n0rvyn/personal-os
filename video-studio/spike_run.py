@@ -70,18 +70,24 @@ def main() -> int:
 
     os.makedirs(ASSETS, exist_ok=True)
     # Fixture is tracked INPUT (lives at the video-studio root); .spike/ holds
-    # only generated outputs. Fall back to .spike for an older local layout.
-    fixture_path = os.path.join(HERE, "beats.fixture.json")
-    if not os.path.exists(fixture_path):
-        fixture_path = os.path.join(SPIKE, "beats.fixture.json")
-    with open(fixture_path) as f:
-        fixture = json.load(f)
-
+    # only generated outputs. SPIKE_FIXTURE overrides (e.g. a longer fixture).
+    fixture_path = os.environ.get("SPIKE_FIXTURE")
+    if fixture_path:
+        if not os.path.isabs(fixture_path):
+            fixture_path = os.path.join(HERE, fixture_path)
+    else:
+        fixture_path = os.path.join(HERE, "beats.fixture.json")
+        if not os.path.exists(fixture_path):
+            fixture_path = os.path.join(SPIKE, "beats.fixture.json")
     report_lines: list[str] = []
 
     def log(msg: str) -> None:
         print(msg, file=sys.stderr)
         report_lines.append(msg)
+
+    with open(fixture_path) as f:
+        fixture = json.load(f)
+    log(f"[fixture] {fixture_path}")
 
     # ---- 1. character_ref ----
     # Reuse hook: SPIKE_REF_PNG + SPIKE_REF_URL let a re-run anchor on an
@@ -131,6 +137,38 @@ def main() -> int:
                 beat["chart_title"], [tuple(r) for r in beat["chart_rows"]], png)
             argv = ffcmd.chart_segment_cmd(png, dur_s, seg_out, mp3)
             log(f"[{bid}] chart -> {png}")
+        elif vtype == "multi":
+            # Multi-shot beat: split the narration duration across N stills,
+            # each its own Ken Burns push-in, hard-cut together, then mux the
+            # full narration. Keeps the screen alive on long beats (cheap images
+            # instead of one slowly-zooming frame). Same person via ref_url.
+            shots = beat["shots"]
+            n = len(shots)
+            slice_s = dur_s / n
+            subs = []
+            for j, pr in enumerate(shots):
+                spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
+                media_image.gen_still(pr, ref_url, spng)
+                sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
+                _run_ff(["-loop", "1", "-i", spng, "-t", f"{slice_s:.4f}", "-r", "30",
+                         "-vf", ffcmd._still_or_chart_filtergraph(slice_s),
+                         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sub],
+                        f"{bid}-shot{j}")
+                subs.append(sub)
+            listf = os.path.join(SPIKE, f"{bid}_shots.txt")
+            with open(listf, "w") as f:
+                for s in subs:
+                    f.write(f"file '{s}'\n")
+            visual = os.path.join(SPIKE, f"{bid}_visual.mp4")
+            _run_ff(["-f", "concat", "-safe", "0", "-i", listf,
+                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", visual],
+                    f"{bid}-concat")
+            _run_ff(["-i", visual, "-i", mp3, "-map", "0:v", "-map", "1:a",
+                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+                     "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", seg_out],
+                    f"{bid}-mux")
+            argv = None  # segment already built above
+            log(f"[{bid}] multi {n} shots ({slice_s:.2f}s each)")
         elif vtype == "video":
             used_still = True
             argv = None
@@ -162,7 +200,8 @@ def main() -> int:
         else:
             raise RuntimeError(f"unknown visual_type: {vtype}")
 
-        _run_ff(argv, f"seg-{bid}")
+        if argv is not None:  # multi builds seg_out itself; others run their argv
+            _run_ff(argv, f"seg-{bid}")
         seg_files.append(seg_out)
 
     total_audio_ms = start_ms

@@ -83,7 +83,10 @@ def synth(text: str, out_path: str, timeout: int = 120) -> int:
             f"MiniMax t2a_v2: audio payload too small: {len(audio_bytes)} bytes"
         )
 
-    extra_info = data.get("extra_info")
+    # extra_info is a TOP-LEVEL field in the t2a_v2 response (sibling to
+    # `data` / `base_resp`), NOT nested under `data` — verified against the
+    # live API (data keys = audio/status/ced; extra_info.audio_length at root).
+    extra_info = resp.get("extra_info")
     if not isinstance(extra_info, dict):
         raise RuntimeError("MiniMax t2a_v2: missing 'extra_info' object")
     audio_length = extra_info.get("audio_length")

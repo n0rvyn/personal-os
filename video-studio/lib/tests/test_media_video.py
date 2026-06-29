@@ -360,12 +360,13 @@ def test_d_ffprobe_unparseable_returns_fallback(monkeypatch, tmp_path: Path):
 
 
 def test_submit_happy_path(monkeypatch):
-    """submit() returns task_id from the data object."""
+    """submit() returns the TOP-LEVEL task_id (no `data` wrapper — verified
+    live: create response is {"task_id": ..., "base_resp": ...})."""
     monkeypatch.setattr(
         media_video.mmclient, "post_json",
         lambda path, payload, timeout=120: {
-            "data": {"task_id": "task-zzz"},
-            "base_resp": {"status_code": 0},
+            "task_id": "task-zzz",
+            "base_resp": {"status_code": 0, "status_msg": "success"},
         },
     )
     task_id = media_video.submit("a prompt", "http://ref")
@@ -376,7 +377,6 @@ def test_submit_missing_task_id_raises(monkeypatch):
     monkeypatch.setattr(
         media_video.mmclient, "post_json",
         lambda path, payload, timeout=120: {
-            "data": {},
             "base_resp": {"status_code": 0},
         },
     )
@@ -400,11 +400,13 @@ def test_submit_base_resp_nonzero_raises(monkeypatch):
 
 
 def test_fetch_happy_path(monkeypatch, tmp_path: Path):
-    """fetch() calls retrieve, then downloads via _download."""
+    """fetch() calls retrieve, then downloads via _download. download_url is
+    under the TOP-LEVEL `file` object (verified live: retrieve response is
+    {"file": {"download_url": ...}, "base_resp": ...})."""
     monkeypatch.setattr(
         media_video.mmclient, "get_json",
         lambda path, timeout=60: {
-            "data": {"download_url": "https://cdn.example/x.mp4"},
+            "file": {"download_url": "https://cdn.example/x.mp4"},
             "base_resp": {"status_code": 0},
         },
     )
@@ -426,7 +428,7 @@ def test_fetch_missing_download_url_raises(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         media_video.mmclient, "get_json",
         lambda path, timeout=60: {
-            "data": {},
+            "file": {},
             "base_resp": {"status_code": 0},
         },
     )

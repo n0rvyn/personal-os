@@ -31,8 +31,11 @@ import urllib.request
 from . import mmclient
 
 
-# Default model: Hailuo 2.3 (current MiniMax S2V anchor).
-DEFAULT_MODEL = "MiniMax-Hailuo-2.3"
+# Default model: S2V-01 — MiniMax's dedicated Subject-Reference-Video model.
+# (The Hailuo T2V/I2V models, e.g. MiniMax-Hailuo-2.3, reject subject_reference
+# with "2013 invalid params ... does not support Subject-Reference-Video mode" —
+# verified live against api.minimaxi.com on 2026-06-29.)
+DEFAULT_MODEL = "S2V-01"
 
 # Default total poll budget. Spike uses 600s (10 min) per task; Stage 1
 # will make this configurable.
@@ -48,8 +51,9 @@ _MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024  # 200 MB (videos are bigger than images
 # as a truncated/corrupt response and triggers fallback.
 _MIN_DOWNLOAD_BYTES = 50 * 1024  # 50 KB
 
-# Accepted "task is still running" status strings (per MiniMax docs).
-_PROCESSING_STATES = {"Queue", "Processing", "Pending", "Running"}
+# Accepted "task is still running" status strings. "Preparing" + "Processing"
+# observed live for S2V-01; the rest kept for forward-compat with other models.
+_PROCESSING_STATES = {"Preparing", "Queue", "Queueing", "Processing", "Pending", "Running"}
 
 
 def _log(msg: str) -> None:
@@ -83,20 +87,22 @@ def submit(
             missing data object. (The spike driver catches this and
             treats it as fallback.)
     """
+    # S2V-01 subject_reference takes an "image" ARRAY (NOT image-01's
+    # "image_file" scalar). duration/resolution per the S2V-01 docs.
     payload = {
         "model": model,
         "prompt": prompt,
         "subject_reference": [
-            {"type": "character", "image_file": character_ref_url}
+            {"type": "character", "image": [character_ref_url]}
         ],
+        "duration": 6,
+        "resolution": "1080P",
     }
     resp = mmclient.post_json("/v1/video_generation", payload, timeout=120)
 
-    data = resp.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("MiniMax video_generation: missing 'data' object")
-
-    task_id = data.get("task_id")
+    # CREATE response is flat: {"task_id": "...", "base_resp": {...}} — task_id
+    # is TOP-LEVEL, NOT under a `data` wrapper. Verified live 2026-06-29.
+    task_id = resp.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         raise RuntimeError("MiniMax video_generation: missing 'task_id'")
     return task_id
@@ -108,17 +114,20 @@ def submit(
 
 
 def _query_task(task_id: str) -> dict:
-    """GET the current status of `task_id`. Returns the parsed data dict.
+    """GET the current status of `task_id`. Returns the parsed response dict.
+
+    The QUERY response is flat: {"task_id", "status", "file_id",
+    "video_width", "video_height", "base_resp"} — status/file_id are
+    TOP-LEVEL, NOT under a `data` wrapper. Verified live 2026-06-29.
 
     Raises RuntimeError on HTTP / base_resp errors.
     """
     resp = mmclient.get_json(
         f"/v1/query/video_generation?task_id={task_id}", timeout=60
     )
-    data = resp.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("MiniMax query/video_generation: missing 'data' object")
-    return data
+    if not isinstance(resp, dict):
+        raise RuntimeError("MiniMax query/video_generation: non-dict response")
+    return resp
 
 
 def poll(
@@ -231,10 +240,12 @@ def fetch(file_id: str, out_path: str, timeout: int = 300) -> str:
     resp = mmclient.get_json(
         f"/v1/files/retrieve?file_id={file_id}", timeout=60
     )
-    data = resp.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("MiniMax files/retrieve: missing 'data' object")
-    download_url = data.get("download_url")
+    # RETRIEVE response: {"file": {"download_url": "...", ...}, "base_resp": ...}
+    # download_url is under `file`, NOT `data`. Verified live 2026-06-29.
+    file_obj = resp.get("file")
+    if not isinstance(file_obj, dict):
+        raise RuntimeError("MiniMax files/retrieve: missing 'file' object")
+    download_url = file_obj.get("download_url")
     if not isinstance(download_url, str) or not download_url:
         raise RuntimeError("MiniMax files/retrieve: missing 'download_url'")
 

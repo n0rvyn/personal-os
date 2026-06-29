@@ -126,14 +126,15 @@ def gen_character_ref(prompt: str, out_path: str) -> str:
     return url
 
 
-def gen_still(prompt: str, character_ref_url: str, out_path: str) -> str:
-    """Generate a 16:9 still with subject_reference locked to character_ref_url.
+def gen_still(prompt: str, character_ref_url: str | None, out_path: str) -> str:
+    """Generate a 16:9 still. With a character_ref_url, locks the subject via
+    subject_reference (人物镜). With None, generates a plain environment/detail
+    shot (空镜 — track, pace chart, running shoes, watch…) so the video isn't
+    always a talking-head.
 
     Args:
-        prompt: Scene description (the character performing some action / in
-            some setting). The unified STYLE_PREFIX is automatically prepended.
-        character_ref_url: Remote URL of the character reference image (the
-            return value of `gen_character_ref`).
+        prompt: Scene description. The unified STYLE_PREFIX is auto-prepended.
+        character_ref_url: Character ref URL, or None for a character-less shot.
         out_path: Local file path to write the downloaded PNG to.
 
     Returns:
@@ -149,10 +150,11 @@ def gen_still(prompt: str, character_ref_url: str, out_path: str) -> str:
         "aspect_ratio": "16:9",
         "response_format": "url",
         "n": 1,
-        "subject_reference": [
-            {"type": "character", "image_file": character_ref_url}
-        ],
     }
+    if character_ref_url:
+        payload["subject_reference"] = [
+            {"type": "character", "image_file": character_ref_url}
+        ]
     url = _request_image_url(payload)
 
     _log(f"[media_image] downloading still to {out_path}")

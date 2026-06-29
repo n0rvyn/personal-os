@@ -47,6 +47,18 @@ def _run_ff(argv: list[str], label: str) -> None:
         )
 
 
+def _probe_ms(path: str) -> int:
+    """Actual media duration in ms via ffprobe. Drives timing (the API-reported
+    audio_length differs from the real mp3 by ~tens of ms, which drifts srt)."""
+    ffprobe = os.environ.get("FFPROBE_BIN", "ffprobe")
+    out = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=nk=1:nw=1", path],
+        capture_output=True, text=True, timeout=30,
+    )
+    return round(float(out.stdout.strip()) * 1000)
+
+
 def _ensure_bgm() -> tuple[str, bool]:
     """Return (bgm_path, is_placeholder). Synthesize a soft pad if none exists."""
     real = os.path.join(ASSETS, "bgm.mp3")
@@ -111,50 +123,34 @@ def main() -> int:
     srt_beats: list[dict] = []
     start_ms = 0
 
-    for i, beat in enumerate(beats):
-        bid = beat["id"]
-        vtype = beat["visual_type"]
+    # ---- optional storyboard (分镜): content-aware, shot-varied, continuous ----
+    sb = None
+    if os.environ.get("SPIKE_STORYBOARD") == "1":
+        from lib import storyboard as _storyboard
+        char_desc = fixture.get("character_ref", {}).get("prompt", "主讲人物")
+        sb = _storyboard.build_storyboard(beats, char_desc)
+        log(f"[storyboard] {sum(len(e['shots']) for e in sb)} shots / {len(beats)} beats")
 
-        # ---- 2. narration -> mp3 + audio_length ----
-        mp3 = os.path.join(SPIKE, f"{bid}.mp3")
-        dur_ms = media_tts.synth(beat["text"], mp3)
-        dur_s = dur_ms / 1000.0
-        log(f"[{bid}] tts {dur_ms}ms ({dur_s:.2f}s) -> {mp3}")
-        srt_beats.append({"text": beat["text"], "start_ms": start_ms, "dur_ms": dur_ms})
-        start_ms += dur_ms
-
-        seg_out = os.path.join(SPIKE, f"seg_{i}_{bid}.mp4")
-
-        # ---- 3. visual asset + segment cmd ----
-        if vtype == "still":
-            png = os.path.join(SPIKE, f"{bid}.png")
-            media_image.gen_still(beat["image_prompt"], ref_url, png)
-            argv = ffcmd.still_segment_cmd(png, dur_s, seg_out, mp3)
-            log(f"[{bid}] still -> {png}")
-        elif vtype == "chart":
-            png = os.path.join(SPIKE, f"{bid}.png")
-            media_chart.render_pace_table(
-                beat["chart_title"], [tuple(r) for r in beat["chart_rows"]], png)
-            argv = ffcmd.chart_segment_cmd(png, dur_s, seg_out, mp3)
-            log(f"[{bid}] chart -> {png}")
-        elif vtype == "multi":
-            # Multi-shot beat: split the narration duration across N stills,
-            # each its own Ken Burns push-in, hard-cut together, then mux the
-            # full narration. Keeps the screen alive on long beats (cheap images
-            # instead of one slowly-zooming frame). Same person via ref_url.
-            shots = beat["shots"]
-            n = len(shots)
-            slice_s = dur_s / n
-            subs = []
-            for j, pr in enumerate(shots):
-                spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
-                media_image.gen_still(pr, ref_url, spng)
-                sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
-                _run_ff(["-loop", "1", "-i", spng, "-t", f"{slice_s:.4f}", "-r", "30",
-                         "-vf", ffcmd._still_or_chart_filtergraph(slice_s),
-                         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sub],
-                        f"{bid}-shot{j}")
-                subs.append(sub)
+    def render_shots(shots: list[dict], dur_s: float, mp3: str, seg_out: str, bid: str) -> None:
+        """Render N shots (each its own Ken Burns slice, hard-cut) and mux the
+        narration. with_character=True locks the host via subject_reference;
+        False = 空镜 (no person). One shot == a single still segment."""
+        n = len(shots)
+        slice_s = dur_s / n
+        subs = []
+        for j, sh in enumerate(shots):
+            spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
+            ref = ref_url if sh.get("with_character", True) else None
+            media_image.gen_still(sh["prompt"], ref, spng)
+            sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
+            _run_ff(["-loop", "1", "-i", spng, "-t", f"{slice_s:.4f}", "-r", "30",
+                     "-vf", ffcmd._still_or_chart_filtergraph(slice_s),
+                     "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sub],
+                    f"{bid}-shot{j}")
+            subs.append(sub)
+        if len(subs) == 1:
+            visual = subs[0]
+        else:
             listf = os.path.join(SPIKE, f"{bid}_shots.txt")
             with open(listf, "w") as f:
                 for s in subs:
@@ -163,15 +159,41 @@ def main() -> int:
             _run_ff(["-f", "concat", "-safe", "0", "-i", listf,
                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", visual],
                     f"{bid}-concat")
-            _run_ff(["-i", visual, "-i", mp3, "-map", "0:v", "-map", "1:a",
-                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
-                     "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", seg_out],
-                    f"{bid}-mux")
-            argv = None  # segment already built above
-            log(f"[{bid}] multi {n} shots ({slice_s:.2f}s each)")
+        _run_ff(["-i", visual, "-i", mp3, "-map", "0:v", "-map", "1:a",
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", seg_out],
+                f"{bid}-mux")
+        kinds = " / ".join(f"{'人' if s.get('with_character', True) else '空'}·{s.get('shot_type', '')}"
+                           for s in shots)
+        log(f"[{bid}] shots×{n}: {kinds}")
+
+    for i, beat in enumerate(beats):
+        bid = beat["id"]
+        vtype = beat["visual_type"]
+
+        # ---- 2. narration -> mp3 + audio_length ----
+        mp3 = os.path.join(SPIKE, f"{bid}.mp3")
+        reported_ms = media_tts.synth(beat["text"], mp3)
+        # Timing is driven by the ACTUAL mp3 duration, not the API-reported
+        # audio_length (they differ by ~tens of ms). The video segment runs on
+        # the real audio, so the srt must too — otherwise subtitles drift.
+        dur_ms = _probe_ms(mp3)
+        dur_s = dur_ms / 1000.0
+        log(f"[{bid}] tts reported={reported_ms}ms actual={dur_ms}ms -> {mp3}")
+        srt_beats.append({"text": beat["text"], "start_ms": start_ms, "dur_ms": dur_ms})
+        start_ms += dur_ms
+
+        seg_out = os.path.join(SPIKE, f"seg_{i}_{bid}.mp4")
+
+        # ---- 3. visual asset + segment cmd ----
+        if vtype == "chart":
+            png = os.path.join(SPIKE, f"{bid}.png")
+            media_chart.render_pace_table(
+                beat["chart_title"], [tuple(r) for r in beat["chart_rows"]], png)
+            _run_ff(ffcmd.chart_segment_cmd(png, dur_s, seg_out, mp3), f"seg-{bid}")
+            log(f"[{bid}] chart -> {png}")
         elif vtype == "video":
             used_still = True
-            argv = None
             vmp4 = os.path.join(SPIKE, f"{bid}.mp4")
             # Reuse hook: SPIKE_S2V_CLIP lets a re-run drop in an already-paid
             # S2V clip for the video beat instead of spending another credit.
@@ -180,13 +202,13 @@ def main() -> int:
                 import shutil
                 if os.path.abspath(reuse_clip) != os.path.abspath(vmp4):
                     shutil.copy(reuse_clip, vmp4)
-                argv = ffcmd.video_segment_cmd(vmp4, dur_s, seg_out, mp3)
+                _run_ff(ffcmd.video_segment_cmd(vmp4, dur_s, seg_out, mp3), f"seg-{bid}")
                 used_still = False
                 log(f"[{bid}] reusing provided S2V clip {reuse_clip}")
             elif live_video:
                 res = media_video.gen_video(beat["video_prompt"], ref_url, vmp4)
                 if res.get("ok"):
-                    argv = ffcmd.video_segment_cmd(vmp4, dur_s, seg_out, mp3)
+                    _run_ff(ffcmd.video_segment_cmd(vmp4, dur_s, seg_out, mp3), f"seg-{bid}")
                     used_still = False
                     log(f"[{bid}] S2V ok -> {vmp4} (file_id={res.get('file_id')})")
                 else:
@@ -194,14 +216,20 @@ def main() -> int:
             else:
                 log(f"[{bid}] RUN_LIVE_VIDEO unset -> still fallback (no video credit)")
             if used_still:
-                png = os.path.join(SPIKE, f"{bid}.png")
-                media_image.gen_still(beat["image_prompt"], ref_url, png)
-                argv = ffcmd.still_segment_cmd(png, dur_s, seg_out, mp3)
+                fb = beat.get("image_prompt", beat["text"])
+                render_shots([{"prompt": fb, "with_character": True}], dur_s, mp3, seg_out, bid)
         else:
-            raise RuntimeError(f"unknown visual_type: {vtype}")
+            # still / multi / storyboard-driven → render a list of shots
+            if sb is not None:
+                shots = sb[i]["shots"]
+            elif vtype == "multi":
+                shots = [{"prompt": p, "with_character": True} for p in beat["shots"]]
+            elif vtype == "still":
+                shots = [{"prompt": beat["image_prompt"], "with_character": True}]
+            else:
+                raise RuntimeError(f"unknown visual_type: {vtype}")
+            render_shots(shots, dur_s, mp3, seg_out, bid)
 
-        if argv is not None:  # multi builds seg_out itself; others run their argv
-            _run_ff(argv, f"seg-{bid}")
         seg_files.append(seg_out)
 
     total_audio_ms = start_ms

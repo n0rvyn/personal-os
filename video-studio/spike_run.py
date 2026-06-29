@@ -138,9 +138,30 @@ def main() -> int:
     sb = None
     if os.environ.get("SPIKE_STORYBOARD") == "1":
         from lib import storyboard as _storyboard
-        char_desc = fixture.get("character_ref", {}).get("prompt", "主讲人物")
-        sb = _storyboard.build_storyboard(beats, char_desc)
-        log(f"[storyboard] {sum(len(e['shots']) for e in sb)} shots / {len(beats)} beats")
+        sb_cache = os.path.join(SPIKE, "storyboard.json")
+        # Reuse hook (mirror SPIKE_S2V_CLIP): the 分镜 step calls a SLOW LLM
+        # (claude -p via the proxy — can take minutes / occasionally retries).
+        # SPIKE_STORYBOARD_JSON lets a re-render (tuning grade/timing/cards)
+        # reuse a saved plan instead of re-running it. Every fresh run also
+        # writes the plan to sb_cache so the next run can point back at it.
+        reuse = os.environ.get("SPIKE_STORYBOARD_JSON")
+        if reuse:
+            with open(reuse, encoding="utf-8") as f:
+                sb = json.load(f)
+            if len(sb) != len(beats):
+                raise RuntimeError(
+                    f"reused storyboard {reuse} has {len(sb)} entries but the "
+                    f"fixture has {len(beats)} beats — regenerate (unset "
+                    f"SPIKE_STORYBOARD_JSON) or use a matching plan")
+            log(f"[storyboard] reusing {reuse} "
+                f"({sum(len(e['shots']) for e in sb)} shots / {len(beats)} beats)")
+        else:
+            char_desc = fixture.get("character_ref", {}).get("prompt", "主讲人物")
+            sb = _storyboard.build_storyboard(beats, char_desc)
+            with open(sb_cache, "w", encoding="utf-8") as f:
+                json.dump(sb, f, ensure_ascii=False, indent=2)
+            log(f"[storyboard] {sum(len(e['shots']) for e in sb)} shots / "
+                f"{len(beats)} beats -> {sb_cache}")
 
     def render_shots_clip(shots: list[dict], clip_len: float, out_clip: str, bid: str) -> None:
         """Render N shots (each its own Ken Burns slice, hard-cut) into ONE

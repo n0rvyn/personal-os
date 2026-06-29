@@ -45,6 +45,7 @@
 - **当前程度**：✅ `lib/storyboard.py`，`claude -p sonnet` 读每句台词产 shots{prompt, shot_type, with_character} + keywords。
 - **已做 & 结论**：内容感知出图（睡眠→卧室闹钟空镜、收尾→背影）；变机位（全景/特写/跟拍/脚步/过肩/背影）；7/19 空镜打破"大B脸"；相邻同母题连续。
 - **跑在转发模型上（环境事实）**：`claude -p --model sonnet` 经用户自建 ModelProxy（`ANTHROPIC_BASE_URL=localhost:9090`）转发到其选定后端（非官方 Sonnet，疑 MiniMax 系）。所以**文本理解偏弱 + 偶发坏 JSON + 慢（曾单次 >360s）是常态**，解析与超时必须容错（下条）。
+- **分镜复用钩子（提速）**：每次渲染都重跑这步慢 LLM 很耗。driver 每次把分镜结果存 `.spike/storyboard.json`；`SPIKE_STORYBOARD_JSON=<path>` 让调色/调时间重渲时**直接读存档、跳过 LLM**（校验 beat 数匹配）。镜像 `SPIKE_S2V_CLIP` 复用模式。实测短片复用渲染 ~2min（省掉 6min+ 分镜调用）。
 - **JSON 容错（POC6 修，重要）**：实测经常**漏掉数组最后的 `]`**（也偶有结尾多逗号），旧的 `rfind(']')` 抓错括号 → 整条崩（曾 3/3 失败）。改 `_extract_json_array`：**字符串感知**扫括号深度（不被中文 prompt 里的 `[]` 干扰）、未闭合则按开栈补 `]`/`}`、清结尾逗号。另把 `claude -p` 超时从 240→360s 且 `TimeoutExpired` 进重试（旧版超时直接崩）。真实坏样本存 `lib/tests/fixtures/storyboard_truncated.json` 防回归。
 - **后续方向**：match cut（构图/动作匹配剪辑）；镜头节奏（见#13）；空镜比例调参（见#14）；风格库（多风格切换）。
 

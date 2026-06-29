@@ -13,7 +13,7 @@ These tests lock down the exact behavior of the srt constructor:
 These are the "钉死值" (pinned values) from the plan. The implementation must match
 character-for-character; changing the test = test tampering.
 """
-from lib.subtitle import build_srt
+from lib.subtitle import build_srt, build_ass
 
 
 def _norm(s: str) -> str:
@@ -111,3 +111,32 @@ def test_build_srt_empty_beat_text_raises_or_skips():
     # Only 1 cue from the second beat
     assert out.count("-->") == 1, f"expected 1 cue, got {out.count('-->')} in:\n{out}"
     assert "有内容。" in out
+
+
+# ---------------------------------------------------------------------------
+# build_ass — ASS subtitles with selective keyword emphasis
+# ---------------------------------------------------------------------------
+
+
+def test_build_ass_has_header_and_dialogue():
+    out = build_ass([{"text": "先测VDOT。", "start_ms": 0, "dur_ms": 2000}])
+    assert "[Script Info]" in out
+    assert "[V4+ Styles]" in out
+    assert "Style: Default,PingFang SC" in out
+    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,," in out
+
+
+def test_build_ass_emphasizes_only_listed_keywords():
+    beat = {"text": "今天聊乳酸阈配速。", "start_ms": 0, "dur_ms": 3000,
+            "keywords": ["乳酸阈"]}
+    out = build_ass([beat])
+    # the keyword is wrapped in an emphasis override, the rest is not
+    assert r"{\fs74" in out and "乳酸阈" in out
+    assert out.count(r"\fs74") == 1  # exactly one emphasis span
+    assert "今天聊" in out
+
+
+def test_build_ass_empty_keywords_no_emphasis():
+    beat = {"text": "随便一句话。", "start_ms": 0, "dur_ms": 2000, "keywords": []}
+    out = build_ass([beat])
+    assert r"\fs74" not in out  # no emphasis when keywords empty (never forced)

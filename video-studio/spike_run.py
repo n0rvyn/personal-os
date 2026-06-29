@@ -19,7 +19,7 @@ import subprocess
 import sys
 
 from lib import media_image, media_tts, media_video, media_chart, ffcmd
-from lib.subtitle import build_srt
+from lib.subtitle import build_ass
 from spike_acceptance import measure_gap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -180,7 +180,9 @@ def main() -> int:
         dur_ms = _probe_ms(mp3)
         dur_s = dur_ms / 1000.0
         log(f"[{bid}] tts reported={reported_ms}ms actual={dur_ms}ms -> {mp3}")
-        srt_beats.append({"text": beat["text"], "start_ms": start_ms, "dur_ms": dur_ms})
+        kws = sb[i].get("keywords", []) if sb is not None else []
+        srt_beats.append({"text": beat["text"], "start_ms": start_ms,
+                          "dur_ms": dur_ms, "keywords": kws})
         start_ms += dur_ms
 
         seg_out = os.path.join(SPIKE, f"seg_{i}_{bid}.mp4")
@@ -243,11 +245,12 @@ def main() -> int:
     _run_ff(ffcmd.concat_cmd(list_file, base_mp4), "concat")
     log(f"[concat] base.mp4 ({len(seg_files)} segs, {total_audio_ms}ms)")
 
-    # ---- 5. srt ----
-    srt_path = os.path.join(SPIKE, "subs.srt")
-    with open(srt_path, "w") as f:
-        f.write(build_srt(srt_beats))
-    log(f"[srt] {srt_path}")
+    # ---- 5. subtitles (ASS: style B + keyword emphasis) ----
+    ass_path = os.path.join(SPIKE, "subs.ass")
+    with open(ass_path, "w") as f:
+        f.write(build_ass(srt_beats))
+    n_kw = sum(len(b.get("keywords") or []) for b in srt_beats)
+    log(f"[ass] {ass_path} ({n_kw} emphasis keywords)")
 
     # ---- 6. BGM + ducking calibration loop ----
     bgm, placeholder = _ensure_bgm()
@@ -260,8 +263,8 @@ def main() -> int:
     rounds = 0
     for rnd in range(1, MAX_CALIB_ROUNDS + 1):
         rounds = rnd
-        _run_ff(ffcmd.mux_final_cmd(base_mp4, srt_path, bgm, final_mp4,
-                                    bgm_volume=f"{bgm_volume:.4f}"), f"mux-r{rnd}")
+        _run_ff(ffcmd.mux_final_ass_cmd(base_mp4, ass_path, bgm, final_mp4,
+                                        bgm_volume=f"{bgm_volume:.4f}"), f"mux-r{rnd}")
         gap = measure_gap(base_mp4, bgm, f"{bgm_volume:.4f}")
         history.append({"round": rnd, "bgm_volume": round(bgm_volume, 4), "gap": round(gap, 2)})
         log(f"[bgm] round {rnd}: bgm_volume={bgm_volume:.4f} gap={gap:.1f}dB")

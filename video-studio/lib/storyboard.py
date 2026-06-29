@@ -44,9 +44,10 @@ def _build_prompt(beats: list[dict], character_desc: str, style: str) -> str:
 5. 标 [图表] 的段落已用数据图表，标 [实拍视频] 的段落已有真人跑姿视频——这两类你给的镜头仅作前后连贯参考，照常输出但driver会忽略它们的图。
 6. 每段 1~2 个镜头（信息多/时间长的段可 2 个，短段 1 个）。
 7. with_character=true 表示画面里出现主讲人物；false 表示空镜/纯环境/细节（不出现人物）。
+8. 另给每段标 keywords：该段台词里【最值得在字幕里高亮强调】的词（数字、核心术语、punchline），原样照抄台词中的词。一句通常 0~2 个，**可以是空数组 []，宁缺毋滥、绝不硬凑**——不值得强调就留空，否则强调就失去意义。
 
 只输出一个 JSON 数组，长度必须等于旁白段数({len(beats)})。每个元素形如：
-{{"shots":[{{"prompt":"具体画面描述(中文,简洁,视觉化,不含台词文字)","shot_type":"机位/景别","with_character":true}}]}}
+{{"shots":[{{"prompt":"具体画面描述(中文,简洁,视觉化,不含台词文字)","shot_type":"机位/景别","with_character":true}}],"keywords":["乳酸阈"]}}
 严格 JSON 规则：所有 key 和字符串值用标准英文双引号；prompt 值内部【绝对不要】出现任何英文双引号，需要分隔就用顿号、或逗号；分隔符用半角逗号。
 不要输出任何解释、不要 markdown 代码块，只要纯 JSON 数组。
 
@@ -117,5 +118,8 @@ def build_storyboard(
                 "shot_type": (s.get("shot_type") or "").strip(),
                 "with_character": bool(s.get("with_character", True)),
             })
-        norm.append({"shots": clean})
+        raw_kw = entry.get("keywords") or []
+        keywords = [k.strip() for k in raw_kw if isinstance(k, str) and k.strip()] \
+            if isinstance(raw_kw, list) else []
+        norm.append({"shots": clean, "keywords": keywords})
     return norm

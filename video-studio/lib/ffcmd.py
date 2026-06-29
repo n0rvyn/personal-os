@@ -206,3 +206,39 @@ def mux_final_cmd(
         "-ac", "2",
         out_mp4,
     ]
+
+
+def _duck_filter(bgm_volume: str, duck_threshold: float) -> str:
+    return (
+        f"[1:a]volume={bgm_volume},aloop=loop=-1:size=2e9[bg];"
+        f"[bg][0:a]sidechaincompress="
+        f"threshold={duck_threshold}:ratio=8:attack=5:release=300[duck];"
+        f"[0:a][duck]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+    )
+
+
+def mux_final_ass_cmd(
+    base_mp4: str,
+    ass: str,
+    bgm: str,
+    out_mp4: str,
+    duck_threshold: float = 0.03,
+    bgm_volume: str = "0.12",
+) -> list[str]:
+    """Like mux_final_cmd but burns a libass ASS file (rich styling: keyword
+    emphasis lives in the ASS itself, so no force_style here). Same BGM ducking.
+    """
+    return [
+        "-i", base_mp4,
+        "-i", bgm,
+        "-filter_complex", _duck_filter(bgm_volume, duck_threshold),
+        "-vf", f"ass={ass}",
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-ar", "48000",
+        "-ac", "2",
+        out_mp4,
+    ]

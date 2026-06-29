@@ -22,6 +22,7 @@ from lib.ffcmd import (
     chart_segment_cmd,
     concat_cmd,
     mux_final_cmd,
+    mux_final_ass_cmd,
 )
 
 
@@ -347,3 +348,18 @@ def test_mux_final_accepts_duck_threshold_and_bgm_volume_kwargs():
     s = _joined(argv)
     assert "volume=0.06" in s, f"custom bgm_volume=0.06 not honored: {s}"
     assert "threshold=0.03" in s, f"custom duck_threshold=0.03 not honored: {s}"
+
+# ---------------------------------------------------------------------------
+# mux_final_ass_cmd — burns an ASS file (rich subtitles) + same BGM ducking
+# ---------------------------------------------------------------------------
+
+
+def test_mux_final_ass_burns_ass_and_ducks_bgm():
+    argv = mux_final_ass_cmd("/t/base.mp4", "/t/subs.ass", "/t/bgm.mp3", "/t/out.mp4")
+    s = _joined(argv)
+    assert "ass=/t/subs.ass" in s, f"ass filter missing: {s}"
+    assert "sidechaincompress" in s, f"BGM duck missing: {s}"
+    assert "amix=inputs=2" in s, f"amix missing: {s}"
+    assert "-map [aout]" in s, f"ducked audio not mapped: {s}"
+    assert "subtitles=" not in s, f"should use ass= not subtitles=: {s}"
+    assert isinstance(argv, list)  # no shell=True

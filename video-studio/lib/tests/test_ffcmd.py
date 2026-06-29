@@ -24,6 +24,9 @@ from lib.ffcmd import (
     mux_final_cmd,
     mux_final_ass_cmd,
     voice_polish_cmd,
+    still_clip_cmd,
+    xfade_chain_cmd,
+    mux_av_cmd,
 )
 
 
@@ -372,3 +375,27 @@ def test_voice_polish_cmd_loudnorm_and_compress():
     assert "-i /t/in.mp3" in s and argv[-1] == "/t/out.mp3"
     assert "loudnorm" in s and "acompressor" in s
     assert isinstance(argv, list)
+
+
+def test_still_clip_cmd_is_silent_video_only():
+    argv = still_clip_cmd("/t/x.png", 3.0, "/t/c.mp4")
+    s = _joined(argv)
+    assert "-an" in s and "zoompan" in s and "-loop 1" in s
+    assert "-map 1:a" not in s and argv[-1] == "/t/c.mp4"
+
+
+def test_xfade_chain_offsets_land_on_narration_boundaries():
+    # clip_durs = narration + fade; offsets must equal cumulative narration.
+    fade = 0.5
+    durs = [3.0 + fade, 4.0 + fade, 2.0 + fade]  # narrations 3,4,2
+    argv = xfade_chain_cmd(["/a.mp4", "/b.mp4", "/c.mp4"], durs, "/out.mp4", fade=fade)
+    s = _joined(argv)
+    assert "xfade=transition=fade:duration=0.5:offset=3.000" in s   # after beat0 (3s)
+    assert "xfade=transition=fade:duration=0.5:offset=7.000" in s   # after beat1 (3+4s)
+    assert "[vout]" in s and "-map [vout]" in s
+
+
+def test_mux_av_copies_video_and_shortest():
+    argv = mux_av_cmd("/v.mp4", "/a.m4a", "/o.mp4")
+    s = _joined(argv)
+    assert "-c:v copy" in s and "-map 0:v" in s and "-map 1:a" in s and "-shortest" in s

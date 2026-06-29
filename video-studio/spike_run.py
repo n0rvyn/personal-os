@@ -119,7 +119,9 @@ def main() -> int:
         ref_url = media_image.gen_character_ref(cref["prompt"], cref_out)
 
     beats = fixture["beats"]
-    seg_files: list[str] = []
+    vid_clips: list[str] = []
+    clip_durs: list[float] = []
+    mp3s: list[str] = []
     srt_beats: list[dict] = []
     start_ms = 0
 
@@ -131,38 +133,32 @@ def main() -> int:
         sb = _storyboard.build_storyboard(beats, char_desc)
         log(f"[storyboard] {sum(len(e['shots']) for e in sb)} shots / {len(beats)} beats")
 
-    def render_shots(shots: list[dict], dur_s: float, mp3: str, seg_out: str, bid: str) -> None:
-        """Render N shots (each its own Ken Burns slice, hard-cut) and mux the
-        narration. with_character=True locks the host via subject_reference;
-        False = 空镜 (no person). One shot == a single still segment."""
+    def render_shots_clip(shots: list[dict], clip_len: float, out_clip: str, bid: str) -> None:
+        """Render N shots (each its own Ken Burns slice, hard-cut) into ONE
+        silent video clip of length clip_len. with_character=True locks the host
+        via subject_reference; False = 空镜. Narration is muxed later (the audio
+        is a separate hard-concat track so beats can cross-dissolve)."""
+        import shutil
         n = len(shots)
-        slice_s = dur_s / n
+        slice_s = clip_len / n
         subs = []
         for j, sh in enumerate(shots):
             spng = os.path.join(SPIKE, f"{bid}_shot{j}.png")
             ref = ref_url if sh.get("with_character", True) else None
             media_image.gen_still(sh["prompt"], ref, spng)
             sub = os.path.join(SPIKE, f"{bid}_sub{j}.mp4")
-            _run_ff(["-loop", "1", "-i", spng, "-t", f"{slice_s:.4f}", "-r", "30",
-                     "-vf", ffcmd._still_or_chart_filtergraph(slice_s),
-                     "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", sub],
-                    f"{bid}-shot{j}")
+            _run_ff(ffcmd.still_clip_cmd(spng, slice_s, sub), f"{bid}-shot{j}")
             subs.append(sub)
         if len(subs) == 1:
-            visual = subs[0]
+            shutil.copy(subs[0], out_clip)
         else:
             listf = os.path.join(SPIKE, f"{bid}_shots.txt")
             with open(listf, "w") as f:
                 for s in subs:
                     f.write(f"file '{s}'\n")
-            visual = os.path.join(SPIKE, f"{bid}_visual.mp4")
             _run_ff(["-f", "concat", "-safe", "0", "-i", listf,
-                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", visual],
+                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", out_clip],
                     f"{bid}-concat")
-        _run_ff(["-i", visual, "-i", mp3, "-map", "0:v", "-map", "1:a",
-                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
-                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", seg_out],
-                f"{bid}-mux")
         kinds = " / ".join(f"{'人' if s.get('with_character', True) else '空'}·{s.get('shot_type', '')}"
                            for s in shots)
         log(f"[{bid}] shots×{n}: {kinds}")
@@ -189,14 +185,17 @@ def main() -> int:
                           "dur_ms": dur_ms, "keywords": kws})
         start_ms += dur_ms
 
-        seg_out = os.path.join(SPIKE, f"seg_{i}_{bid}.mp4")
+        # Video clip is FADE-longer than its narration so adjacent beats can
+        # cross-dissolve (the overlap is xfaded back out → net = narration len).
+        clip_len = dur_s + ffcmd.DISSOLVE_FADE
+        clip = os.path.join(SPIKE, f"clip_{i}_{bid}.mp4")
 
-        # ---- 3. visual asset + segment cmd ----
+        # ---- 3. visual asset -> video-only clip of length clip_len ----
         if vtype == "chart":
             png = os.path.join(SPIKE, f"{bid}.png")
             media_chart.render_pace_table(
                 beat["chart_title"], [tuple(r) for r in beat["chart_rows"]], png)
-            _run_ff(ffcmd.chart_segment_cmd(png, dur_s, seg_out, mp3), f"seg-{bid}")
+            _run_ff(ffcmd.still_clip_cmd(png, clip_len, clip), f"clip-{bid}")
             log(f"[{bid}] chart -> {png}")
         elif vtype == "video":
             used_still = True
@@ -208,13 +207,13 @@ def main() -> int:
                 import shutil
                 if os.path.abspath(reuse_clip) != os.path.abspath(vmp4):
                     shutil.copy(reuse_clip, vmp4)
-                _run_ff(ffcmd.video_segment_cmd(vmp4, dur_s, seg_out, mp3), f"seg-{bid}")
+                _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip), f"clip-{bid}")
                 used_still = False
                 log(f"[{bid}] reusing provided S2V clip {reuse_clip}")
             elif live_video:
                 res = media_video.gen_video(beat["video_prompt"], ref_url, vmp4)
                 if res.get("ok"):
-                    _run_ff(ffcmd.video_segment_cmd(vmp4, dur_s, seg_out, mp3), f"seg-{bid}")
+                    _run_ff(ffcmd.video_clip_cmd(vmp4, clip_len, clip), f"clip-{bid}")
                     used_still = False
                     log(f"[{bid}] S2V ok -> {vmp4} (file_id={res.get('file_id')})")
                 else:
@@ -223,7 +222,7 @@ def main() -> int:
                 log(f"[{bid}] RUN_LIVE_VIDEO unset -> still fallback (no video credit)")
             if used_still:
                 fb = beat.get("image_prompt", beat["text"])
-                render_shots([{"prompt": fb, "with_character": True}], dur_s, mp3, seg_out, bid)
+                render_shots_clip([{"prompt": fb, "with_character": True}], clip_len, clip, bid)
         else:
             # still / multi / storyboard-driven → render a list of shots
             if sb is not None:
@@ -234,20 +233,28 @@ def main() -> int:
                 shots = [{"prompt": beat["image_prompt"], "with_character": True}]
             else:
                 raise RuntimeError(f"unknown visual_type: {vtype}")
-            render_shots(shots, dur_s, mp3, seg_out, bid)
+            render_shots_clip(shots, clip_len, clip, bid)
 
-        seg_files.append(seg_out)
+        vid_clips.append(clip)
+        clip_durs.append(clip_len)
+        mp3s.append(mp3)
 
     total_audio_ms = start_ms
 
-    # ---- 4. concat -> base.mp4 ----
-    list_file = os.path.join(SPIKE, "segments.txt")
-    with open(list_file, "w") as f:
-        for s in seg_files:
-            f.write(f"file '{s}'\n")
+    # ---- 4. assemble base.mp4: xfade video chain + hard-concat narration ----
+    a_list = os.path.join(SPIKE, "narration.txt")
+    with open(a_list, "w") as f:
+        for m in mp3s:
+            f.write(f"file '{m}'\n")
+    narration = os.path.join(SPIKE, "narration.m4a")
+    _run_ff(ffcmd.concat_audio_cmd(a_list, narration), "narration-concat")
+
+    video_track = os.path.join(SPIKE, "video.mp4")
+    _run_ff(ffcmd.xfade_chain_cmd(vid_clips, clip_durs, video_track), "xfade")
+
     base_mp4 = os.path.join(SPIKE, "base.mp4")
-    _run_ff(ffcmd.concat_cmd(list_file, base_mp4), "concat")
-    log(f"[concat] base.mp4 ({len(seg_files)} segs, {total_audio_ms}ms)")
+    _run_ff(ffcmd.mux_av_cmd(video_track, narration, base_mp4), "mux-base")
+    log(f"[base] dissolve assembly: {len(vid_clips)} clips x-faded, {total_audio_ms}ms narration")
 
     # ---- 5. subtitles (ASS: style B + keyword emphasis) ----
     ass_path = os.path.join(SPIKE, "subs.ass")

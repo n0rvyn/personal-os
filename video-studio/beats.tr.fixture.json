@@ -1,0 +1,8 @@
+{
+  "character_ref": {"prompt": "一位三十岁中国男性跑步教练，短发，深色运动外套，正脸半身特写，干净背景", "out": ".spike/character_ref.png"},
+  "beats": [
+    {"id": "t0", "visual_type": "still", "text": "今天聊乳酸阈配速。", "image_prompt": "跑步教练清晨跑道微笑开场，中景，柔和晨光"},
+    {"id": "t1", "visual_type": "multi", "text": "它决定你能在多快的速度下稳定坚持。", "shots": ["跑步教练面部特写认真讲解，浅景深", "空旷红色跑道全景，晨雾，无人"]},
+    {"id": "t2", "visual_type": "chart", "text": "再用VDOT表反推各档配速。", "chart_title": "VDOT 配速参考", "chart_rows": [["轻松跑 E", "6:30 / 公里"], ["乳酸阈 T", "4:50 / 公里"]]}
+  ]
+}

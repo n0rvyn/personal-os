@@ -257,3 +257,72 @@ LIGHT_VOICE_AF = (
 def voice_polish_cmd(in_mp3: str, out_mp3: str) -> list[str]:
     """argv to apply the light narration polish (consistency + loudness)."""
     return ["-i", in_mp3, "-af", LIGHT_VOICE_AF, out_mp3]
+
+
+# ---------------------------------------------------------------------------
+# Dissolve assembly: video-only clips (each +fade longer than its narration)
+# are xfade-chained; narration is a separate hard-concat track; then muxed.
+# This keeps the narration-driven timing + subtitle alignment exact while the
+# video cross-dissolves at each beat boundary.
+# ---------------------------------------------------------------------------
+
+DISSOLVE_FADE = 0.5  # seconds of cross-dissolve between beats
+
+
+def still_clip_cmd(png: str, dur_s: float, out_mp4: str) -> list[str]:
+    """Video-only Ken Burns clip (no narration) — for the xfade assembly."""
+    return [
+        "-loop", "1", "-i", png, "-t", str(dur_s), "-r", "30",
+        "-vf", _still_or_chart_filtergraph(dur_s),
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
+    ]
+
+
+def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str) -> list[str]:
+    """Video-only S2V clip normalized to 1920x1080/30 and padded to dur_s."""
+    vf = (
+        "scale=1920:1080:force_original_aspect_ratio=increase,"
+        "crop=1920:1080,"
+        f"tpad=stop_mode=clone:stop_duration={int(dur_s) + 1},fps=30"
+    )
+    return [
+        "-i", src_mp4, "-t", str(dur_s), "-r", "30", "-vf", vf,
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
+    ]
+
+
+def xfade_chain_cmd(clips: list[str], clip_durs: list[float], out_mp4: str,
+                    fade: float = DISSOLVE_FADE) -> list[str]:
+    """Cross-dissolve a list of video-only clips. clip_durs[i] are the clip
+    lengths; each adjacent pair overlaps `fade` s. Output length =
+    sum(clip_durs) - (n-1)*fade. With clip_durs[i] = narration_i + fade, the
+    xfade offsets land exactly on the cumulative narration boundaries."""
+    inputs: list[str] = []
+    for c in clips:
+        inputs += ["-i", c]
+    if len(clips) == 1:
+        return [*inputs, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4]
+    fc = []
+    prev = "[0:v]"
+    acc = clip_durs[0]
+    for i in range(1, len(clips)):
+        off = acc - fade
+        label = "[vout]" if i == len(clips) - 1 else f"[x{i}]"
+        fc.append(f"{prev}[{i}:v]xfade=transition=fade:duration={fade}:offset={off:.3f}{label}")
+        prev = label
+        acc += clip_durs[i] - fade
+    return [*inputs, "-filter_complex", ";".join(fc), "-map", "[vout]",
+            "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4]
+
+
+def concat_audio_cmd(list_file: str, out_aac: str) -> list[str]:
+    """Hard-concat narration mp3s into one continuous aac track."""
+    return ["-f", "concat", "-safe", "0", "-i", list_file,
+            "-c:a", "aac", "-ar", "48000", "-ac", "2", out_aac]
+
+
+def mux_av_cmd(video: str, audio: str, out_mp4: str) -> list[str]:
+    """Mux a silent video track with the narration audio (trims video tail)."""
+    return ["-i", video, "-i", audio, "-map", "0:v", "-map", "1:a",
+            "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-ac", "2",
+            "-shortest", out_mp4]

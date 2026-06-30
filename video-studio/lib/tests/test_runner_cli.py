@@ -49,8 +49,14 @@ def _fake_prepare(config, *, fixture_path, seq, slug, dry, log):
 
     step_fns = {s["name"]: make_fn(s["name"]) for s in load_pipeline()}
 
-    def dispatch(*_a):
-        raise RuntimeError("no agent steps in Phase 2")
+    def dispatch(agent_name, step, ctx, scratch_dir):
+        # agent steps (e.g. `script`) route here — satisfy the gate like a fake.
+        art = step.get("artifact")
+        if art:
+            p = Path(scratch_dir) / f"{art}.txt"
+            p.write_text("x", encoding="utf-8")
+            ctx[art] = str(p)
+        return {"ok": True}
 
     return {
         "step_fns": step_fns,

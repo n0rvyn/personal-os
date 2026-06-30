@@ -238,13 +238,24 @@ def test_runner_step_order_matches_real_pipeline(tmp_path):
     for step in real_steps:
         step_fns[step["name"]] = _tracking_step_fn(executed)
 
+    # Agent steps (e.g. `script`) route through dispatch, not step_fns — record
+    # them to `executed` too so the order assertion covers the full pipeline.
+    def tracking_dispatch(agent_name, step, ctx, scratch_dir):
+        executed.append(step["name"])
+        art = step.get("artifact")
+        if art:
+            p = scratch_dir / f"{art}.txt"
+            p.write_text("ok", encoding="utf-8")
+            ctx[art] = str(p)
+        return {"ok": True}
+
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     result = run_pipeline(
         _make_config_stub(),
         pipeline=real_steps,
         step_fns=step_fns,
-        dispatch=_FakeDispatch(),
+        dispatch=tracking_dispatch,
         gates=_make_gates(),
         scratch_dir=scratch,
     )

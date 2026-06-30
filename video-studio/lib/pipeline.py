@@ -61,7 +61,7 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": "scratch_dir",
         "gate": [{"fn": "check_artifact"}],
     },
-    # 3 — extract beats from syllabus (placeholder; Phase 3/4 wires real agent)
+    # 3 — extract source text (pdftotext -layout per-page) OR load fixture beats
     {
         "name": "extract",
         "kind": "code",
@@ -69,6 +69,19 @@ _PIPELINE: list[dict[str, Any]] = [
         "inputs": ["cursor-read", "config"],
         "artifact": None,
         "gate": None,
+    },
+    # 3b — script: digest-writer → beats, gated by the 忠实门 (verify_anchors)
+    # inside the dispatch closure. retry=1: a faithfulness miss re-dispatches the
+    # writer once (runner re-runs THIS step on gate miss); double-miss → halt.
+    # Fixture/reuse mode (beats already in ctx) → pass-through (no live dispatch).
+    {
+        "name": "script",
+        "kind": "agent",
+        "agent": "digest-writer",
+        "inputs": ["extract", "config"],
+        "artifact": "script_ledger",
+        "gate": [{"fn": "check_artifact"}],
+        "retry": 1,
     },
     # 4 — text-to-speech for all beats
     {

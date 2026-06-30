@@ -35,9 +35,13 @@ if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
 from lib import cards, ffcmd, grade, media_chart, media_tts
+from lib import dispatch as dispatch_mod
 from lib import episode as episode_mod
+from lib import extract as extract_mod
 from lib import steps as steps_mod
 from lib.config import VideoStudioConfig
+from lib.ledger import verify_anchors
+from lib.provenance import build_provenance
 from lib.subtitle import build_ass, build_srt
 
 SPIKE = PLUGIN_ROOT / ".spike"
@@ -205,8 +209,20 @@ def build_step_fns(
         ctx["scratch_dir"] = _sentinel(Path(scratch), "scratch_dir", str(ep_dir))
         log(f"[scratch] episode dir -> {ep_dir}")
 
-    # ---- 3: extract (fixture + character_ref + grade + storyboard) ----
+    # ---- 3: extract — PDF-text mode (Phase 3) OR fixture-beats mode (Phase 2) ----
     def step_extract(step, ctx, scratch):
+        # PDF mode: VIDEO_PDF + VIDEO_PAGES set → pdftotext -layout per page.
+        # Sets page_text + fulltext (NOT beats — the `script` step produces them).
+        pdf = os.environ.get("VIDEO_PDF")
+        pages_env = os.environ.get("VIDEO_PAGES")
+        if pdf and pages_env:
+            pages = [int(p) for p in pages_env.replace(",", " ").split()]
+            page_text = extract_mod.extract_pages(pdf, pages)
+            ctx["page_text"] = page_text
+            ctx["fulltext"] = extract_mod.join_fulltext(page_text)
+            log(f"[extract] PDF -layout: pages {pages} -> {len(ctx['fulltext'])} chars")
+            return
+        # Fixture mode (Phase 2, unchanged): load beats + ref + grade + storyboard.
         with open(fixture_path, encoding="utf-8") as f:
             fixture = json.load(f)
         beats = fixture["beats"]
@@ -482,18 +498,31 @@ def build_step_fns(
     # ---- 10: provenance (stub; Phase 4 wires PDF page mapping) ----
     def step_provenance(step, ctx, scratch):
         ep = ctx["ep"]
-        prov = {
-            "seq": seq, "slug": slug,
-            "provider": cfg.media.provider,
-            "total_audio_ms": ctx.get("total_audio_ms"),
-            "calib": ctx.get("calib"),
-            "beats": [{"id": b["id"], "visual_type": b["visual_type"]}
-                      for b in ctx["beats"]],
-            "note": "Phase-2 stub provenance (PDF page anchoring = Phase 4).",
-        }
+        page_text = ctx.get("page_text")
+        if page_text:
+            # Phase 3: each objective assertion → grounding PDF page (UX-004).
+            records = build_provenance(ctx["beats"], page_text)
+            prov = {
+                "seq": seq, "slug": slug,
+                "pages": sorted(page_text),
+                "assertions": records,
+            }
+            n_page = sum(1 for r in records if r["page"] is not None)
+            log(f"[provenance] {n_page}/{len(records)} assertions → page (UX-004)")
+        else:
+            # Phase 2 (fixture render): no source PDF — visual-type stub.
+            prov = {
+                "seq": seq, "slug": slug,
+                "provider": cfg.media.provider,
+                "total_audio_ms": ctx.get("total_audio_ms"),
+                "calib": ctx.get("calib"),
+                "beats": [{"id": b["id"], "visual_type": b["visual_type"]}
+                          for b in ctx["beats"]],
+                "note": "Phase-2 stub provenance (no source PDF).",
+            }
+            log(f"[provenance] {ep['provenance']}")
         ep["provenance"].write_text(json.dumps(prov, ensure_ascii=False, indent=2),
                                     encoding="utf-8")
-        log(f"[provenance] {ep['provenance']}")
 
     # ---- 11: publish (placeholder; Phase 7) ----
     def step_publish(step, ctx, scratch):
@@ -524,6 +553,96 @@ def build_step_fns(
 # prepare_render — assemble everything run_pipeline needs (no run_pipeline call)
 # ---------------------------------------------------------------------------
 
+def _beats_to_md(beats: list[dict]) -> str:
+    """Render digest-writer beats into a reviewable script.md."""
+    lines = ["# 脚本（digest-writer）\n"]
+    for b in beats:
+        lines.append(f"## {b.get('beat_id', '')}\n")
+        lines.append(b.get("text", "") + "\n")
+        anchor = b.get("anchor")
+        if anchor:
+            lines.append(f"> 依据: {anchor}\n")
+    return "\n".join(lines)
+
+
+def make_script_dispatch(
+    cfg: VideoStudioConfig,
+    *,
+    dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
+    plugin_root: Path = PLUGIN_ROOT,
+    log: Callable[[str], None] = lambda _m: None,
+) -> Callable:
+    """The `script` agent step's dispatch closure — host of the 忠实门.
+
+    Runner contract: an agent step routes through this `dispatch(agent, step,
+    ctx, scratch_dir)` (NOT step_fns), and it has ctx access (a stock gate fn
+    does not — runner.py:73). retry=1: on a faithfulness miss this writes NO
+    artifact → check_artifact gate fails → runner re-runs THIS step (re-
+    dispatches the writer); a second miss halts (failed_step="script").
+
+    - Fixture / reuse (beats already in ctx) → pass-through, no live dispatch.
+    - PDF mode → dispatch digest-writer (claude -p --model sonnet) against the
+      SAME ctx["fulltext"] the gate checks, then verify_anchors. Grounded →
+      write the script_ledger artifact + script.md; flagged → no artifact.
+    """
+    def dispatch(agent, step, ctx, scratch_dir):
+        if agent != "digest-writer":
+            raise RuntimeError(f"unexpected agent step: {agent!r}")
+        ledger_art = os.path.join(str(scratch_dir), "script_ledger.json")
+
+        # Fixture / reuse pass-through.
+        if ctx.get("beats"):
+            with open(ledger_art, "w", encoding="utf-8") as f:
+                json.dump({"beats": ctx["beats"]}, f, ensure_ascii=False)
+            ctx["script_ledger"] = ledger_art
+            log("[script] fixture pass-through (beats already present)")
+            return
+
+        # PDF mode: hand the writer the literal fulltext (same object the gate
+        # checks), dispatch, then run the 忠实门.
+        fulltext = ctx.get("fulltext", "")
+        src = os.path.join(str(scratch_dir), "source_fulltext.txt")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(fulltext)
+        user_prompt = (
+            f"教材原文（只依据这段原文，不外检索）在: {src}\n"
+            f"读它，写一期结构化跑步知识脚本 beats。"
+        )
+        res = dispatch_persona_fn(
+            "digest-writer", user_prompt, scratch_dir, "digest_beats.json",
+            plugin_root=plugin_root, model="sonnet",
+        )
+        if not res.get("ok"):
+            log(f"[script] dispatch failed → no artifact (retry): {res.get('reason')}")
+            return
+        # LLM JSON is not guaranteed well-formed (e.g. unescaped inner quotes).
+        # A bad parse is a FAILED ATTEMPT (→ retry), never a pipeline crash.
+        try:
+            with open(res["artifact_path"], encoding="utf-8") as f:
+                beats = json.load(f).get("beats", [])
+        except (json.JSONDecodeError, OSError, AttributeError, ValueError) as exc:
+            log(f"[script] digest output not valid JSON → no artifact (retry): {exc}")
+            return
+
+        verdict = verify_anchors({"beats": beats}, fulltext)
+        if not verdict["ok"]:
+            ctx["_faithfulness_flagged"] = verdict["flagged"]
+            log(f"[script] 忠实门 FLAGGED {len(verdict['flagged'])} beat(s) "
+                f"→ no artifact → retry/halt")
+            return
+
+        ctx["beats"] = beats
+        with open(ledger_art, "w", encoding="utf-8") as f:
+            json.dump({"beats": beats}, f, ensure_ascii=False)
+        ctx["script_ledger"] = ledger_art
+        ep = ctx.get("ep")
+        if ep is not None:
+            ep["script"].write_text(_beats_to_md(beats), encoding="utf-8")
+        log(f"[script] {len(beats)} beats grounded → 忠实门 PASS")
+
+    return dispatch
+
+
 def prepare_render(
     cfg: VideoStudioConfig,
     *,
@@ -532,6 +651,7 @@ def prepare_render(
     slug: str,
     dry: bool,
     log: Callable[[str], None],
+    dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
 ) -> dict[str, Any]:
     """Build the {step_fns, gates, dispatch, scratch_dir} bundle the caller
     passes straight into `run_pipeline`. The caller owns the run_pipeline call
@@ -545,8 +665,8 @@ def prepare_render(
     )
     gates = {"check_artifact": episode_mod.check_artifact}
 
-    def dispatch(agent, step, ctx, scratch_dir):  # no agent steps in Phase 2
-        raise RuntimeError(f"unexpected agent step in Phase-2 pipeline: {agent}")
+    dispatch = make_script_dispatch(
+        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
 
     scratch = episode_mod.make_scratch(cfg.output_dir, tag=f"{seq}-{slug}")
     return {

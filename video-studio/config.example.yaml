@@ -1,0 +1,47 @@
+# video-studio config example
+#
+# Copy to video-studio.yaml (or point VIDEO_STUDIO_CONFIG to any path).
+# API credentials go in shell env, NOT here:
+#   Doubao/火山方舟: ARK_API_KEY
+#   MiniMax:        MINIMAX_API_KEY  MINIMAX_GROUP_ID
+#
+# output_dir must exist on disk before running. video-studio will NOT create it.
+
+render:
+  width: 1920
+  height: 1080
+  fps: 30
+  subtitle_font: PingFang SC
+
+audio:
+  # MiniMax voice ID for TTS narration
+  voice_id: male-qn-jingying-jingpin
+  # BGM ducking attenuation in dB (how much to lower BGM under narration)
+  bgm_duck_db: 18.0
+
+media:
+  # Image + video generation provider: "doubao" (default) or "minimax"
+  provider: doubao
+
+budget:
+  # Maximum S2V (subject-to-video) shots per episode (conservative for cost control)
+  video_shots_per_episode: 2
+
+ffmpeg:
+  # Must be a libass-enabled build for subtitle burning.
+  # Example static build: ~/.local/ffmpeg-libass/ffmpeg
+  # Set FFMPEG_BIN in shell env, or use this key.
+  ffmpeg_bin: /usr/local/bin/ffmpeg
+  ffprobe_bin: /usr/local/bin/ffprobe
+
+# Character reference image for subject-consistent video (Stage 0 artifact).
+# Path to a portrait image of the on-screen character.
+# Not existence-checked at config load time — OK if not yet generated.
+character_ref: /path/to/character-ref.jpg
+
+# Visual style preset name (Phase 6 artifact). Used by the director agent.
+style: cinematic
+
+# Base output directory — MUST exist on disk before running.
+# Subdirectories (episodes/, syllabus/, state/) are auto-created under it.
+output_dir: /path/to/video-studio-output

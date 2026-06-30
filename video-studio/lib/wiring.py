@@ -40,8 +40,10 @@ from lib import episode as episode_mod
 from lib import extract as extract_mod
 from lib import steps as steps_mod
 from lib.config import VideoStudioConfig
+from lib.budget import apply_video_budget
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
 from lib.provenance import build_provenance
+from lib.storyboard import parse_shotlist
 from lib.subtitle import build_ass, build_srt
 
 SPIKE = PLUGIN_ROOT / ".spike"
@@ -247,21 +249,7 @@ def build_step_fns(
         # locked series grade (every photographic shot; charts excluded)
         ctx["grade_vf"] = grade.grade_filter()
         log(f"[grade] series look = {grade.SERIES_LOOK}")
-
-        # storyboard (reuse cached plan; must match beat count)
-        sb = None
-        reuse_sb = os.environ.get("SPIKE_STORYBOARD_JSON")
-        if reuse_sb:
-            with open(reuse_sb, encoding="utf-8") as f:
-                sb = json.load(f)
-            if len(sb) != len(beats):
-                raise RuntimeError(
-                    f"reused storyboard {reuse_sb} has {len(sb)} entries but "
-                    f"fixture has {len(beats)} beats")
-            log(f"[storyboard] reusing {reuse_sb} "
-                f"({sum(len(e['shots']) for e in sb)} shots / {len(beats)} beats)")
-            shutil.copy(reuse_sb, str(ep["shotlist"]))  # shotlist.json deliverable
-        ctx["sb"] = sb
+        # ctx["sb"] is set by the 分镜 director step (wiring.make_storyboard_dispatch).
 
     # ---- 4: tts (all beats; drives the timeline) ----
     def step_tts(step, ctx, scratch):
@@ -647,6 +635,131 @@ def make_script_dispatch(
     return dispatch
 
 
+def make_storyboard_dispatch(
+    cfg: VideoStudioConfig,
+    *,
+    dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
+    plugin_root: Path = PLUGIN_ROOT,
+    log: Callable[[str], None] = lambda _m: None,
+) -> Callable:
+    """The `分镜` agent step's dispatch closure — host of the 视频预算门.
+
+    Runner contract: an agent step routes through this `dispatch(agent, step,
+    ctx, scratch_dir)` (NOT step_fns), and it has ctx access (a stock gate fn
+    does not — runner.py:73). retry=1: on bad JSON this writes NO artifact →
+    check_artifact gate fails → runner re-runs THIS step (re-dispatches director);
+    a second miss halts (failed_step="分镜").
+
+    Three modes:
+    - SPIKE_STORYBOARD_JSON set → reuse cached sb (zero live dispatch).
+    - beats already carry visual_type (fixture mode) → pass-through (zero live dispatch).
+    - beats lack visual_type (live digest) → dispatch director + parse + budget + back-prop.
+    """
+    def dispatch(agent, step, ctx, scratch_dir):
+        if agent != "director":
+            raise RuntimeError(f"unexpected agent step: {agent!r}")
+
+        beats = ctx.get("beats", [])
+        ep = ctx.get("ep", {})
+        shotlist_path = ep.get("shotlist")
+
+        def _write_shotlist_art(data, path=None):
+            """Write JSON to shotlist deliverable and return the file path."""
+            dest = str(path) if path is not None else os.path.join(str(scratch_dir), "shotlist.json")
+            Path(dest).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            return dest
+
+        # --- (a2) SPIKE_STORYBOARD_JSON: explicit reuse ---
+        reuse_sb = os.environ.get("SPIKE_STORYBOARD_JSON")
+        if reuse_sb:
+            with open(reuse_sb, encoding="utf-8") as f:
+                sb = json.load(f)
+            if len(sb) != len(beats):
+                raise RuntimeError(
+                    f"reused storyboard {reuse_sb} has {len(sb)} entries but "
+                    f"beats has {len(beats)} entries"
+                )
+            log(f"[storyboard] reusing {reuse_sb} "
+                f"({sum(len(e.get('shots', [])) for e in sb)} shots / {len(beats)} beats)")
+            ctx["sb"] = sb
+            if shotlist_path is not None:
+                shutil.copy(reuse_sb, str(shotlist_path))
+                ctx["shotlist_art"] = str(shotlist_path)
+            else:
+                art = os.path.join(str(scratch_dir), "shotlist.json")
+                shutil.copy(reuse_sb, art)
+                ctx["shotlist_art"] = art
+            return
+
+        # --- (a) Fixture pass-through: beats already carry visual_type ---
+        if beats and all("visual_type" in b for b in beats):
+            log("[storyboard] fixture pass-through (beats already have visual_type)")
+            # Write a minimal shotlist reflecting the existing beats' visual_type
+            # (not overwriting any beat's visual_type — render uses beat-level prompts).
+            minimal_sb = [
+                {
+                    "visual_type": b["visual_type"],
+                    "shots": [{"prompt": b.get("image_prompt") or b.get("text", ""),
+                               "shot_type": "", "with_character": True, "pace": "normal"}],
+                    "keywords": [],
+                }
+                for b in beats
+            ]
+            ctx["shotlist_art"] = _write_shotlist_art(minimal_sb, shotlist_path)
+            # ctx["sb"] stays as-is (usually None); render uses beat-level prompts.
+            return
+
+        # --- (b) Live: beats lack visual_type (digest-writer output) ---
+        beats_listing = "\n".join(
+            f"{i + 1}. {b.get('text', '')}" for i, b in enumerate(beats)
+        )
+        user_prompt = (
+            f"请为以下 {len(beats)} 段旁白逐段输出分镜方案（JSON数组），"
+            f"长度必须等于旁白段数({len(beats)})。\n\n{beats_listing}"
+        )
+        res = dispatch_persona_fn(
+            "director", user_prompt, scratch_dir, "shotlist.json",
+            plugin_root=plugin_root, model="sonnet",
+        )
+        if not res.get("ok"):
+            log(f"[storyboard] dispatch failed → no artifact (retry): {res.get('reason')}")
+            return
+
+        try:
+            with open(res["artifact_path"], encoding="utf-8") as f:
+                raw = f.read()
+        except OSError as exc:
+            log(f"[storyboard] could not read artifact → retry: {exc}")
+            return
+
+        result = parse_shotlist(raw, len(beats))
+        if isinstance(result, str):
+            log(f"[storyboard] parse_shotlist failed → no artifact (retry): {result}")
+            return
+
+        # Apply video budget (cap: cfg.budget.video_shots_per_episode)
+        result = apply_video_budget(result, cfg.budget.video_shots_per_episode)
+
+        # Back-propagate visual_type to ctx["beats"]
+        for i, item in enumerate(result):
+            ctx["beats"][i]["visual_type"] = item["visual_type"]
+
+        # Build ctx["sb"] (shots + keywords, 1:1 with beats)
+        ctx["sb"] = [{"shots": item["shots"], "keywords": item["keywords"]}
+                     for item in result]
+
+        # Write shotlist deliverable and set the artifact key
+        ctx["shotlist_art"] = _write_shotlist_art(result, shotlist_path)
+
+        n_video = sum(1 for b in ctx["beats"] if b.get("visual_type") == "video")
+        log(
+            f"[storyboard] {len(beats)} beats → {n_video} video "
+            f"(cap={cfg.budget.video_shots_per_episode})"
+        )
+
+    return dispatch
+
+
 def prepare_render(
     cfg: VideoStudioConfig,
     *,
@@ -669,8 +782,18 @@ def prepare_render(
     )
     gates = {"check_artifact": episode_mod.check_artifact}
 
-    dispatch = make_script_dispatch(
+    script_dispatch = make_script_dispatch(
         cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
+    storyboard_dispatch = make_storyboard_dispatch(
+        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
+
+    def dispatch(agent, step, ctx, scratch_dir):
+        if agent == "digest-writer":
+            return script_dispatch(agent, step, ctx, scratch_dir)
+        elif agent == "director":
+            return storyboard_dispatch(agent, step, ctx, scratch_dir)
+        else:
+            raise RuntimeError(f"unknown agent for dispatch: {agent!r}")
 
     scratch = episode_mod.make_scratch(cfg.output_dir, tag=f"{seq}-{slug}")
     return {

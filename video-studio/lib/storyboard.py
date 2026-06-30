@@ -147,6 +147,94 @@ def _parse_storyboard(out: str, n_beats: int):
     return data
 
 
+_VISUAL_TYPES = {"still", "video", "chart", "multi"}
+
+
+def parse_shotlist(out: str, n_beats: int):
+    """Parse and validate director output as a shotlist.
+
+    Returns a validated list[dict] of length n_beats on success, or an error
+    string on any validation failure.  Never raises — the caller uses the error
+    string to trigger a runner retry.
+
+    Each returned item has the shape:
+        {
+            "visual_type": str,          # in _VISUAL_TYPES
+            "shots": [{"prompt": str, "shot_type": str,
+                        "with_character": bool, "pace": str}, ...],
+            "keywords": [...],
+            "motion_value": float | absent,  # kept if present on video items
+        }
+    """
+    try:
+        cand = _extract_json_array(out)
+        if cand is None:
+            return f"no JSON array in output: {out[:200]}"
+        try:
+            data = json.loads(cand)
+        except json.JSONDecodeError as e:
+            return f"JSON parse failed: {e}"
+        if not isinstance(data, list) or len(data) != n_beats:
+            got = len(data) if isinstance(data, list) else type(data).__name__
+            return f"expected {n_beats} entries, got {got}"
+
+        norm = []
+        for i, entry in enumerate(data):
+            if not isinstance(entry, dict):
+                return f"beat {i} is not a dict: {entry!r}"
+
+            # visual_type: required, must be in _VISUAL_TYPES
+            vt = entry.get("visual_type")
+            if not vt or vt not in _VISUAL_TYPES:
+                return (
+                    f"beat {i} has invalid visual_type {vt!r}; "
+                    f"must be one of {sorted(_VISUAL_TYPES)}"
+                )
+
+            # shots: required non-empty list
+            shots_raw = entry.get("shots")
+            if not isinstance(shots_raw, list) or not shots_raw:
+                return f"beat {i} has no shots: {entry!r}"
+
+            clean_shots = []
+            for j, s in enumerate(shots_raw):
+                if not isinstance(s, dict):
+                    return f"beat {i} shot {j} is not a dict: {s!r}"
+                p = (s.get("prompt") or "").strip()
+                if not p:
+                    return f"beat {i} shot {j} missing prompt: {s!r}"
+                pace = (s.get("pace") or _DEFAULT_PACE).strip().lower()
+                if pace not in PACE_WEIGHTS:
+                    pace = _DEFAULT_PACE
+                clean_shots.append({
+                    "prompt": p,
+                    "shot_type": (s.get("shot_type") or "").strip(),
+                    "with_character": bool(s.get("with_character", True)),
+                    "pace": pace,
+                })
+
+            raw_kw = entry.get("keywords") or []
+            keywords = (
+                [k.strip() for k in raw_kw if isinstance(k, str) and k.strip()]
+                if isinstance(raw_kw, list)
+                else []
+            )
+
+            item: dict = {
+                "visual_type": vt,
+                "shots": clean_shots,
+                "keywords": keywords,
+            }
+            if "motion_value" in entry:
+                item["motion_value"] = entry["motion_value"]
+
+            norm.append(item)
+
+        return norm
+    except Exception as e:  # noqa: BLE001 — guarantee no raise
+        return f"parse_shotlist unexpected error: {e}"
+
+
 def build_storyboard(
     beats: list[dict],
     character_desc: str,

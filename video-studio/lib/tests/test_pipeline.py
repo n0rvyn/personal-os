@@ -82,6 +82,21 @@ def test_load_pipeline_step_count():
     )
 
 
+def test_load_pipeline_step_count_15():
+    """Phase-4: after inserting the 分镜 agent step, the pipeline must have
+    exactly 15 stations (14 Phase-2/3 steps + 分镜 = 15).
+
+    Pre-impl (Task 3-impl pending): returns 14 → FAILS (red).
+    Green after Task 3-impl inserts the 分镜 step.
+    """
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    assert len(steps) == 15, (
+        f"expected 15 stations (Phase-4 分镜 inserted), got {len(steps)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Every step has required fields
 # ---------------------------------------------------------------------------

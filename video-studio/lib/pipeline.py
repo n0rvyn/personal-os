@@ -83,6 +83,20 @@ _PIPELINE: list[dict[str, Any]] = [
         "gate": [{"fn": "check_artifact"}],
         "retry": 1,
     },
+    # 3c — 分镜: director → shotlist.json, gated by check_artifact.
+    # retry=1: bad JSON → no artifact → gate fail → re-dispatch director once;
+    # double miss → halt (failed_step="分镜"). Budget gate (video ≤ cap) lives
+    # inside the dispatch closure (needs ctx + cfg, stock gate fn can't see them).
+    # Fixture/env-reuse mode → pass-through (zero live dispatch).
+    {
+        "name": "分镜",
+        "kind": "agent",
+        "agent": "director",
+        "inputs": ["script", "config"],
+        "artifact": "shotlist_art",
+        "gate": [{"fn": "check_artifact"}],
+        "retry": 1,
+    },
     # 4 — text-to-speech for all beats
     {
         "name": "tts",

@@ -101,6 +101,52 @@ user prompt 会给你：主讲人物描述、整体影像风格、逐段旁白�
 
 ---
 
+## 第六步：运镜（camera_move）— 仅限 still/multi 的镜头
+
+每个 still/multi beat 的 shot 增加 `camera_move ∈ {推近, 拉远, 横移, 竖摇, 静止}`，按内容选择。
+
+**内容匹配指引：**
+
+| 内容场景 | 推荐运镜 |
+|---|---|
+| 全景 / 远景展开（晨雾跑道、城市晨景、开阔赛道） | `横移` 或 `拉远`（缓慢展开感） |
+| 脚步 / 手部 / 表盘特写、动作细节 | `竖摇` 或 `推近`（局部跟随） |
+| 金句长留（`pace="hold"`）| `推近` 或 `静止`（缓缓靠近或定格，不抢内容） |
+| 收尾背影 | `推近`（缓缓靠近，收束全片） |
+
+**硬性规则（不可违反）：**
+
+> **`pace="quick"` 的镜头 `camera_move` 一律 `静止`。**
+> 快切镜本身就在高速切换，叠加运镜会让观众眩晕。这是绝对约束，不是偏好——快切就不动，没有例外。
+
+**克制原则（调性约束）：**
+
+默认偏向 `静止` 或缓慢运镜（`推近` 小幅）。**不要让每个镜头都大幅运动**——克制是这个栏目的调性，别拍成滑屏 vlog。遇到没有强烈内容指向的镜头，默认 `静止` 或 `推近`，不要强行加运镜。
+
+**chart / video beat 不需要 `camera_move`：**
+- `visual_type="chart"`：图表静止呈现，渲染层默认缓推，不出 camera_move 字段。
+- `visual_type="video"`：S2V 视频本身在动，叠加运镜会晃，不出 camera_move 字段。
+
+---
+
+## 第六步（续）：运镜幅度（camera_intensity）— 仅限 still/multi 的镜头
+
+每个带 `camera_move` 的 shot 再加一个 `camera_intensity ∈ [0, 1]`，决定这次运镜的**幅度大小**（动多少），由你按内容定。渲染层会在栏目的"克制"上限内按这个值缩放：`1.0` = 当前的幅度（向后兼容），越小越轻微。
+
+**幅度指引（按内容决定，不是越大越好）：**
+
+| 内容场景 | 推荐 `camera_intensity` |
+|---|---|
+| 全景展开 / 大场面 / 需要呼吸感的开阔镜头 | `0.7–1.0`（幅度大一些，撑开空间） |
+| 普通陈述 / 一般动作细节 | `0.4–0.6`（中等幅度） |
+| 金句长留 / 收尾 / 需要克制定住的镜头 | `0.2–0.4`（幅度很小，几乎不动，不抢内容） |
+
+> **要"完全不动"用 `camera_move="静止"`，不要在一个 pan/推近 上写 `camera_intensity=0`。** intensity 调的是幅度大小，静止是另一种运镜类型——想定格就直接选 `静止`。
+
+`camera_intensity` 也只在 `visual_type=="still"` 或 `"multi"` 的 shot 中出现；`video`/`chart` 不加。缺省时渲染层按 `1.0`（当前幅度）处理。
+
+---
+
 ## 输出格式（严格 JSON 数组）
 
 只输出一个 JSON 数组，**长度必须等于旁白段数**（user prompt 里的 beats 有几段就几项）。
@@ -112,10 +158,33 @@ user prompt 会给你：主讲人物描述、整体影像风格、逐段旁白�
     "visual_type": "still",
     "shots": [
       {
+        "prompt": "晨雾中的跑道远景，光线柔和，无人，展现清晨氛围",
+        "shot_type": "远景空镜",
+        "with_character": false,
+        "pace": "hold",
+        "camera_move": "横移",
+        "camera_intensity": 0.8
+      },
+      {
+        "prompt": "跑步者脚步踏地特写，步频节奏感强",
+        "shot_type": "脚步特写",
+        "with_character": false,
+        "pace": "quick",
+        "camera_move": "静止"
+      }
+    ],
+    "keywords": []
+  },
+  {
+    "visual_type": "still",
+    "shots": [
+      {
         "prompt": "具体画面描述（中文，简洁，视觉化，不含台词文字）",
         "shot_type": "机位/景别",
         "with_character": false,
-        "pace": "normal"
+        "pace": "normal",
+        "camera_move": "推近",
+        "camera_intensity": 0.5
       }
     ],
     "keywords": []
@@ -144,6 +213,9 @@ user prompt 会给你：主讲人物描述、整体影像风格、逐段旁白�
 - `pace` 只能是 `"hold"` / `"normal"` / `"quick"` 之一。
 - `with_character` 是 JSON 布尔值（`true` / `false`，不加引号）。
 - `motion_value` 是 JSON 数字（0.0–1.0），**只在 `visual_type=="video"` 时出现**。
+- `camera_move` 只能是 `"推近"` / `"拉远"` / `"横移"` / `"竖摇"` / `"静止"` 之一，**只在 `visual_type=="still"` 或 `"multi"` 的 shot 中出现**；`video`/`chart` beat 不加此字段。
+- `camera_intensity` 是 JSON 数字（`0`–`1`，不加引号），随 `camera_move` 一起**只在 `still`/`multi` 的 shot 中出现**；想完全不动用 `camera_move="静止"`，不要写 `camera_intensity=0`。
+- **`pace=="quick"` 的 shot：`camera_move` 必须是 `"静止"`（硬性规则，无例外）。**
 
 **【关键】你的唯一任务就是直接把这个 JSON 数组作为回复正文输出。绝对不要使用任何工具、不要写文件、不要运行代码、不要做质量审计/自查/分析、不要任何前后缀说明或 markdown 代码块——第一个字符就是 `[`，最后一个字符就是 `]`。**
 
@@ -158,3 +230,7 @@ user prompt 会给你：主讲人物描述、整体影像风格、逐段旁白�
 5. 相邻镜头景别/机位有明显变化，没有连续两个正脸？
 6. `keywords` 大部分段落是 `[]`，没有每段都标？
 7. 整个输出是纯 JSON，没有 markdown 围栏或前后缀文字？
+8. still/multi 的每个 shot 都有 `camera_move`（和按内容选的 `camera_intensity`）？video/chart 没有这两个字段？
+9. **所有 `pace="quick"` 的 shot，`camera_move` 都是 `"静止"`**？（必查，这是硬规则）
+10. 全景大场面 `camera_intensity` 偏高（0.7–1.0）、金句收尾偏低（0.2–0.4）？没有用 `camera_intensity=0` 代替 `静止`？
+10. 运镜以克制为主——大部分镜头 `静止` 或 `推近`，只有内容确实需要展开/竖摇才用横移/拉远？

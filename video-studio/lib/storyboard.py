@@ -21,6 +21,8 @@ import re
 import subprocess
 import sys
 
+from lib.ffcmd import CAMERA_MOVES
+
 # Storyboard model = real Claude Sonnet (the user disabled the sonnet→MiniMax-M3
 # ModelProxy on 2026-06-29, so `--model sonnet` now resolves to genuine Sonnet —
 # strong enough for on-topic shot prompts; the earlier off-topic drift was the
@@ -206,12 +208,18 @@ def parse_shotlist(out: str, n_beats: int):
                 pace = (s.get("pace") or _DEFAULT_PACE).strip().lower()
                 if pace not in PACE_WEIGHTS:
                     pace = _DEFAULT_PACE
-                clean_shots.append({
+                clean_shot: dict = {
                     "prompt": p,
                     "shot_type": (s.get("shot_type") or "").strip(),
                     "with_character": bool(s.get("with_character", True)),
                     "pace": pace,
-                })
+                }
+                if s.get("camera_move") in CAMERA_MOVES:
+                    clean_shot["camera_move"] = s["camera_move"]
+                ci = s.get("camera_intensity")
+                if isinstance(ci, (int, float)) and not isinstance(ci, bool):
+                    clean_shot["camera_intensity"] = max(0.0, min(1.0, float(ci)))
+                clean_shots.append(clean_shot)
 
             raw_kw = entry.get("keywords") or []
             keywords = (

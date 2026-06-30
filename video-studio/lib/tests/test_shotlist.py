@@ -240,3 +240,129 @@ def test_parse_shotlist_never_raises_on_wrong_types_in_items():
     raw = json.dumps(["string_item", 42, None])
     result = storyboard.parse_shotlist(raw, 3)
     assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# camera_move preservation — TDD (2-tests): tests first, impl in 2-impl
+# ---------------------------------------------------------------------------
+
+_LEGAL_CAMERA_MOVES = ("推近", "拉远", "横移", "竖摇", "静止")
+
+
+def _shot_with_camera_move(move):
+    shot = _good_shot()
+    shot["camera_move"] = move
+    return shot
+
+
+def test_legal_camera_move_preserved_through_parse_shotlist():
+    """合法 camera_move 必须活过 parse_shotlist，不被 209-214 clean 丢掉。
+    TDD: currently RED — parse_shotlist drops unknown fields."""
+    for move in _LEGAL_CAMERA_MOVES:
+        shot = _shot_with_camera_move(move)
+        item = _beat("still", shots=[shot])
+        res = _ok(_raw([item]), 1)
+        parsed_shot = res[0]["shots"][0]
+        assert "camera_move" in parsed_shot, (
+            f"camera_move='{move}' was dropped by parse_shotlist (storyboard.py:209-214 clean)"
+        )
+        assert parsed_shot["camera_move"] == move, (
+            f"camera_move expected '{move}', got '{parsed_shot['camera_move']}'"
+        )
+
+
+def test_absent_camera_move_not_injected():
+    """shot 缺 camera_move → 解析后无该字段（渲染层按 shot_type 兜底，parse 不强塞）。"""
+    item = _beat("still", shots=[_good_shot()])
+    res = _ok(_raw([item]), 1)
+    parsed_shot = res[0]["shots"][0]
+    assert "camera_move" not in parsed_shot, (
+        "parse_shotlist should not inject camera_move when absent"
+    )
+
+
+def test_illegal_camera_move_not_passed_through():
+    """非法 camera_move → normalize 掉，不传给渲染（避免 ffcmd 回退分支吞错）。"""
+    shot = _shot_with_camera_move("飞天魔法镜头")  # not in LEGAL_CAMERA_MOVES
+    item = _beat("still", shots=[shot])
+    res = _ok(_raw([item]), 1)
+    parsed_shot = res[0]["shots"][0]
+    # Either the field is absent, or it was normalized to a legal value — never the illegal string
+    illegal_value = parsed_shot.get("camera_move")
+    assert illegal_value != "飞天魔法镜头", (
+        "illegal camera_move must be normalized away, not passed through to render"
+    )
+
+
+def test_existing_shot_fields_still_present_with_camera_move():
+    """camera_move 保留不影响 {prompt,shot_type,with_character,pace} 已有字段。"""
+    shot = _shot_with_camera_move("推近")
+    item = _beat("still", shots=[shot])
+    res = _ok(_raw([item]), 1)
+    parsed_shot = res[0]["shots"][0]
+    assert parsed_shot["prompt"] == shot["prompt"]
+    assert parsed_shot["shot_type"] == shot["shot_type"]
+    assert parsed_shot["with_character"] == shot["with_character"]
+    assert parsed_shot["pace"] == shot["pace"]
+
+
+# ---------------------------------------------------------------------------
+# camera_intensity preservation (Phase 5) — director-chosen move MAGNITUDE.
+# Preserve + clamp to [0,1]; absent/non-numeric → field not added.
+# ---------------------------------------------------------------------------
+
+def _shot_with_intensity(intensity, move="推近"):
+    shot = _good_shot()
+    shot["camera_move"] = move
+    shot["camera_intensity"] = intensity
+    return shot
+
+
+def test_camera_intensity_preserved_through_parse_shotlist():
+    """合法 camera_intensity 必须活过 parse_shotlist。"""
+    shot = _shot_with_intensity(0.7)
+    res = _ok(_raw([_beat("still", shots=[shot])]), 1)
+    parsed_shot = res[0]["shots"][0]
+    assert "camera_intensity" in parsed_shot, "camera_intensity was dropped"
+    assert parsed_shot["camera_intensity"] == 0.7
+
+
+def test_camera_intensity_clamped_above_1():
+    """camera_intensity > 1 → clamp 到 1.0（永不超过克制上限）。"""
+    shot = _shot_with_intensity(1.5)
+    res = _ok(_raw([_beat("still", shots=[shot])]), 1)
+    assert res[0]["shots"][0]["camera_intensity"] == 1.0
+
+
+def test_camera_intensity_clamped_below_0():
+    """camera_intensity < 0 → clamp 到 0.0。"""
+    shot = _shot_with_intensity(-0.5)
+    res = _ok(_raw([_beat("still", shots=[shot])]), 1)
+    assert res[0]["shots"][0]["camera_intensity"] == 0.0
+
+
+def test_absent_camera_intensity_not_injected():
+    """shot 缺 camera_intensity → 解析后无该字段（渲染层按 1.0 兜底）。"""
+    res = _ok(_raw([_beat("still", shots=[_good_shot()])]), 1)
+    assert "camera_intensity" not in res[0]["shots"][0], (
+        "parse_shotlist should not inject camera_intensity when absent"
+    )
+
+
+def test_nonnumeric_camera_intensity_not_injected():
+    """非数字 camera_intensity → 不加字段（渲染层按 1.0 兜底，不传脏值）。"""
+    shot = _good_shot()
+    shot["camera_move"] = "推近"
+    shot["camera_intensity"] = "high"  # non-numeric
+    res = _ok(_raw([_beat("still", shots=[shot])]), 1)
+    assert "camera_intensity" not in res[0]["shots"][0], (
+        "non-numeric camera_intensity must not be passed through"
+    )
+
+
+def test_camera_intensity_integer_coerced_to_float():
+    """整数 camera_intensity（如 1）也接受，归一为 float。"""
+    shot = _shot_with_intensity(1)
+    res = _ok(_raw([_beat("still", shots=[shot])]), 1)
+    ci = res[0]["shots"][0]["camera_intensity"]
+    assert ci == 1.0 and isinstance(ci, float)

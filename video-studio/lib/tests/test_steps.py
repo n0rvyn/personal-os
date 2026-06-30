@@ -647,3 +647,204 @@ def test_bgm_ducking_first_round_uses_initial_volume(tmp_path):
     assert first_round_vol[0] == pytest.approx(INIT_VOL, rel=1e-4), (
         f"Round 1 must use initial_volume {INIT_VOL}, got {first_round_vol[0]}"
     )
+
+
+# ===========================================================================
+# 7. Camera-move render wiring (Phase 5)
+# ===========================================================================
+
+def _capture_vf_args(tmp_path, shots, clip_len):
+    """Helper: run step_render_shots_clip with fakes; return list of -vf values."""
+    from lib.steps import step_render_shots_clip
+
+    vf_values: list[str] = []
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        # Collect -vf argument values from per-shot still_clip_cmd calls.
+        # still_clip_cmd argv layout: [..., "-vf", <filtergraph>, ...]
+        try:
+            idx = argv.index("-vf")
+            vf_values.append(argv[idx + 1])
+        except (ValueError, IndexError):
+            pass
+        for arg in argv:
+            if arg.endswith(".mp4"):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    step_render_shots_clip(
+        shots=shots,
+        clip_len=clip_len,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="b_cm",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=fake_gen_still,
+        run_ff_fn=fake_run_ff,
+    )
+    return vf_values
+
+
+def test_camera_move_threaded_to_filtergraph(tmp_path):
+    """step_render_shots_clip passes shot camera_move into still_clip_cmd's -vf.
+
+    A shot with camera_move='横移' must produce a zoompan z='1.1' + x='on*
+    expression in the ffmpeg -vf argument (横移 signature: fixed z=1.1, pan-x).
+    Currently FAILS because steps.py ignores camera_move entirely (Task 3-impl).
+    """
+    shots = [{"prompt": "晨雾跑道全景", "with_character": False,
+               "camera_move": "横移"}]
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    # 横移 signature: z='1.1' fixed zoom, x='on*... horizontal pan
+    assert "z='1.1'" in vf, (
+        f"横移 camera_move must produce fixed z='1.1' in filtergraph; got: {vf}"
+    )
+    assert re.search(r"x='on\*", vf), (
+        f"横移 camera_move must produce x='on*...' pan expression; got: {vf}"
+    )
+    # Must NOT produce push-in increment (that is 推近, not 横移)
+    assert "zoom+" not in vf, (
+        f"横移 must not produce push-in zoom+ expression; got: {vf}"
+    )
+
+
+def test_camera_move_竖摇_threaded_to_filtergraph(tmp_path):
+    """A shot with camera_move='竖摇' produces fixed z=1.1 + pan-y expression."""
+    shots = [{"prompt": "脚步细节特写", "with_character": False,
+               "camera_move": "竖摇"}]
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    assert "z='1.1'" in vf, (
+        f"竖摇 camera_move must produce fixed z='1.1'; got: {vf}"
+    )
+    assert re.search(r"y='on\*", vf), (
+        f"竖摇 camera_move must produce y='on*...' pan-y expression; got: {vf}"
+    )
+
+
+def test_shot_type_fallback_全景_maps_to_横移(tmp_path):
+    """Shot with shot_type='全景' and no camera_move → code falls back to 横移.
+
+    The _shot_type_to_move helper (Task 3-impl) maps 全景/远景 → 横移.
+    Currently FAILS because _shot_type_to_move doesn't exist yet.
+    """
+    shots = [{"prompt": "城市晨景全景", "with_character": False,
+               "shot_type": "全景"}]  # NO camera_move key
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    # 横移 signature in the filtergraph (z='1.1' + pan-x)
+    assert "z='1.1'" in vf, (
+        f"全景 shot_type fallback must map to 横移 (z='1.1'); got: {vf}"
+    )
+    assert re.search(r"x='on\*", vf), (
+        f"全景 shot_type fallback must map to 横移 (x='on*...'); got: {vf}"
+    )
+
+
+def test_shot_type_fallback_特写_maps_to_竖摇_or_推近(tmp_path):
+    """Shot with shot_type='特写' and no camera_move → maps to 竖摇 or 推近.
+
+    The plan maps 特写/手部/脚步 → 竖摇 or 推近.  We assert the result is NOT
+    横移 (pan-x) — either 竖摇 or 推近 is acceptable for close-up shots.
+    Currently FAILS because _shot_type_to_move doesn't exist yet.
+    """
+    shots = [{"prompt": "心率表盘特写", "with_character": False,
+               "shot_type": "特写"}]  # NO camera_move key
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    # Must NOT be 横移 (that's a wide-shot move, wrong for 特写)
+    has_pan_x = bool(re.search(r"x='on\*", vf))
+    assert not has_pan_x, (
+        f"特写 fallback must NOT produce 横移 (pan-x); got: {vf}"
+    )
+    # Must be either 竖摇 or 推近 (both are valid for 特写/局部)
+    has_pan_y   = bool(re.search(r"y='on\*", vf))
+    has_push_in = "zoom+" in vf
+    assert has_pan_y or has_push_in, (
+        f"特写 fallback must produce 竖摇 (y='on*) or 推近 (zoom+); got: {vf}"
+    )
+
+
+def test_degenerate_short_beat_forces_静止(tmp_path):
+    """clip_len < MIN_DWELL (0.8s) with a single shot → camera_move forced to 静止.
+
+    This is the ONLY path where code overrides director's camera_move:
+    a degenerate whole-beat clip_len < 0.8s single shot.
+
+    Construction: clip_len=0.5 (< 0.8 MIN_DWELL), single shot with camera_move='推近'.
+    The render layer must detect slice_s < 0.8 and force 静止 regardless of the
+    shot's camera_move field.
+
+    静止 signature: zoompan z='1.0' (constant, no motion increment).
+
+    Currently FAILS because steps.py doesn't implement the <0.8s guard yet.
+
+    NOTE (verifier constraint): Multi-shot beats are NOT used here because the
+    max_shots/shot_durations invariant guarantees multi-shot slices are always
+    >= MIN_DWELL (test_shot_durations_fallback_to_equal_when_below_min_dwell:431).
+    Only a degenerate single-shot whole-beat clip_len < 0.8 can reach this branch.
+    """
+    shots = [{"prompt": "快切碎片", "with_character": False,
+               "camera_move": "推近"}]  # director said 推近, but clip too short
+    clip_len = 0.5   # < MIN_DWELL=0.8 → must force 静止
+
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=clip_len)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    # 静止 signature: z='1.0' constant zoom, no zoom+ increment
+    assert "z='1.0'" in vf, (
+        f"Degenerate clip_len={clip_len} < 0.8 must force 静止 (z='1.0'); got: {vf}"
+    )
+    assert "zoom+" not in vf, (
+        f"Degenerate short clip must not produce zoom+ (push-in motion); got: {vf}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# camera_intensity threading (Phase 5) — director-chosen move MAGNITUDE flows
+# from the shot dict through still_clip_cmd's -vf. Absent → 1.0 (current).
+# ---------------------------------------------------------------------------
+
+def test_camera_intensity_threaded_to_filtergraph(tmp_path):
+    """A shot with camera_intensity scales the zoom delta in the -vf expression.
+
+    clip_len=3.0 (frames=90), 推近 at intensity=0.5 → inc=0.05/90=0.000556,
+    cap=1.05. Proves steps.py reads camera_intensity and passes it down."""
+    shots = [{"prompt": "晨光跑道全景", "with_character": False,
+              "camera_move": "推近", "camera_intensity": 0.5}]
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    assert "zoom+0.000556" in vf and ",1.05)" in vf, (
+        f"camera_intensity=0.5 must halve the 推近 delta (inc=0.000556 cap=1.05); got: {vf}"
+    )
+
+
+def test_absent_camera_intensity_defaults_to_1_0(tmp_path):
+    """No camera_intensity on the shot → render uses 1.0 (current amounts).
+
+    clip_len=3.0 (frames=90), 推近 at default 1.0 → inc=0.001111, cap=1.1."""
+    shots = [{"prompt": "晨光跑道全景", "with_character": False,
+              "camera_move": "推近"}]  # NO camera_intensity
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    assert "zoom+0.001111" in vf and ",1.1)" in vf, (
+        f"absent camera_intensity must default to 1.0 (current amounts); got: {vf}"
+    )

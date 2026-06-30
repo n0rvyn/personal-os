@@ -32,7 +32,50 @@ from typing import Callable
 
 from lib import ffcmd
 from lib.cards import TITLE_DUR, END_DUR
+from lib.ffcmd import CAMERA_MOVES, MIN_DWELL
 from lib.storyboard import pace_weight
+
+
+# ---------------------------------------------------------------------------
+# Camera-move helpers (Phase 5)
+# ---------------------------------------------------------------------------
+
+def _shot_type_to_move(shot_type: str | None) -> str:
+    """Map a shot_type string to a camera_move (content-match fallback).
+
+    全景/远景 (wide, establishing) → 横移 (slow pan to reveal the scene).
+    特写/手部/脚步/动作 (tight details) → 竖摇 (pan-y for vertical action).
+    Everything else (including None) → 推近 (default gentle push-in).
+
+    DP-001: code-side fallback only; director LLM has priority over this.
+    """
+    if shot_type in ("全景", "远景"):
+        return "横移"
+    if shot_type in ("特写", "手部", "脚步", "动作"):
+        return "竖摇"
+    return "推近"
+
+
+def _resolve_camera_move(shot: dict, slice_s: float) -> str:
+    """Resolve the camera_move for a single shot render slice.
+
+    Priority (DP-003=A — code does NOT override director based on pace):
+      ① slice_s < MIN_DWELL(0.8) → "静止"
+            Degenerate single-shot fallback: whole-beat clip_len < 0.8s.
+            Normal multi-shot beats never produce slice_s < MIN_DWELL
+            (max_shots/shot_durations invariant, test_steps.py:431).
+      ② shot.get("camera_move") in CAMERA_MOVES → use it directly.
+            Includes any move the director assigned to a quick shot
+            (code does NOT force 静止 based on pace — DP-003=A).
+      ③ else → _shot_type_to_move(shot.get("shot_type"))
+            Content-match fallback when director omitted camera_move.
+    """
+    if slice_s < MIN_DWELL:
+        return "静止"
+    director_move = shot.get("camera_move")
+    if director_move in CAMERA_MOVES:
+        return director_move
+    return _shot_type_to_move(shot.get("shot_type"))
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +255,11 @@ def step_render_shots_clip(
         spng = os.path.join(scratch, f"{bid}_shot{j}.png")
         actual_png = gen_still_fn(prompt, ref, spng)
         sub = os.path.join(scratch, f"{bid}_sub{j}.mp4")
+        move = _resolve_camera_move(shot, slice_s)
+        intensity = float(shot.get("camera_intensity", 1.0))
         run_ff_fn(
-            ffcmd.still_clip_cmd(actual_png, slice_s, sub, grade_vf),
+            ffcmd.still_clip_cmd(actual_png, slice_s, sub, grade_vf,
+                                  camera_move=move, intensity=intensity),
             f"{bid}-shot{j}",
         )
         subs.append(sub)

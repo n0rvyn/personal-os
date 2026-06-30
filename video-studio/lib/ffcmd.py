@@ -24,40 +24,115 @@ FONT_STYLE = (
     "BorderStyle=3,Outline=1,MarginV=40"
 )
 
+# ---------------------------------------------------------------------------
+# Camera-move constants (AR-3 — single canonical source; storyboard.py and
+# steps.py import from here, never redefine).
+# ---------------------------------------------------------------------------
 
-def _still_or_chart_filtergraph(dur_s: float) -> str:
+CAMERA_MOVES = ("推近", "拉远", "横移", "竖摇", "静止")
+
+# DP-002: column-locked zoom range — restrained, NOT vlog.
+_ZOOM_MAX = 1.1   # upper bound for all moves
+_ZOOM_MIN = 1.0   # lower bound / static level
+# Pan budget: half of the 1.1x overscan available for each axis (pixels in the
+# zoomed virtual frame, which is 1920*1.1=2112 wide, 1080*1.1=1188 tall).
+# overscan_x = 1920*(1.1-1.0) = 192 → half = 96
+# overscan_y = 1080*(1.1-1.0) = 108 → half = 54
+_PAN_X = 96.0
+_PAN_Y = 54.0
+
+
+def _fmt_zoom(v: float) -> str:
+    """Format a zoom literal at 4dp then strip trailing zeros, keeping ≥1 decimal.
+
+    This rounds float noise out (0.1*0.3 = 0.0300000…2 → 1.03) AND reproduces the
+    historical literals byte-for-byte: cap=1.1 → '1.1' (NOT '1.1000'), so the
+    intensity=1.0 backward-compat output is identical to the pre-intensity code.
+    """
+    s = f"{v:.4f}".rstrip("0")
+    return s + "0" if s.endswith(".") else s
+
+
+def _still_or_chart_filtergraph(
+    dur_s: float, camera_move: str = "推近", intensity: float = 1.0
+) -> str:
     """Build the -vf filtergraph for a still (or chart) segment.
 
-    Ken Burns via zoompan (subtle 1.0 -> 1.1 over the segment), preceded by a
-    scale+crop that forces the source to fill 1920x1080.
+    camera_move selects the zoompan expression family (AR-3 / DP-002):
+      推近 — Ken Burns push-in 1.0→1.0+δ (default, backward-compat)
+      拉远 — zoom-out 1.0+δ→1.0
+      横移 — z=1.1 fixed, pan-x across overscan
+      竖摇 — z=1.1 fixed, pan-y across overscan
+      静止 — z=1.0 constant, no motion
+      (unknown/illegal) → fall back to 推近
 
-    The per-frame zoom increment is derived from the segment's frame count so
-    the push-in spreads across the WHOLE segment and reaches 1.1 only on the
-    last frame. A fixed increment (e.g. 0.0015) hits the 1.1 cap in ~2.2s and
-    then freezes the image while the narration keeps playing — the late-frame
-    "image stops moving but subtitle still reading" bug.
+    intensity ∈ [0,1] (clamped) is the director-chosen camera-move MAGNITUDE:
+    it scales the zoom delta (δ = 0.1 * intensity) and the pan step within the
+    fixed 克制 ceiling, so the move can never exceed today's restrained max.
+    intensity=1.0 reproduces the pre-intensity amounts byte-identically;
+    lower = gentler. 静止 ignores intensity (no motion either way).
+
+    DP-002: zoom range [1.0, 1.1]; pan stays within 1.1x overscan.
+    d={frames} and s=1920x1080:fps=30 are NEVER changed by camera_move.
     """
+    if camera_move not in CAMERA_MOVES:
+        camera_move = "推近"
+
+    intensity = max(0.0, min(1.0, float(intensity)))
+    delta = 0.1 * intensity  # scaled zoom range (0.1 at intensity=1.0)
+
     frames = max(int(dur_s * 30), 1)
-    inc = 0.1 / frames  # total 1.0 -> 1.1 spread evenly over the segment
-    return (
+    prefix = (
         "scale=1920:1080:force_original_aspect_ratio=increase,"
         "crop=1920:1080,"
-        f"zoompan=z='min(zoom+{inc:.6f},1.1)':d={frames}:s=1920x1080:fps=30"
     )
+    suffix = f":d={frames}:s=1920x1080:fps=30"
+
+    if camera_move == "推近":
+        inc = delta / frames  # total 1.0 -> 1.0+δ spread evenly over the segment
+        cap = 1.0 + delta
+        zp = f"zoompan=z='min(zoom+{inc:.6f},{_fmt_zoom(cap)})'{suffix}"
+    elif camera_move == "拉远":
+        start = 1.0 + delta
+        dec = delta / frames  # 1.0+δ -> 1.0 spread evenly
+        zp = f"zoompan=z='max({_fmt_zoom(start)}-on*{dec:.6f},1.0)'{suffix}"
+    elif camera_move == "横移":
+        x_step = (_PAN_X * intensity) / frames
+        zp = (
+            f"zoompan=z='1.1'"
+            f":x='on*{x_step:.6f}'"
+            f":y='(ih-ih/zoom)/2'"
+            f"{suffix}"
+        )
+    elif camera_move == "竖摇":
+        y_step = (_PAN_Y * intensity) / frames
+        zp = (
+            f"zoompan=z='1.1'"
+            f":x='(iw-iw/zoom)/2'"
+            f":y='on*{y_step:.6f}'"
+            f"{suffix}"
+        )
+    else:  # 静止
+        zp = f"zoompan=z='1.0':d={frames}:s=1920x1080:fps=30"
+
+    return prefix + zp
 
 
 def still_segment_cmd(
     png: str, dur_s: float, out_mp4: str, audio_mp3: str,
+    camera_move: str = "推近", intensity: float = 1.0,
 ) -> list[str]:
     """Build argv to render a still-image segment with narration audio.
 
     Inputs:
-        png:        path to the still image (e.g. character_ref or scene).
-        dur_s:      segment length in seconds (drives -t and zoompan duration).
-        out_mp4:    path to write the segment mp4.
-        audio_mp3:  beat's narration mp3 (wired as -i input 1, mapped to 1:a).
+        png:         path to the still image (e.g. character_ref or scene).
+        dur_s:       segment length in seconds (drives -t and zoompan duration).
+        out_mp4:     path to write the segment mp4.
+        audio_mp3:   beat's narration mp3 (wired as -i input 1, mapped to 1:a).
+        camera_move: zoompan family (CAMERA_MOVES); defaults to 推近 (current behavior).
+        intensity:   camera-move magnitude ∈ [0,1]; 1.0 = current amounts (default).
     """
-    vf = _still_or_chart_filtergraph(dur_s)
+    vf = _still_or_chart_filtergraph(dur_s, camera_move, intensity)
     return [
         "-loop", "1",
         "-i", png,
@@ -116,13 +191,17 @@ def video_segment_cmd(
 
 def chart_segment_cmd(
     png: str, dur_s: float, out_mp4: str, audio_mp3: str,
+    camera_move: str = "推近", intensity: float = 1.0,
 ) -> list[str]:
     """Build argv to render a chart-image segment with narration audio.
 
     Same wiring as still_segment_cmd — a chart is just a static image that
     benefits from a slight Ken Burns push-in to avoid the 'dead frame' feel.
+    chart beats default to 推近 (AR-2: chart不经 step_render_shots_clip，
+    不对 chart beat 出 camera_move，保持默认缓推可读).
+        intensity:   camera-move magnitude ∈ [0,1]; 1.0 = current amounts (default).
     """
-    vf = _still_or_chart_filtergraph(dur_s)
+    vf = _still_or_chart_filtergraph(dur_s, camera_move, intensity)
     return [
         "-loop", "1",
         "-i", png,
@@ -303,13 +382,18 @@ def shot_durations(clip_len: float, weights: list[float],
 
 
 def still_clip_cmd(png: str, dur_s: float, out_mp4: str,
-                   grade: str | None = None) -> list[str]:
+                   grade: str | None = None,
+                   camera_move: str = "推近",
+                   intensity: float = 1.0) -> list[str]:
     """Video-only Ken Burns clip (no narration) — for the xfade assembly.
 
     `grade` (POC5): an optional color-grade filterchain appended AFTER the Ken
     Burns push-in, so photographic stills share the series look. Pass None for
-    charts (keep the designed data readable)."""
-    vf = _still_or_chart_filtergraph(dur_s)
+    charts (keep the designed data readable).
+    `camera_move`: zoompan family (CAMERA_MOVES); defaults to 推近 (current behavior).
+    `intensity`: camera-move magnitude ∈ [0,1]; 1.0 = current amounts (default).
+    """
+    vf = _still_or_chart_filtergraph(dur_s, camera_move, intensity)
     if grade:
         vf += f",{grade}"
     return [
@@ -320,15 +404,20 @@ def still_clip_cmd(png: str, dur_s: float, out_mp4: str,
 
 
 def still_card_cmd(bg_png: str, dur_s: float, ass: str, out_mp4: str,
-                   grade: str | None = None) -> list[str]:
+                   grade: str | None = None,
+                   camera_move: str = "推近",
+                   intensity: float = 1.0) -> list[str]:
     """Video-only title/end card clip: Ken Burns push-in on the AI background,
     with the libass design overlay (`ass`) burned in the same pass. No audio —
     the card joins the xfade dissolve chain like a still clip; its narration
     slot is filled by a matching silence segment (see silence_mp3_cmd).
 
     `grade` (POC5): applied to the background BEFORE the ass overlay, so the card
-    bg matches the body's look while the amber/white design layer stays pure."""
-    vf = _still_or_chart_filtergraph(dur_s)
+    bg matches the body's look while the amber/white design layer stays pure.
+    `camera_move`: zoompan family (CAMERA_MOVES); defaults to 推近 (current behavior).
+    `intensity`: camera-move magnitude ∈ [0,1]; 1.0 = current amounts (default).
+    """
+    vf = _still_or_chart_filtergraph(dur_s, camera_move, intensity)
     if grade:
         vf += f",{grade}"
     vf += f",ass={ass}"

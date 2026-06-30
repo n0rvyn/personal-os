@@ -399,3 +399,319 @@ def test_mux_av_copies_video_and_shortest():
     argv = mux_av_cmd("/v.mp4", "/a.m4a", "/o.mp4")
     s = _joined(argv)
     assert "-c:v copy" in s and "-map 0:v" in s and "-map 1:a" in s and "-shortest" in s
+
+
+# ---------------------------------------------------------------------------
+# Camera move expression family tests (Task 1-tests — TDD red phase)
+#
+# These tests call _still_or_chart_filtergraph(dur_s, camera_move=...) which
+# currently does NOT accept `camera_move`. All new cases below will fail with
+# TypeError until Task 1-impl adds the parameter. That RED is the expected
+# outcome for this task.
+# ---------------------------------------------------------------------------
+
+from lib.ffcmd import _still_or_chart_filtergraph  # private, but accessible for contract pinning
+
+_MOVE_DUR = 4.0
+_MOVE_FRAMES = max(int(_MOVE_DUR * 30), 1)  # 120
+
+
+def _zoompan_str(fg: str) -> str:
+    """Return the zoompan=... tail of a filtergraph string (zoompan is always last filter)."""
+    idx = fg.find("zoompan")
+    return fg[idx:] if idx != -1 else ""
+
+
+# -- 推近 (push-in / zoom-in) — backward compat --
+
+def test_camera_move_推近_is_backward_compat_push_in():
+    """推近 must produce the exact current push-in formula (z=min(zoom+inc,1.1))."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近")
+    zp = _zoompan_str(fg)
+    assert "z='min(zoom+" in zp, f"推近 must use min(zoom+inc,1.1) z-expr: {zp}"
+    assert "1.1" in zp, f"推近 max zoom must be 1.1: {zp}"
+    assert f"d={_MOVE_FRAMES}" in zp, f"推近 duration must be d={_MOVE_FRAMES}: {zp}"
+    assert "s=1920x1080:fps=30" in zp, f"推近 must keep s=1920x1080:fps=30: {zp}"
+
+
+def test_camera_move_推近_explicit_equals_no_arg_default():
+    """camera_move='推近' must produce the same filtergraph as the old no-arg call."""
+    fg_default = _still_or_chart_filtergraph(_MOVE_DUR)
+    fg_explicit = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近")
+    assert fg_default == fg_explicit, (
+        f"推近 and no-arg must be identical:\n  default:  {fg_default}\n  explicit: {fg_explicit}"
+    )
+
+
+# -- 拉远 (zoom-out) --
+
+def test_camera_move_拉远_zoom_out_from_1_1_to_1_0():
+    """拉远 must zoom out from 1.1 → 1.0: z-expr contains 1.1 start and 1.0 floor."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="拉远")
+    zp = _zoompan_str(fg)
+    assert "zoompan" in zp, f"拉远 must use zoompan: {fg}"
+    assert "1.1" in zp, f"拉远 z must start at 1.1: {zp}"
+    assert "1.0" in zp or "max(" in zp, f"拉远 z must have 1.0 floor (zoom-out): {zp}"
+    # Must NOT be a push-in expression
+    assert "min(zoom+" not in zp, f"拉远 must NOT use push-in z-expr: {zp}"
+    assert f"d={_MOVE_FRAMES}" in zp, f"拉远 duration must be d={_MOVE_FRAMES}: {zp}"
+    assert "s=1920x1080:fps=30" in zp, f"拉远 must keep s=1920x1080:fps=30: {zp}"
+
+
+# -- 横移 (pan-x) --
+
+def test_camera_move_横移_fixed_z_dynamic_x():
+    """横移 must fix z ~1.1 and pan x laterally (x-expr references frame index)."""
+    import re
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移")
+    zp = _zoompan_str(fg)
+    assert "zoompan" in zp, f"横移 must use zoompan: {fg}"
+    assert "1.1" in zp, f"横移 z must be fixed ~1.1: {zp}"
+    assert "x=" in zp, f"横移 must have explicit x= param: {zp}"
+    # x= must be a dynamic expression, not a literal 0
+    x_match = re.search(r"x='([^']*)'", zp)
+    assert x_match, f"横移 x= must be a single-quoted expression: {zp}"
+    x_expr = x_match.group(1)
+    assert any(tok in x_expr for tok in ("on", "iw", "zoom")), (
+        f"横移 x-expr must reference frame position (on/iw/zoom): {x_expr}"
+    )
+    assert f"d={_MOVE_FRAMES}" in zp, f"横移 duration must be d={_MOVE_FRAMES}: {zp}"
+    assert "s=1920x1080:fps=30" in zp, f"横移 must keep s=1920x1080:fps=30: {zp}"
+
+
+def test_camera_move_横移_y_is_centered():
+    """横移 y must be centered (not dynamic) — only horizontal pan."""
+    import re
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移")
+    zp = _zoompan_str(fg)
+    if "y=" in zp:
+        y_match = re.search(r"y='([^']*)'", zp)
+        if y_match:
+            y_expr = y_match.group(1)
+            # y-expression must not drift vertically (no 'on' term for y-pan)
+            assert "on" not in y_expr or "ih" in y_expr, (
+                f"横移 y must be centered or static, not tracking frame position: {y_expr}"
+            )
+
+
+# -- 竖摇 (pan-y) --
+
+def test_camera_move_竖摇_fixed_z_dynamic_y():
+    """竖摇 must fix z ~1.1 and pan y vertically (y-expr references frame index)."""
+    import re
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="竖摇")
+    zp = _zoompan_str(fg)
+    assert "zoompan" in zp, f"竖摇 must use zoompan: {fg}"
+    assert "1.1" in zp, f"竖摇 z must be fixed ~1.1: {zp}"
+    assert "y=" in zp, f"竖摇 must have explicit y= param: {zp}"
+    y_match = re.search(r"y='([^']*)'", zp)
+    assert y_match, f"竖摇 y= must be a single-quoted expression: {zp}"
+    y_expr = y_match.group(1)
+    assert any(tok in y_expr for tok in ("on", "ih", "zoom")), (
+        f"竖摇 y-expr must reference frame position (on/ih/zoom): {y_expr}"
+    )
+    assert f"d={_MOVE_FRAMES}" in zp, f"竖摇 duration must be d={_MOVE_FRAMES}: {zp}"
+    assert "s=1920x1080:fps=30" in zp, f"竖摇 must keep s=1920x1080:fps=30: {zp}"
+
+
+def test_camera_move_竖摇_x_is_centered():
+    """竖摇 x must be centered (not dynamic) — only vertical pan."""
+    import re
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="竖摇")
+    zp = _zoompan_str(fg)
+    if "x=" in zp:
+        x_match = re.search(r"x='([^']*)'", zp)
+        if x_match:
+            x_expr = x_match.group(1)
+            assert "on" not in x_expr or "iw" in x_expr, (
+                f"竖摇 x must be centered or static, not tracking frame position: {x_expr}"
+            )
+
+
+# -- 静止 (static) --
+
+def test_camera_move_静止_no_zoom_no_pan():
+    """静止 must produce no movement: z=1.0 constant, no push-in increment."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="静止")
+    # scale+crop must still be present for normalization
+    assert "scale=1920:1080" in fg, f"静止 must still scale to 1920x1080: {fg}"
+    assert "crop=1920:1080" in fg, f"静止 must still crop to 1920x1080: {fg}"
+    zp = _zoompan_str(fg)
+    # Must NOT use push-in expression
+    assert "min(zoom+" not in fg, f"静止 must NOT have push-in z-expr: {fg}"
+    if "zoompan" in fg:
+        # If zoompan is present it must hold z=1.0 fixed
+        assert "1.0" in zp or "z='1'" in zp or "z=1" in zp, (
+            f"静止 zoompan z must be fixed at 1.0: {zp}"
+        )
+        assert f"d={_MOVE_FRAMES}" in zp, f"静止 duration must be d={_MOVE_FRAMES}: {zp}"
+        assert "s=1920x1080:fps=30" in zp, f"静止 must keep s=1920x1080:fps=30: {zp}"
+
+
+# -- Fallback / error handling --
+
+def test_camera_move_illegal_falls_back_to_推近():
+    """Unknown/illegal camera_move must NOT raise — must silently fall back to 推近."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="飞天")
+    zp = _zoompan_str(fg)
+    assert "z='min(zoom+" in zp, f"illegal move must fall back to 推近 z-expr: {zp}"
+    assert "1.1" in zp, f"illegal fallback must use 推近 max zoom 1.1: {zp}"
+
+
+def test_camera_move_empty_string_falls_back_to_推近():
+    """Empty-string camera_move must NOT raise — must fall back to 推近."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="")
+    zp = _zoompan_str(fg)
+    assert "z='min(zoom+" in zp, f"empty-string move must fall back to 推近: {zp}"
+
+
+# -- DP-002 zoom constraint across all 5 moves --
+
+def test_camera_move_all_duration_unchanged():
+    """All 5 moves must keep d={frames} — timing must be unaffected by camera move."""
+    moves = ["推近", "拉远", "横移", "竖摇", "静止"]
+    for move in moves:
+        fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move=move)
+        zp = _zoompan_str(fg)
+        if "zoompan" in fg:
+            assert f"d={_MOVE_FRAMES}" in zp, (
+                f"move={move!r}: timing d={_MOVE_FRAMES} must be unchanged: {zp}"
+            )
+
+
+def test_camera_move_dp002_zoom_max_1_1():
+    """DP-002: zoom literal values must stay within [1.0, 1.1] — no hyper-zoom."""
+    import re
+    moves = ["推近", "拉远", "横移", "竖摇", "静止"]
+    for move in moves:
+        fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move=move)
+        # Find numeric literals > 1.1 (exclude fps=30, resolution etc.)
+        candidates = re.findall(r'\b(1\.[2-9][0-9]*|[2-9]\.[0-9]*)\b', fg)
+        bad = [v for v in candidates if float(v) > 1.1]
+        assert not bad, (
+            f"move={move!r}: zoom literal(s) {bad} exceed DP-002 max 1.1: {fg}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# camera_intensity (Phase 5 enhancement) — director-chosen move MAGNITUDE.
+#
+# intensity ∈ [0,1] (clamped). intensity=1.0 reproduces the pre-intensity
+# amounts BYTE-IDENTICALLY (backward-compat); lower = gentler; code guardrails
+# so it can never exceed today's 克制 max.
+# ---------------------------------------------------------------------------
+
+# Reference strings captured from the pre-intensity code at dur_s=3.0 (frames=90).
+# These pin the EXACT byte-identical output for intensity=1.0 / default.
+_BC_DUR = 3.0
+_BC_PREFIX = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+_BC_EXPECTED = {
+    "推近": _BC_PREFIX + "zoompan=z='min(zoom+0.001111,1.1)':d=90:s=1920x1080:fps=30",
+    "拉远": _BC_PREFIX + "zoompan=z='max(1.1-on*0.001111,1.0)':d=90:s=1920x1080:fps=30",
+    "横移": _BC_PREFIX + "zoompan=z='1.1':x='on*1.066667':y='(ih-ih/zoom)/2':d=90:s=1920x1080:fps=30",
+    "竖摇": _BC_PREFIX + "zoompan=z='1.1':x='(iw-iw/zoom)/2':y='on*0.600000':d=90:s=1920x1080:fps=30",
+    "静止": _BC_PREFIX + "zoompan=z='1.0':d=90:s=1920x1080:fps=30",
+}
+
+
+def test_intensity_default_is_byte_identical_for_all_moves():
+    """intensity defaulting (no arg) must reproduce the pre-intensity output
+    EXACTLY — full-string equality, not a loose substring. This is the guard
+    that proves backward-compat (a substring check like `'1.1' in fg` would
+    falsely pass on a broken '1.1000' format)."""
+    for move, expected in _BC_EXPECTED.items():
+        fg = _still_or_chart_filtergraph(_BC_DUR, camera_move=move)
+        assert fg == expected, (
+            f"move={move!r} default intensity must be byte-identical:\n"
+            f"  expected: {expected}\n  got:      {fg}"
+        )
+
+
+def test_intensity_explicit_1_0_is_byte_identical_for_all_moves():
+    """intensity=1.0 passed explicitly must equal the no-arg default output."""
+    for move, expected in _BC_EXPECTED.items():
+        fg = _still_or_chart_filtergraph(_BC_DUR, camera_move=move, intensity=1.0)
+        assert fg == expected, (
+            f"move={move!r} intensity=1.0 must be byte-identical:\n"
+            f"  expected: {expected}\n  got:      {fg}"
+        )
+
+
+def test_intensity_push_in_cap_is_bare_1_1_not_padded():
+    """Discriminating check: the 推近 cap must serialize as '1.1' (closing
+    `,1.1)`), NOT '1.1000' — the exact regression a `:.4f` format would cause."""
+    fg = _still_or_chart_filtergraph(_BC_DUR, camera_move="推近", intensity=1.0)
+    zp = _zoompan_str(fg)
+    assert ",1.1)" in zp, f"推近 cap must be bare '1.1', got: {zp}"
+    assert "1.1000" not in zp, f"推近 cap must NOT be padded to 1.1000: {zp}"
+
+
+def test_intensity_half_halves_push_in_delta():
+    """intensity=0.5 → 推近 cap halves to 1.05 (delta 0.1→0.05) and inc halves."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近", intensity=0.5)
+    zp = _zoompan_str(fg)
+    # frames=120; inc = 0.05/120 = 0.000417; cap = 1.05
+    assert "zoompan=z='min(zoom+0.000417,1.05)'" in zp, (
+        f"intensity=0.5 推近 must use inc=0.000417 cap=1.05: {zp}"
+    )
+
+
+def test_intensity_half_halves_pan_step():
+    """intensity=0.5 → 横移 pan-x step halves (96→48 px over frames)."""
+    full = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移", intensity=1.0))
+    half = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移", intensity=0.5))
+    # frames=120: full x_step=96/120=0.8 ; half=48/120=0.4
+    assert "x='on*0.800000'" in full, f"intensity=1.0 横移 step must be 0.800000: {full}"
+    assert "x='on*0.400000'" in half, f"intensity=0.5 横移 step must be 0.400000: {half}"
+
+
+def test_intensity_half_halves_pan_y_step():
+    """intensity=0.5 → 竖摇 pan-y step halves (54→27 px over frames)."""
+    half = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="竖摇", intensity=0.5))
+    # frames=120: half y_step = (54*0.5)/120 = 0.225
+    assert "y='on*0.225000'" in half, f"intensity=0.5 竖摇 step must be 0.225000: {half}"
+
+
+def test_intensity_0_3_push_in_cap_is_1_03():
+    """intensity=0.3 → 推近 cap = 1.0 + 0.1*0.3 = 1.03 (float noise rounded out)."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近", intensity=0.3)
+    zp = _zoompan_str(fg)
+    assert ",1.03)" in zp, f"intensity=0.3 推近 cap must be 1.03: {zp}"
+    # must NOT leak float noise like 1.0300000000000002
+    assert "1.0300" not in zp and "1.03000" not in zp, f"cap must be clean 1.03: {zp}"
+
+
+def test_intensity_clamp_above_1_treated_as_1():
+    """intensity > 1 must clamp to 1.0 (== current amounts), never exceed 克制 max."""
+    over = _still_or_chart_filtergraph(_BC_DUR, camera_move="推近", intensity=5.0)
+    assert over == _BC_EXPECTED["推近"], (
+        f"intensity=5.0 must clamp to 1.0 (byte-identical to current): {over}"
+    )
+
+
+def test_intensity_clamp_below_0_treated_as_0():
+    """intensity < 0 must clamp to 0.0 → 推近 collapses to no motion (cap=1.0, inc=0)."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近", intensity=-2.0)
+    zp = _zoompan_str(fg)
+    # delta=0 → inc=0.000000, cap=1.0
+    assert "zoompan=z='min(zoom+0.000000,1.0)'" in zp, (
+        f"intensity<0 must clamp to 0 (cap=1.0, inc=0): {zp}"
+    )
+
+
+def test_intensity_0_collapses_push_in_to_static_amount():
+    """intensity=0 → 推近 zoom delta is 0 (cap=1.0): a no-motion push-in."""
+    fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近", intensity=0.0)
+    zp = _zoompan_str(fg)
+    assert ",1.0)" in zp and "zoom+0.000000" in zp, (
+        f"intensity=0 推近 must have cap=1.0 and inc=0: {zp}"
+    )
+
+
+def test_intensity_静止_ignores_intensity():
+    """静止 has no motion regardless of intensity — output unaffected."""
+    a = _still_or_chart_filtergraph(_BC_DUR, camera_move="静止", intensity=1.0)
+    b = _still_or_chart_filtergraph(_BC_DUR, camera_move="静止", intensity=0.2)
+    assert a == b == _BC_EXPECTED["静止"], (
+        f"静止 must ignore intensity: {a} vs {b}"
+    )

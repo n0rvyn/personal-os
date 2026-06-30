@@ -43,14 +43,14 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": None,
         "gate": None,
     },
-    # 1 — read cursor / syllabus (placeholder; Phase 3 wires real agent)
+    # 1 — read cursor / syllabus; writes cursor_marker so check_artifact can gate it
     {
         "name": "cursor-read",
         "kind": "code",
         "agent": None,
         "inputs": ["config"],
-        "artifact": None,
-        "gate": None,
+        "artifact": "cursor_marker",
+        "gate": [{"fn": "check_artifact"}],
     },
     # 2 — create episode + scratch directories
     {

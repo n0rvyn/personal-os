@@ -42,7 +42,7 @@ from lib import steps as steps_mod
 from lib.config import VideoStudioConfig
 from lib.budget import apply_video_budget
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
-from lib.provenance import build_provenance
+from lib.provenance import build_provenance, stamp_episode_provenance
 from lib.storyboard import parse_shotlist
 from lib.subtitle import build_ass, build_srt
 
@@ -175,6 +175,7 @@ def build_step_fns(
     run_ff: Callable,
     probe_ms: Callable,
     log: Callable[[str], None],
+    selection: Any = None,
 ) -> dict[str, Callable]:
     """Return {step_name: fn(step, ctx, scratch_dir)} for the Phase-2 pipeline.
 
@@ -197,9 +198,26 @@ def build_step_fns(
         log(f"[config] provider={cfg.media.provider} "
             f"{cfg.render.width}x{cfg.render.height}@{cfg.render.fps}")
 
-    # ---- 1: cursor-read (placeholder; Phase 3) ----
+    # ---- 1: cursor-read — seed ctx from syllabus Selection; write cursor_marker ----
     def step_cursor_read(step, ctx, scratch):
-        log("[cursor-read] placeholder (Phase 3 wires real cursor agent)")
+        marker_path = str(Path(scratch) / "cursor_marker.txt")
+        if selection is not None:
+            # Syllabus mode: seed downstream keys from closure-bound Selection.
+            ctx["doc_refs"] = selection.doc_refs
+            ctx["source"] = selection.source
+            ctx["verify_status"] = selection.verify_status
+            ctx["topic"] = selection.topic
+            ctx["learning_goal"] = selection.learning_goal
+            Path(marker_path).write_text(
+                f"seq={selection.seq}\nslug={selection.slug}\ntopic={selection.topic}",
+                encoding="utf-8",
+            )
+            log(f"[cursor-read] selection seq={selection.seq} slug={selection.slug}")
+        else:
+            # Phase-2 no-syllabus mode: write a passing marker so check_artifact gate passes.
+            Path(marker_path).write_text("ok", encoding="utf-8")
+            log("[cursor-read] Phase-2 placeholder (no syllabus configured)")
+        ctx["cursor_marker"] = marker_path
 
     # ---- 2: scratch (episode dirs + scratch sentinel) ----
     def step_scratch(step, ctx, scratch):
@@ -211,8 +229,51 @@ def build_step_fns(
         ctx["scratch_dir"] = _sentinel(Path(scratch), "scratch_dir", str(ep_dir))
         log(f"[scratch] episode dir -> {ep_dir}")
 
-    # ---- 3: extract — PDF-text mode (Phase 3) OR fixture-beats mode (Phase 2) ----
+    # ---- 3: extract — 3-way dispatch: doc_refs > VIDEO_PDF > fixture ----
     def step_extract(step, ctx, scratch):
+        # Doc mode (Phase 6, highest priority): cursor-read seeded doc_refs into ctx.
+        doc_refs = ctx.get("doc_refs")
+        if doc_refs:
+            # Snapshot dir: prefer cfg attribute (Task 6); else plugin default under
+            # the book's snapshot subdir (MF-2 — snapshot lives one level down at
+            # syllabus/source/<book>/, NOT syllabus/source/).
+            _book = (getattr(cfg, "book_series", "") or "daniels-uesca")
+            snap_dir = Path(
+                getattr(cfg, "syllabus_source_dir", None)
+                or (PLUGIN_ROOT / "syllabus" / "source" / _book)
+            )
+            try:
+                doc_map = extract_mod.extract_doc_sections(snap_dir, doc_refs)
+            except extract_mod.ExtractError as exc:
+                raise RuntimeError(
+                    f"[extract] doc 模式找不到材料快照 (snap_dir={snap_dir}): {exc}. "
+                    f"检查 config.syllabus_source_dir / book_series，或确认快照已落 "
+                    f"video-studio/syllabus/source/<book>/"
+                ) from exc
+            ctx["page_text"] = doc_map  # str-keyed for doc mode
+            fulltext = "\n".join(doc_map.values())
+
+            # Append normalized VDOT pace table so 忠实门 can ground pace citations
+            # (verifier M5 — without this, any pace-citing beat is false-halted).
+            vdot_json_path = snap_dir / "vdot_pace_data.json"
+            if vdot_json_path.exists():
+                with open(vdot_json_path, encoding="utf-8") as _f:
+                    vdot_data = json.load(_f)
+                pace_text = extract_mod.render_pace_lines(vdot_data)
+                fulltext = fulltext + "\n" + pace_text
+                log(f"[extract] doc mode: appended vdot pace table ({len(pace_text)} chars)")
+
+            ctx["fulltext"] = fulltext
+            # Carry source + verify_status from cursor-read into ctx (no-op if absent).
+            # (They were already seeded by step_cursor_read; explicit passthrough for clarity.)
+            ctx.setdefault("source", ctx.get("source"))
+            ctx.setdefault("verify_status", ctx.get("verify_status"))
+            log(
+                f"[extract] doc mode: {len(doc_refs)} doc(s) → {len(fulltext)} chars "
+                f"(source={ctx.get('source')!r})"
+            )
+            return
+
         # PDF mode: VIDEO_PDF + VIDEO_PAGES set → pdftotext -layout per page.
         # Sets page_text + fulltext (NOT beats — the `script` step produces them).
         pdf = os.environ.get("VIDEO_PDF")
@@ -490,6 +551,11 @@ def build_step_fns(
         if page_text:
             # Phase 3: each objective assertion → grounding PDF page (UX-004).
             records = build_provenance(ctx["beats"], page_text)
+            # MF-1: stamp the episode's source/verify_status (from cursor-read) onto
+            # records — digest-writer beats don't carry them, so without this the doc-
+            # mode provenance ships empty attribution (DP-602/603 dead on real path).
+            stamp_episode_provenance(
+                records, ctx.get("source", ""), ctx.get("verify_status", ""))
             prov = {
                 "seq": seq, "slug": slug,
                 "pages": sorted(page_text),
@@ -512,9 +578,66 @@ def build_step_fns(
         ep["provenance"].write_text(json.dumps(prov, ensure_ascii=False, indent=2),
                                     encoding="utf-8")
 
-    # ---- 11: publish (placeholder; Phase 7) ----
+    # ---- 11: publish (syllabus mode: mark done + advance cursor; Phase 7 wires upload) ----
     def step_publish(step, ctx, scratch):
-        log("[publish] placeholder (Phase 7 wires real publish)")
+        if not (getattr(cfg, "syllabus_path", "") and getattr(cfg, "cursor_path", "") and selection is not None):
+            # Phase-2 / no-syllabus mode — preserve placeholder behaviour
+            log("[publish] placeholder (Phase 7 wires real publish)")
+            return
+
+        # Verify final.mp4 exists before advancing cursor
+        final_mp4_path = ctx.get("final_mp4", "")
+        if not final_mp4_path or not Path(final_mp4_path).exists():
+            raise FileNotFoundError(
+                f"[publish] final.mp4 not found at {final_mp4_path!r}; "
+                "cursor NOT advanced"
+            )
+
+        from lib.syllabus import (
+            load_syllabus, load_cursor, save_syllabus, save_cursor,
+            advance as syllabus_advance, Cursor,
+        )
+
+        syllabus = load_syllabus(Path(cfg.syllabus_path))
+        cursor = load_cursor(Path(cfg.cursor_path))
+
+        # Locate the episode for this selection by its global 0-based index (from seq)
+        target_global = int(selection.seq) - 1
+        target_mod_idx: int | None = None
+        target_ep_idx: int | None = None
+        gidx = 0
+        for m_i, module in enumerate(syllabus.modules):
+            for e_i in range(len(module.episodes)):
+                if gidx == target_global:
+                    target_mod_idx = m_i
+                    target_ep_idx = e_i
+                gidx += 1
+
+        if target_mod_idx is None:
+            raise ValueError(
+                f"[publish] Episode seq={selection.seq!r} not found in syllabus"
+            )
+
+        # Idempotency: if already done, do nothing
+        target_episode = syllabus.modules[target_mod_idx].episodes[target_ep_idx]
+        if target_episode.status == "done":
+            log(f"[publish] Episode seq={selection.seq} already done — skipping advance (idempotent)")
+            return
+
+        # Build a temporary cursor pointing at the target episode, then advance
+        temp_cursor = Cursor(
+            book=cursor.book,
+            module_idx=target_mod_idx,
+            episode_idx=target_ep_idx,
+        )
+        new_syllabus, new_cursor = syllabus_advance(syllabus, temp_cursor)
+
+        save_syllabus(new_syllabus, Path(cfg.syllabus_path))
+        save_cursor(new_cursor, Path(cfg.cursor_path))
+        log(
+            f"[publish] seq={selection.seq} marked done; "
+            f"cursor → module={new_cursor.module_idx} ep={new_cursor.episode_idx}"
+        )
 
     # ---- 12: cleanup (runner calls cleanup_scratch on clean return) ----
     def step_cleanup(step, ctx, scratch):
@@ -592,8 +715,19 @@ def make_script_dispatch(
         src = os.path.join(str(scratch_dir), "source_fulltext.txt")
         with open(src, "w", encoding="utf-8") as f:
             f.write(fulltext)
+        # MF-1: tell the writer the episode's source + verify_status so its DP-602
+        # "非源直出" disclosure rule has a trigger (⚠️ engineering-estimate content).
+        _src_label = ctx.get("source") or ""
+        _vstatus = ctx.get("verify_status") or ""
+        _disclosure = ""
+        if "⚠️" in _vstatus or "🔧" in _vstatus:
+            _disclosure = (
+                "本期内容含工程估计/产品设定（非源直出）：念稿时明说「这是工程估计、"
+                "不是源直出」，不把它当科学定论冒充。"
+            )
         user_prompt = (
             f"教材原文（只依据这段原文，不外检索）在: {src}\n"
+            f"本期主源: {_src_label or '教材原文'}；溯源状态: {_vstatus or '已溯源'}。{_disclosure}\n"
             f"读它，写一期结构化跑步知识脚本 beats。"
         )
         res = dispatch_persona_fn(
@@ -769,6 +903,7 @@ def prepare_render(
     dry: bool,
     log: Callable[[str], None],
     dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
+    selection: Any = None,
 ) -> dict[str, Any]:
     """Build the {step_fns, gates, dispatch, scratch_dir} bundle the caller
     passes straight into `run_pipeline`. The caller owns the run_pipeline call
@@ -778,7 +913,7 @@ def prepare_render(
     seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log)
     step_fns = build_step_fns(
         cfg, seams=seams, fixture_path=fixture_path, seq=seq, slug=slug,
-        run_ff=run_ff, probe_ms=probe_ms, log=log,
+        run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection,
     )
     gates = {"check_artifact": episode_mod.check_artifact}
 

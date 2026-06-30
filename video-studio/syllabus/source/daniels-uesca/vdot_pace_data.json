@@ -1,0 +1,294 @@
+{
+  "version": "1.2",
+  "source": "Daniels Running Formula 4th Edition - Cross-validated with vdoto2.com and kalamazooarearunners.org",
+  "lastUpdated": "2026-06-20",
+  "notes": {
+    "paceUnit": "min/km (decimal minutes)",
+    "raceTimeUnit": "seconds",
+    "intervalPace": "null for VDOT < 34 (too slow for safe interval training)",
+    "repetitionPace": "null for VDOT < 34",
+    "correction": "v1.2 regenerates ALL pace columns from the Daniels-Gilbert VO2 model (T=88%/VDOT, E=73%/63%, M=marathon race pace, I/R via 6-second rule); v1.0/v1.1 pace columns were ~25-30s/km too slow. Race times unchanged."
+  },
+  "data": [
+    {
+      "vdot": 30,
+      "raceTimes": { "fiveK": 1840, "tenK": 3826, "halfMarathon": 8464, "marathon": 17357 },
+      "paces": { "easyMin": 7.41, "easyMax": 8.29, "marathon": 6.86, "threshold": 6.40, "interval": null, "repetition400m": null }
+    },
+    {
+      "vdot": 31,
+      "raceTimes": { "fiveK": 1791, "tenK": 3723, "halfMarathon": 8241, "marathon": 16917 },
+      "paces": { "easyMin": 7.22, "easyMax": 8.09, "marathon": 6.68, "threshold": 6.24, "interval": null, "repetition400m": null }
+    },
+    {
+      "vdot": 32,
+      "raceTimes": { "fiveK": 1745, "tenK": 3626, "halfMarathon": 8029, "marathon": 16499 },
+      "paces": { "easyMin": 7.05, "easyMax": 7.89, "marathon": 6.52, "threshold": 6.09, "interval": null, "repetition400m": null }
+    },
+    {
+      "vdot": 33,
+      "raceTimes": { "fiveK": 1701, "tenK": 3534, "halfMarathon": 7827, "marathon": 16102 },
+      "paces": { "easyMin": 6.88, "easyMax": 7.71, "marathon": 6.36, "threshold": 5.94, "interval": null, "repetition400m": null }
+    },
+    {
+      "vdot": 34,
+      "raceTimes": { "fiveK": 1659, "tenK": 3446, "halfMarathon": 7636, "marathon": 15723 },
+      "paces": { "easyMin": 6.72, "easyMax": 7.53, "marathon": 6.21, "threshold": 5.80, "interval": 5.47, "repetition400m": 123 }
+    },
+    {
+      "vdot": 35,
+      "raceTimes": { "fiveK": 1620, "tenK": 3363, "halfMarathon": 7453, "marathon": 15363 },
+      "paces": { "easyMin": 6.57, "easyMax": 7.37, "marathon": 6.07, "threshold": 5.67, "interval": 5.33, "repetition400m": 120 }
+    },
+    {
+      "vdot": 36,
+      "raceTimes": { "fiveK": 1582, "tenK": 3284, "halfMarathon": 7279, "marathon": 15019 },
+      "paces": { "easyMin": 6.43, "easyMax": 7.21, "marathon": 5.93, "threshold": 5.54, "interval": 5.21, "repetition400m": 117 }
+    },
+    {
+      "vdot": 37,
+      "raceTimes": { "fiveK": 1546, "tenK": 3209, "halfMarathon": 7114, "marathon": 14690 },
+      "paces": { "easyMin": 6.29, "easyMax": 7.06, "marathon": 5.80, "threshold": 5.42, "interval": 5.09, "repetition400m": 114 }
+    },
+    {
+      "vdot": 38,
+      "raceTimes": { "fiveK": 1512, "tenK": 3137, "halfMarathon": 6955, "marathon": 14375 },
+      "paces": { "easyMin": 6.16, "easyMax": 6.91, "marathon": 5.68, "threshold": 5.31, "interval": 4.97, "repetition400m": 111 }
+    },
+    {
+      "vdot": 39,
+      "raceTimes": { "fiveK": 1479, "tenK": 3069, "halfMarathon": 6804, "marathon": 14074 },
+      "paces": { "easyMin": 6.03, "easyMax": 6.77, "marathon": 5.56, "threshold": 5.20, "interval": 4.86, "repetition400m": 109 }
+    },
+    {
+      "vdot": 40,
+      "raceTimes": { "fiveK": 1448, "tenK": 3003, "halfMarathon": 6659, "marathon": 13785 },
+      "paces": { "easyMin": 5.91, "easyMax": 6.64, "marathon": 5.44, "threshold": 5.09, "interval": 4.76, "repetition400m": 106 }
+    },
+    {
+      "vdot": 41,
+      "raceTimes": { "fiveK": 1418, "tenK": 2941, "halfMarathon": 6520, "marathon": 13509 },
+      "paces": { "easyMin": 5.80, "easyMax": 6.51, "marathon": 5.34, "threshold": 4.99, "interval": 4.66, "repetition400m": 104 }
+    },
+    {
+      "vdot": 42,
+      "raceTimes": { "fiveK": 1389, "tenK": 2881, "halfMarathon": 6387, "marathon": 13243 },
+      "paces": { "easyMin": 5.69, "easyMax": 6.39, "marathon": 5.23, "threshold": 4.90, "interval": 4.57, "repetition400m": 102 }
+    },
+    {
+      "vdot": 43,
+      "raceTimes": { "fiveK": 1361, "tenK": 2824, "halfMarathon": 6260, "marathon": 12988 },
+      "paces": { "easyMin": 5.58, "easyMax": 6.27, "marathon": 5.13, "threshold": 4.80, "interval": 4.48, "repetition400m": 100 }
+    },
+    {
+      "vdot": 44,
+      "raceTimes": { "fiveK": 1335, "tenK": 2769, "halfMarathon": 6137, "marathon": 12743 },
+      "paces": { "easyMin": 5.48, "easyMax": 6.16, "marathon": 5.03, "threshold": 4.72, "interval": 4.40, "repetition400m": 98 }
+    },
+    {
+      "vdot": 45,
+      "raceTimes": { "fiveK": 1310, "tenK": 2716, "halfMarathon": 6020, "marathon": 12506 },
+      "paces": { "easyMin": 5.38, "easyMax": 6.05, "marathon": 4.94, "threshold": 4.63, "interval": 4.32, "repetition400m": 96 }
+    },
+    {
+      "vdot": 46,
+      "raceTimes": { "fiveK": 1285, "tenK": 2665, "halfMarathon": 5907, "marathon": 12279 },
+      "paces": { "easyMin": 5.29, "easyMax": 5.95, "marathon": 4.85, "threshold": 4.55, "interval": 4.24, "repetition400m": 94 }
+    },
+    {
+      "vdot": 47,
+      "raceTimes": { "fiveK": 1262, "tenK": 2617, "halfMarathon": 5798, "marathon": 12060 },
+      "paces": { "easyMin": 5.20, "easyMax": 5.85, "marathon": 4.76, "threshold": 4.47, "interval": 4.17, "repetition400m": 93 }
+    },
+    {
+      "vdot": 48,
+      "raceTimes": { "fiveK": 1239, "tenK": 2570, "halfMarathon": 5693, "marathon": 11849 },
+      "paces": { "easyMin": 5.11, "easyMax": 5.75, "marathon": 4.68, "threshold": 4.40, "interval": 4.10, "repetition400m": 91 }
+    },
+    {
+      "vdot": 49,
+      "raceTimes": { "fiveK": 1218, "tenK": 2525, "halfMarathon": 5592, "marathon": 11646 },
+      "paces": { "easyMin": 5.03, "easyMax": 5.66, "marathon": 4.60, "threshold": 4.32, "interval": 4.03, "repetition400m": 90 }
+    },
+    {
+      "vdot": 50,
+      "raceTimes": { "fiveK": 1197, "tenK": 2481, "halfMarathon": 5495, "marathon": 11449 },
+      "paces": { "easyMin": 4.95, "easyMax": 5.57, "marathon": 4.52, "threshold": 4.25, "interval": 3.96, "repetition400m": 88 }
+    },
+    {
+      "vdot": 51,
+      "raceTimes": { "fiveK": 1176, "tenK": 2439, "halfMarathon": 5402, "marathon": 11259 },
+      "paces": { "easyMin": 4.87, "easyMax": 5.48, "marathon": 4.45, "threshold": 4.19, "interval": 3.90, "repetition400m": 87 }
+    },
+    {
+      "vdot": 52,
+      "raceTimes": { "fiveK": 1157, "tenK": 2399, "halfMarathon": 5311, "marathon": 11076 },
+      "paces": { "easyMin": 4.79, "easyMax": 5.39, "marathon": 4.37, "threshold": 4.12, "interval": 3.84, "repetition400m": 85 }
+    },
+    {
+      "vdot": 53,
+      "raceTimes": { "fiveK": 1138, "tenK": 2360, "halfMarathon": 5224, "marathon": 10899 },
+      "paces": { "easyMin": 4.72, "easyMax": 5.31, "marathon": 4.31, "threshold": 4.06, "interval": 3.78, "repetition400m": 84 }
+    },
+    {
+      "vdot": 54,
+      "raceTimes": { "fiveK": 1120, "tenK": 2322, "halfMarathon": 5140, "marathon": 10727 },
+      "paces": { "easyMin": 4.65, "easyMax": 5.23, "marathon": 4.24, "threshold": 4.00, "interval": 3.72, "repetition400m": 83 }
+    },
+    {
+      "vdot": 55,
+      "raceTimes": { "fiveK": 1102, "tenK": 2286, "halfMarathon": 5058, "marathon": 10561 },
+      "paces": { "easyMin": 4.58, "easyMax": 5.16, "marathon": 4.17, "threshold": 3.94, "interval": 3.67, "repetition400m": 81 }
+    },
+    {
+      "vdot": 56,
+      "raceTimes": { "fiveK": 1085, "tenK": 2251, "halfMarathon": 4979, "marathon": 10400 },
+      "paces": { "easyMin": 4.51, "easyMax": 5.08, "marathon": 4.11, "threshold": 3.88, "interval": 3.61, "repetition400m": 80 }
+    },
+    {
+      "vdot": 57,
+      "raceTimes": { "fiveK": 1069, "tenK": 2217, "halfMarathon": 4903, "marathon": 10245 },
+      "paces": { "easyMin": 4.45, "easyMax": 5.01, "marathon": 4.05, "threshold": 3.82, "interval": 3.56, "repetition400m": 79 }
+    },
+    {
+      "vdot": 58,
+      "raceTimes": { "fiveK": 1053, "tenK": 2184, "halfMarathon": 4830, "marathon": 10094 },
+      "paces": { "easyMin": 4.39, "easyMax": 4.94, "marathon": 3.99, "threshold": 3.77, "interval": 3.51, "repetition400m": 78 }
+    },
+    {
+      "vdot": 59,
+      "raceTimes": { "fiveK": 1037, "tenK": 2152, "halfMarathon": 4758, "marathon": 9947 },
+      "paces": { "easyMin": 4.33, "easyMax": 4.87, "marathon": 3.93, "threshold": 3.72, "interval": 3.47, "repetition400m": 77 }
+    },
+    {
+      "vdot": 60,
+      "raceTimes": { "fiveK": 1023, "tenK": 2122, "halfMarathon": 4689, "marathon": 9805 },
+      "paces": { "easyMin": 4.27, "easyMax": 4.81, "marathon": 3.87, "threshold": 3.67, "interval": 3.42, "repetition400m": 76 }
+    },
+    {
+      "vdot": 61,
+      "raceTimes": { "fiveK": 1008, "tenK": 2092, "halfMarathon": 4622, "marathon": 9667 },
+      "paces": { "easyMin": 4.21, "easyMax": 4.74, "marathon": 3.82, "threshold": 3.62, "interval": 3.37, "repetition400m": 75 }
+    },
+    {
+      "vdot": 62,
+      "raceTimes": { "fiveK": 994, "tenK": 2063, "halfMarathon": 4557, "marathon": 9533 },
+      "paces": { "easyMin": 4.16, "easyMax": 4.68, "marathon": 3.77, "threshold": 3.57, "interval": 3.32, "repetition400m": 74 }
+    },
+    {
+      "vdot": 63,
+      "raceTimes": { "fiveK": 980, "tenK": 2035, "halfMarathon": 4494, "marathon": 9403 },
+      "paces": { "easyMin": 4.10, "easyMax": 4.62, "marathon": 3.71, "threshold": 3.53, "interval": 3.28, "repetition400m": 73 }
+    },
+    {
+      "vdot": 64,
+      "raceTimes": { "fiveK": 967, "tenK": 2008, "halfMarathon": 4433, "marathon": 9276 },
+      "paces": { "easyMin": 4.05, "easyMax": 4.56, "marathon": 3.66, "threshold": 3.48, "interval": 3.23, "repetition400m": 72 }
+    },
+    {
+      "vdot": 65,
+      "raceTimes": { "fiveK": 954, "tenK": 1981, "halfMarathon": 4374, "marathon": 9152 },
+      "paces": { "easyMin": 4.00, "easyMax": 4.51, "marathon": 3.61, "threshold": 3.44, "interval": 3.19, "repetition400m": 71 }
+    },
+    {
+      "vdot": 66,
+      "raceTimes": { "fiveK": 942, "tenK": 1955, "halfMarathon": 4317, "marathon": 9032 },
+      "paces": { "easyMin": 3.95, "easyMax": 4.45, "marathon": 3.57, "threshold": 3.40, "interval": 3.15, "repetition400m": 70 }
+    },
+    {
+      "vdot": 67,
+      "raceTimes": { "fiveK": 930, "tenK": 1930, "halfMarathon": 4261, "marathon": 8915 },
+      "paces": { "easyMin": 3.90, "easyMax": 4.40, "marathon": 3.52, "threshold": 3.36, "interval": 3.11, "repetition400m": 69 }
+    },
+    {
+      "vdot": 68,
+      "raceTimes": { "fiveK": 918, "tenK": 1906, "halfMarathon": 4207, "marathon": 8800 },
+      "paces": { "easyMin": 3.86, "easyMax": 4.35, "marathon": 3.48, "threshold": 3.32, "interval": 3.07, "repetition400m": 68 }
+    },
+    {
+      "vdot": 69,
+      "raceTimes": { "fiveK": 907, "tenK": 1882, "halfMarathon": 4155, "marathon": 8689 },
+      "paces": { "easyMin": 3.81, "easyMax": 4.30, "marathon": 3.43, "threshold": 3.28, "interval": 3.03, "repetition400m": 67 }
+    },
+    {
+      "vdot": 70,
+      "raceTimes": { "fiveK": 896, "tenK": 1859, "halfMarathon": 4104, "marathon": 8580 },
+      "paces": { "easyMin": 3.77, "easyMax": 4.25, "marathon": 3.39, "threshold": 3.24, "interval": 2.99, "repetition400m": 66 }
+    },
+    {
+      "vdot": 71,
+      "raceTimes": { "fiveK": 885, "tenK": 1837, "halfMarathon": 4055, "marathon": 8474 },
+      "paces": { "easyMin": 3.72, "easyMax": 4.20, "marathon": 3.35, "threshold": 3.20, "interval": 2.95, "repetition400m": 65 }
+    },
+    {
+      "vdot": 72,
+      "raceTimes": { "fiveK": 875, "tenK": 1815, "halfMarathon": 4007, "marathon": 8370 },
+      "paces": { "easyMin": 3.68, "easyMax": 4.15, "marathon": 3.31, "threshold": 3.17, "interval": 2.92, "repetition400m": 64 }
+    },
+    {
+      "vdot": 73,
+      "raceTimes": { "fiveK": 865, "tenK": 1794, "halfMarathon": 3960, "marathon": 8269 },
+      "paces": { "easyMin": 3.64, "easyMax": 4.10, "marathon": 3.27, "threshold": 3.13, "interval": 2.88, "repetition400m": 63 }
+    },
+    {
+      "vdot": 74,
+      "raceTimes": { "fiveK": 855, "tenK": 1774, "halfMarathon": 3915, "marathon": 8170 },
+      "paces": { "easyMin": 3.60, "easyMax": 4.06, "marathon": 3.23, "threshold": 3.10, "interval": 2.85, "repetition400m": 62 }
+    },
+    {
+      "vdot": 75,
+      "raceTimes": { "fiveK": 846, "tenK": 1754, "halfMarathon": 3871, "marathon": 8073 },
+      "paces": { "easyMin": 3.56, "easyMax": 4.01, "marathon": 3.19, "threshold": 3.06, "interval": 2.81, "repetition400m": 62 }
+    },
+    {
+      "vdot": 76,
+      "raceTimes": { "fiveK": 837, "tenK": 1735, "halfMarathon": 3828, "marathon": 7979 },
+      "paces": { "easyMin": 3.52, "easyMax": 3.97, "marathon": 3.15, "threshold": 3.03, "interval": 2.78, "repetition400m": 61 }
+    },
+    {
+      "vdot": 77,
+      "raceTimes": { "fiveK": 828, "tenK": 1716, "halfMarathon": 3787, "marathon": 7886 },
+      "paces": { "easyMin": 3.49, "easyMax": 3.93, "marathon": 3.11, "threshold": 3.00, "interval": 2.75, "repetition400m": 60 }
+    },
+    {
+      "vdot": 78,
+      "raceTimes": { "fiveK": 819, "tenK": 1698, "halfMarathon": 3746, "marathon": 7796 },
+      "paces": { "easyMin": 3.45, "easyMax": 3.89, "marathon": 3.08, "threshold": 2.97, "interval": 2.72, "repetition400m": 59 }
+    },
+    {
+      "vdot": 79,
+      "raceTimes": { "fiveK": 811, "tenK": 1680, "halfMarathon": 3707, "marathon": 7707 },
+      "paces": { "easyMin": 3.42, "easyMax": 3.85, "marathon": 3.04, "threshold": 2.94, "interval": 2.69, "repetition400m": 58 }
+    },
+    {
+      "vdot": 80,
+      "raceTimes": { "fiveK": 803, "tenK": 1663, "halfMarathon": 3669, "marathon": 7620 },
+      "paces": { "easyMin": 3.38, "easyMax": 3.81, "marathon": 3.01, "threshold": 2.91, "interval": 2.66, "repetition400m": 58 }
+    },
+    {
+      "vdot": 81,
+      "raceTimes": { "fiveK": 795, "tenK": 1646, "halfMarathon": 3632, "marathon": 7535 },
+      "paces": { "easyMin": 3.35, "easyMax": 3.77, "marathon": 2.98, "threshold": 2.88, "interval": 2.63, "repetition400m": 57 }
+    },
+    {
+      "vdot": 82,
+      "raceTimes": { "fiveK": 787, "tenK": 1630, "halfMarathon": 3596, "marathon": 7452 },
+      "paces": { "easyMin": 3.31, "easyMax": 3.73, "marathon": 2.94, "threshold": 2.85, "interval": 2.60, "repetition400m": 56 }
+    },
+    {
+      "vdot": 83,
+      "raceTimes": { "fiveK": 780, "tenK": 1614, "halfMarathon": 3561, "marathon": 7371 },
+      "paces": { "easyMin": 3.28, "easyMax": 3.70, "marathon": 2.91, "threshold": 2.82, "interval": 2.57, "repetition400m": 56 }
+    },
+    {
+      "vdot": 84,
+      "raceTimes": { "fiveK": 773, "tenK": 1599, "halfMarathon": 3527, "marathon": 7291 },
+      "paces": { "easyMin": 3.25, "easyMax": 3.66, "marathon": 2.88, "threshold": 2.80, "interval": 2.55, "repetition400m": 55 }
+    },
+    {
+      "vdot": 85,
+      "raceTimes": { "fiveK": 766, "tenK": 1584, "halfMarathon": 3494, "marathon": 7213 },
+      "paces": { "easyMin": 3.22, "easyMax": 3.63, "marathon": 2.85, "threshold": 2.77, "interval": 2.52, "repetition400m": 54 }
+    }
+  ]
+}

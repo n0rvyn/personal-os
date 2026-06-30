@@ -221,6 +221,20 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
         print(f"error: {e}", file=sys.stderr)
         return 1
 
+    # Phase 6: Stage-1 entry — select next pending episode from syllabus (if configured).
+    # Must run BEFORE prepare_render so seq/slug are closure-bound with the right values.
+    from lib.syllabus import select_next
+    selection = select_next(config)
+    syllabus_configured = bool(getattr(config, "syllabus_path", ""))
+
+    if selection is None and syllabus_configured:
+        print("无 pending 期/大纲跑完", file=sys.stderr)
+        return 0
+
+    # Determine seq/slug: from selection (syllabus mode) or CLI args (Phase-2 mode).
+    ep_seq = selection.seq if selection is not None else args.seq
+    ep_slug = selection.slug if selection is not None else args.slug
+
     fixture_path = Path(args.fixture)
     if not fixture_path.is_absolute():
         fixture_path = Path.cwd() / fixture_path
@@ -236,8 +250,13 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
 
     if prepare_fn is None:
         from lib.wiring import prepare_render as prepare_fn  # lazy: keeps media off import path
-    bundle = prepare_fn(config, fixture_path=fixture_path, seq=args.seq,
-                        slug=args.slug, dry=args.dry, log=_log)
+
+    if selection is not None:
+        bundle = prepare_fn(config, fixture_path=fixture_path, seq=ep_seq,
+                            slug=ep_slug, dry=args.dry, log=_log, selection=selection)
+    else:
+        bundle = prepare_fn(config, fixture_path=fixture_path, seq=ep_seq,
+                            slug=ep_slug, dry=args.dry, log=_log)
 
     run = run_pipeline_fn or run_pipeline
     result = run(config, pipeline=pipeline, **bundle)
@@ -247,8 +266,8 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
               file=sys.stderr)
         return 2
 
-    ep = lib.episode.episode_paths(config.output_dir, args.seq, args.slug)
-    print(f"done — episode {args.seq}-{args.slug}")
+    ep = lib.episode.episode_paths(config.output_dir, ep_seq, ep_slug)
+    print(f"done — episode {ep_seq}-{ep_slug}")
     for key in ("final", "subtitles", "shotlist", "provenance"):
         p = ep[key]
         mark = "✓" if Path(p).exists() else "—"

@@ -78,3 +78,74 @@ def test_equivalent_notation_maps_to_page():
 
 def _has_number(s):
     return any(c.isdigit() for c in s)
+
+
+# ---------------------------------------------------------------------------
+# New tests: source + verify_status per assertion (Task 6 / UX-004 extension)
+# ---------------------------------------------------------------------------
+
+
+def test_provenance_carries_source_and_verify_status():
+    """Each provenance record must carry source + verify_status from the beat."""
+    from lib.provenance import build_provenance
+    beats = [
+        {
+            "beat_id": "b1",
+            "text": "乳酸阈配速",
+            "anchor": "乳酸阈 T 配速 5:20",
+            "source": "Daniels",
+            "verify_status": "✅",
+        },
+    ]
+    prov = build_provenance(beats, PAGE_MAP)
+    assert prov[0]["source"] == "Daniels"
+    assert prov[0]["verify_status"] == "✅"
+
+
+def test_provenance_engineering_estimate_flagged():
+    """⚠️ engineering estimate beats carry verify_status through provenance."""
+    from lib.provenance import build_provenance
+    beats = [
+        {
+            "beat_id": "b2",
+            "text": "冷启动 VDOT 估计",
+            "anchor": "VDOT 先验 48",
+            "source": "UESCA",
+            "verify_status": "⚠️",
+        },
+    ]
+    prov = build_provenance(beats, PAGE_MAP)
+    assert prov[0]["verify_status"] == "⚠️"
+    assert prov[0]["source"] == "UESCA"
+
+
+def test_provenance_missing_source_defaults_empty():
+    """Beats without source/verify_status get empty-string defaults (not KeyError)."""
+    from lib.provenance import build_provenance
+    beats = [{"beat_id": "b1", "text": "x", "anchor": "配速 5:20"}]
+    prov = build_provenance(beats, PAGE_MAP)
+    assert "source" in prov[0]
+    assert "verify_status" in prov[0]
+
+
+def test_provenance_doc_ref_str_key():
+    """Doc mode uses str keys; grounding must work with str keys (doc_ref field)."""
+    from lib.provenance import build_provenance
+    doc_map = {
+        "01-intensity-zones": "训练区间 T 配速 5:20/km",
+        "02-vdot-system": "VDOT 72 对应马拉松 2:38",
+    }
+    beats = [
+        {
+            "beat_id": "b1",
+            "text": "阈值配速",
+            "anchor": "T 配速 5:20",
+            "source": "Daniels",
+            "verify_status": "✅",
+        },
+    ]
+    prov = build_provenance(beats, doc_map)
+    assert prov[0]["source"] == "Daniels"
+    assert prov[0]["verify_status"] == "✅"
+    # doc_ref should be the str key that grounded it
+    assert prov[0].get("doc_ref") == "01-intensity-zones"

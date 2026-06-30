@@ -75,6 +75,13 @@ class VideoStudioConfig:
     episodes_dir: str
     syllabus_dir: str
     state_dir: str
+    # Phase 6: explicit syllabus + cursor paths (optional; Phase-2 mode omits these)
+    syllabus_path: str = ""
+    cursor_path: str = ""
+    # Phase 6: book series identifier (optional; Stage 0 syllabus planner uses this)
+    book_series: str = ""
+    # Phase 6: syllabus source directory (snapshot of training science materials)
+    syllabus_source_dir: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +234,14 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
     character_ref = str(raw.get("character_ref", ""))
     style = str(raw.get("style", ""))
 
+    # --- Phase 6: explicit syllabus + cursor paths (optional; Phase-2 omits) ---
+    syllabus_path = str(raw.get("syllabus_path", ""))
+    cursor_path = str(raw.get("cursor_path", ""))
+
+    # --- Phase 6: book_series + syllabus_source_dir: lenient, not required ---
+    book_series = str(raw.get("book_series", ""))
+    syllabus_source_dir = str(raw.get("syllabus_source_dir", ""))
+
     return VideoStudioConfig(
         render=render,
         audio=audio,
@@ -239,6 +254,10 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         episodes_dir=episodes_dir,
         syllabus_dir=syllabus_dir,
         state_dir=state_dir,
+        syllabus_path=syllabus_path,
+        cursor_path=cursor_path,
+        book_series=book_series,
+        syllabus_source_dir=syllabus_source_dir,
     )
 
 

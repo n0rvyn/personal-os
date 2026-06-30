@@ -147,6 +147,27 @@ def test_pdf_mode_malformed_json_is_miss_not_crash(tmp_path):
     assert "script_ledger" not in ctx  # treated as a miss → would retry
 
 
+def test_pdf_mode_empty_or_unsourced_beats_is_miss_not_pass(tmp_path):
+    """G-1: validate_ledger must be wired — empty beats / missing / empty anchor
+    must NOT clear the 忠实门 (else an unsourced script passes the gate)."""
+    from lib.wiring import make_script_dispatch
+
+    for bad in (
+        {"beats": []},                                          # empty
+        {"beats": [{"beat_id": "b1", "text": "t"}]},            # no anchor
+        {"beats": [{"beat_id": "b1", "text": "t", "anchor": ""}]},  # empty anchor
+    ):
+        def persona(agent, prompt, scratch_dir, expected, _b=bad, **kw):
+            out = Path(scratch_dir) / expected
+            out.write_text(json.dumps(_b), encoding="utf-8")
+            return {"ok": True, "artifact_path": str(out)}
+
+        ctx = {"fulltext": LAYOUT_FT}
+        d = make_script_dispatch(object(), dispatch_persona_fn=persona)
+        d("digest-writer", _script_step(), ctx, tmp_path)
+        assert "script_ledger" not in ctx, f"unsourced beats cleared the gate: {bad}"
+
+
 def test_pdf_mode_retry_then_ground(tmp_path):
     """Stateful persona: fabricated → flagged → faithful → grounded (full run)."""
     from lib.runner import run_pipeline

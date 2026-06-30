@@ -40,7 +40,7 @@ from lib import episode as episode_mod
 from lib import extract as extract_mod
 from lib import steps as steps_mod
 from lib.config import VideoStudioConfig
-from lib.ledger import verify_anchors
+from lib.ledger import LedgerError, validate_ledger, verify_anchors
 from lib.provenance import build_provenance
 from lib.subtitle import build_ass, build_srt
 
@@ -620,8 +620,12 @@ def make_script_dispatch(
         try:
             with open(res["artifact_path"], encoding="utf-8") as f:
                 beats = json.load(f).get("beats", [])
-        except (json.JSONDecodeError, OSError, AttributeError, ValueError) as exc:
-            log(f"[script] digest output not valid JSON → no artifact (retry): {exc}")
+            # Schema gate: empty beats / missing / empty anchor must NOT clear the
+            # 忠实门 (verify_anchors skips past them) — recompute, never trust the
+            # persona. A schema miss is a FAILED ATTEMPT (→ retry), like bad JSON.
+            validate_ledger({"beats": beats})
+        except (json.JSONDecodeError, OSError, AttributeError, ValueError, LedgerError) as exc:
+            log(f"[script] digest output invalid (bad JSON / empty / unsourced) → retry: {exc}")
             return
 
         verdict = verify_anchors({"beats": beats}, fulltext)

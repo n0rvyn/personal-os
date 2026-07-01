@@ -1,0 +1,80 @@
+{
+  "version": "1.0.0",
+  "source": "Daniels' Running Formula (2021, 4th ed)",
+  "lastUpdated": "2026-07-01",
+  "notes": "七区强度边界，%VO2max 与 %HRmax 数值逐字照搬自 01-intensity-zones.md，R/FR HRmax 为 — （段太短不用 HR）。",
+  "zones": [
+    {
+      "code": "E",
+      "name": "Easy",
+      "vo2max": "59–74%",
+      "hrmax": "65–79%",
+      "purpose": "有氧基础/恢复",
+      "source": "Daniels p.83",
+      "trace": "✅"
+    },
+    {
+      "code": "M",
+      "name": "Marathon",
+      "vo2max": "75–84%",
+      "hrmax": "80–89%",
+      "purpose": "马拉松专项耐力",
+      "source": "Daniels p.89",
+      "trace": "✅"
+    },
+    {
+      "code": "T",
+      "name": "Threshold",
+      "vo2max": "83–88%",
+      "hrmax": "88–92%",
+      "purpose": "乳酸阈/清除能力",
+      "source": "Daniels p.91",
+      "trace": "✅"
+    },
+    {
+      "code": "10K",
+      "name": "(T–I 间)",
+      "vo2max": "88–92%",
+      "hrmax": "91–94%",
+      "purpose": "阈—VO2max 过渡",
+      "source": "Daniels p.109",
+      "trace": "✅"
+    },
+    {
+      "code": "I",
+      "name": "Interval",
+      "vo2max": "98–100%",
+      "hrmax": "98–100%",
+      "purpose": "VO2max 上限",
+      "source": "Daniels p.111",
+      "trace": "✅"
+    },
+    {
+      "code": "H",
+      "name": "Hard",
+      "vo2max": "≈I",
+      "hrmax": "98–100%",
+      "purpose": "基于时长的 VO2max 努力",
+      "source": "代码 DanielsPaceZones",
+      "trace": "⚠️"
+    },
+    {
+      "code": "R",
+      "name": "Repetition",
+      "vo2max": "105–110%",
+      "hrmax": "—",
+      "purpose": "速度/跑步经济性",
+      "source": "Daniels p.111",
+      "trace": "✅"
+    },
+    {
+      "code": "FR",
+      "name": "Fast Rep",
+      "vo2max": "115–120%",
+      "hrmax": "—",
+      "purpose": "无氧功率/神经肌募集",
+      "source": "Daniels p.111",
+      "trace": "✅"
+    }
+  ]
+}

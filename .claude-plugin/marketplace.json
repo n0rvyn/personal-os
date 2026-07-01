@@ -162,6 +162,23 @@
         "dedup"
       ],
       "strict": true
+    },
+    {
+      "name": "video-studio",
+      "source": "./video-studio",
+      "description": "教材 PDF → 结构化视频专栏 一键成片流水线（/video-plan 大纲规划 + /video-make 出片；ffmpeg 引擎 + Doubao(默认)/MiniMax 双 provider 图/视频/语音；忠实门 + 分镜判官预算治理；需 libass ffmpeg 静态构建）",
+      "version": "0.0.1",
+      "category": "media",
+      "tags": [
+        "video",
+        "ffmpeg",
+        "storyboard",
+        "doubao",
+        "minimax",
+        "tts",
+        "faithfulness"
+      ],
+      "strict": true
     }
   ]
 }

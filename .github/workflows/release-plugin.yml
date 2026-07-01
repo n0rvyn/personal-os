@@ -19,6 +19,7 @@ on:
           - podcast-prep
           - novel-forge
           - podcast-studio
+          - video-studio
           - all
       bump:
         description: "Semver bump type"
@@ -83,7 +84,7 @@ jobs:
           }
 
           if [[ "$TARGET" == "all" ]]; then
-            PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens" "tts-toolkit" "podcast-prep" "novel-forge" "podcast-studio")
+            PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens" "tts-toolkit" "podcast-prep" "novel-forge" "podcast-studio" "video-studio")
           else
             PLUGINS=("$TARGET")
           fi

@@ -48,9 +48,10 @@ def _shenjing_step():
     }
 
 
-def _make_cfg(cap: int = 2):
+def _make_cfg(cap: int = 2, threshold: float = 0.6):
     cfg = MagicMock()
     cfg.budget.video_shots_per_episode = cap
+    cfg.budget.video_motion_threshold = threshold
     return cfg
 
 
@@ -771,3 +772,210 @@ def test_prepare_render_unknown_agent_raises(tmp_path, monkeypatch):
 
     with pytest.raises(Exception):
         dispatch("unknown-agent", {"name": "x"}, {}, scratch_dir)
+
+
+# ---------------------------------------------------------------------------
+# Task 8: --dry隔离 step_publish 副作用
+# ---------------------------------------------------------------------------
+
+_DRY_PUBLISH_SYLLABUS_YAML = """\
+book: running-science
+character_ref: ""
+modules:
+  - name: VDOT System
+    style: educational
+    episodes:
+      - title: What is VDOT
+        doc_refs: ["01.md"]
+        source: Daniels
+        verify_status: "✅"
+        learning_goal: Understand VDOT
+        status: pending
+      - title: VDOT Pace Tables
+        doc_refs: ["02.md"]
+        source: Daniels
+        verify_status: "✅"
+        learning_goal: Read pace tables
+        status: pending
+"""
+
+_DRY_PUBLISH_CURSOR_YAML = """\
+book: running-science
+module_idx: 0
+episode_idx: 0
+"""
+
+
+def test_publish_dry_skips_mark_done_and_advance(tmp_path):
+    """dry=True — step_publish must NOT mark the episode done or advance the cursor.
+
+    Task 8 regression: wiring.py:step_publish was writing mark-done+advance
+    even in --dry mode, silently consuming the episode slot.
+    """
+    import textwrap
+    from lib.wiring import build_step_fns
+    from lib.syllabus import load_syllabus, load_cursor, select_next
+
+    syl_path = tmp_path / "syllabus.yaml"
+    syl_path.write_text(textwrap.dedent(_DRY_PUBLISH_SYLLABUS_YAML), encoding="utf-8")
+    cur_path = tmp_path / "cursor.yaml"
+    cur_path.write_text(textwrap.dedent(_DRY_PUBLISH_CURSOR_YAML), encoding="utf-8")
+
+    # Build selection for module_idx=0, episode_idx=0 (seq=001)
+    class _FakeCfg:
+        pass
+    fcfg = _FakeCfg()
+    fcfg.syllabus_path = str(syl_path)
+    fcfg.cursor_path = str(cur_path)
+    selection = select_next(fcfg)
+    assert selection is not None, "test setup: selection must not be None"
+
+    # Create final.mp4 sentinel
+    ep_dir = tmp_path / "episodes" / f"{selection.seq}-{selection.slug}"
+    ep_dir.mkdir(parents=True)
+    final_mp4 = ep_dir / "final.mp4"
+    final_mp4.write_bytes(b"")
+
+    # Build config
+    from lib.config import load_config
+    cfg_yaml = (
+        "render:\n  width: 1920\n  height: 1080\n  fps: 30\n  subtitle_font: Arial\n"
+        "audio:\n  voice_id: voice-abc\n  bgm_duck_db: 18.0\n"
+        "media:\n  provider: doubao\n"
+        "budget:\n  video_shots_per_episode: 2\n"
+        "ffmpeg:\n  ffmpeg_bin: /bin/true\n  ffprobe_bin: /bin/true\n"
+        f"output_dir: {tmp_path}\n"
+        f"syllabus_path: {syl_path}\n"
+        f"cursor_path: {cur_path}\n"
+    )
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(cfg_yaml, encoding="utf-8")
+    cfg = load_config(str(cfg_path))
+
+    class _DummySeams:
+        dry = True
+        provider = "doubao"
+        def gen_still(self, *a, **kw): raise NotImplementedError
+        def gen_video(self, *a, **kw): raise NotImplementedError
+        def synth(self, *a, **kw): raise NotImplementedError
+
+    step_fns = build_step_fns(
+        cfg,
+        seams=_DummySeams(),
+        fixture_path=tmp_path / "fixture.json",
+        seq=selection.seq,
+        slug=selection.slug,
+        run_ff=lambda *a, **kw: None,
+        probe_ms=lambda p: 1000,
+        log=lambda msg: None,
+        selection=selection,
+        dry=True,  # <- key: dry mode
+    )
+    step_publish = step_fns["publish"]
+
+    ctx: dict = {"final_mp4": str(final_mp4)}
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    step_publish({}, ctx, scratch)
+
+    # Episode must still be pending (not done)
+    syl = load_syllabus(syl_path)
+    assert syl.modules[0].episodes[0].status == "pending", (
+        "dry publish must NOT mark episode as done"
+    )
+
+    # Cursor must be unchanged (still at 0, 0)
+    cur = load_cursor(cur_path)
+    assert (cur.module_idx, cur.episode_idx) == (0, 0), (
+        f"dry publish must NOT advance cursor; got ({cur.module_idx}, {cur.episode_idx})"
+    )
+
+
+def test_step_chart_unknown_type_backfills_fallback_clip(tmp_path):
+    """DP-002=B: an unknown/off-list chart.type must degrade to a still CLIP
+    IN-PLACE (backfill clips_by_index[i]), not just return None and continue.
+
+    Regression (implementation-reviewer C:95): step_chart's None branch used to
+    `continue` without rendering a fallback or backfilling the clip. Because
+    step_gen_still runs earlier and only handles still/multi, the chart beat then
+    had no clip → step_assemble raises "beats with no clip" — a crash AFTER paid
+    Doubao S2V + MiniMax TTS. director's prompt says "曲线/curve", so an LLM
+    emitting type:"curve" (not the on-list "line") is a real, reachable path.
+    """
+    from lib.wiring import build_step_fns
+    from lib.config import load_config
+
+    cfg_yaml = (
+        "render:\n  width: 1920\n  height: 1080\n  fps: 30\n  subtitle_font: Arial\n"
+        "audio:\n  voice_id: voice-abc\n  bgm_duck_db: 18.0\n"
+        "media:\n  provider: doubao\n"
+        "budget:\n  video_shots_per_episode: 2\n"
+        "ffmpeg:\n  ffmpeg_bin: /bin/true\n  ffprobe_bin: /bin/true\n"
+        f"output_dir: {tmp_path}\n"
+    )
+    cfg_path = tmp_path / "cfg.yaml"
+    cfg_path.write_text(cfg_yaml, encoding="utf-8")
+    cfg = load_config(str(cfg_path))
+
+    gen_still_calls = []
+
+    class _Seams:
+        dry = True
+        provider = "doubao"
+
+        def gen_still(self, prompt, ref_url, out_path):
+            gen_still_calls.append(prompt)
+            p = Path(out_path).with_suffix(".jpg")
+            p.write_text("x", encoding="utf-8")
+            return str(p)
+
+        def gen_video(self, *a, **kw):
+            raise NotImplementedError
+
+        def synth(self, *a, **kw):
+            raise NotImplementedError
+
+    def _run_ff(argv, label):
+        # ffmpeg output path is the last argv element; create it so the
+        # sub-clip → out_clip shutil.copy inside step_render_shots_clip succeeds.
+        Path(argv[-1]).write_bytes(b"")
+
+    step_fns = build_step_fns(
+        cfg,
+        seams=_Seams(),
+        fixture_path=tmp_path / "f.json",
+        seq="001",
+        slug="ep",
+        run_ff=_run_ff,
+        probe_ms=lambda p: 1000,
+        log=lambda m: None,
+    )
+    step_chart = step_fns["chart"]
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    beat = {
+        "id": "b00",
+        "visual_type": "chart",
+        # off-list token (director prompt mentions 曲线/curve) → _chart_content_for_beat
+        # returns None → step_chart MUST render a fallback still clip.
+        "chart": {"type": "curve", "params": {}},
+        "text": "坡度能耗曲线",
+        "image_prompt": "坡度示意图",
+    }
+    ctx = {
+        "beats": [beat],
+        "clip_len_by_index": {0: 3.0},
+        "ref_url": "dry://ref",
+        "grade_vf": "",
+        "clips_by_index": {},
+    }
+    step_chart({}, ctx, scratch)
+
+    # The crux: the unknown-type chart beat must have a backfilled clip, else
+    # step_assemble raises "beats with no clip" after paid generation.
+    assert 0 in ctx["clips_by_index"], (
+        "unknown chart.type must backfill a fallback still clip in clips_by_index[i]; "
+        "without it step_assemble raises 'beats with no clip' AFTER paid S2V/TTS"
+    )
+    assert gen_still_calls, "fallback path must render a still via gen_still"

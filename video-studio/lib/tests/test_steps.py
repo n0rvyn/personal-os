@@ -343,6 +343,8 @@ def test_chart_clip_excludes_color_grade(tmp_path):
         assert grade_token not in combined, (
             f"Chart clip must NOT include grade filter token '{grade_token}'"
         )
+    # Charts are held STATIC: a Ken Burns push-in would crop the axes / units out.
+    assert "zoompan" not in combined, "chart clip must be static (no zoompan)"
 
 
 def test_still_clip_includes_color_grade(tmp_path):
@@ -702,9 +704,9 @@ def test_camera_move_threaded_to_filtergraph(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    # 横移 signature: z='1.1' fixed zoom, x='on*... horizontal pan
-    assert "z='1.1'" in vf, (
-        f"横移 camera_move must produce fixed z='1.1' in filtergraph; got: {vf}"
+    # 横移 signature: z='1.2' fixed zoom, x='on*... horizontal pan
+    assert "z='1.2'" in vf, (
+        f"横移 camera_move must produce fixed z='1.2' in filtergraph; got: {vf}"
     )
     assert re.search(r"x='on\*", vf), (
         f"横移 camera_move must produce x='on*...' pan expression; got: {vf}"
@@ -723,8 +725,8 @@ def test_camera_move_竖摇_threaded_to_filtergraph(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "z='1.1'" in vf, (
-        f"竖摇 camera_move must produce fixed z='1.1'; got: {vf}"
+    assert "z='1.2'" in vf, (
+        f"竖摇 camera_move must produce fixed z='1.2'; got: {vf}"
     )
     assert re.search(r"y='on\*", vf), (
         f"竖摇 camera_move must produce y='on*...' pan-y expression; got: {vf}"
@@ -743,9 +745,9 @@ def test_shot_type_fallback_全景_maps_to_横移(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    # 横移 signature in the filtergraph (z='1.1' + pan-x)
-    assert "z='1.1'" in vf, (
-        f"全景 shot_type fallback must map to 横移 (z='1.1'); got: {vf}"
+    # 横移 signature in the filtergraph (z='1.2' + pan-x)
+    assert "z='1.2'" in vf, (
+        f"全景 shot_type fallback must map to 横移 (z='1.2'); got: {vf}"
     )
     assert re.search(r"x='on\*", vf), (
         f"全景 shot_type fallback must map to 横移 (x='on*...'); got: {vf}"
@@ -788,7 +790,10 @@ def test_degenerate_short_beat_forces_静止(tmp_path):
     The render layer must detect slice_s < 0.8 and force 静止 regardless of the
     shot's camera_move field.
 
-    静止 signature: zoompan z='1.0' (constant, no motion increment).
+    静止 signature (Task 3, DP 统一微推): gentle δ=0.02 drift, cap 1.02 —
+    NOT the director's full 推近 push-in (cap 1.1 at intensity 1.0). The
+    degenerate guard forces 静止, so the beat gets the gentle drift, not the
+    director's 推近.
 
     Currently FAILS because steps.py doesn't implement the <0.8s guard yet.
 
@@ -805,12 +810,13 @@ def test_degenerate_short_beat_forces_静止(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    # 静止 signature: z='1.0' constant zoom, no zoom+ increment
-    assert "z='1.0'" in vf, (
-        f"Degenerate clip_len={clip_len} < 0.8 must force 静止 (z='1.0'); got: {vf}"
+    # 静止 signature (Task 3 统一微推): gentle drift, cap 1.02 — NOT the
+    # director's full 推近 push-in (cap 1.1). Forcing to 静止 = gentle drift.
+    assert ",1.02)" in vf, (
+        f"Degenerate clip_len={clip_len} < 0.8 must force gentle 静止 (δ=0.02 drift, cap 1.02); got: {vf}"
     )
-    assert "zoom+" not in vf, (
-        f"Degenerate short clip must not produce zoom+ (push-in motion); got: {vf}"
+    assert ",1.2)" not in vf, (
+        f"Degenerate short clip must not get director's full 推近 push-in (cap 1.2); got: {vf}"
     )
 
 
@@ -830,8 +836,8 @@ def test_camera_intensity_threaded_to_filtergraph(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.000556" in vf and ",1.05)" in vf, (
-        f"camera_intensity=0.5 must halve the 推近 delta (inc=0.000556 cap=1.05); got: {vf}"
+    assert "zoom+0.001111" in vf and ",1.1)" in vf, (
+        f"camera_intensity=0.5 must halve the 推近 delta (inc=0.001111 cap=1.1); got: {vf}"
     )
 
 
@@ -845,6 +851,6 @@ def test_absent_camera_intensity_defaults_to_1_0(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.001111" in vf and ",1.1)" in vf, (
+    assert "zoom+0.002222" in vf and ",1.2)" in vf, (
         f"absent camera_intensity must default to 1.0 (current amounts); got: {vf}"
     )

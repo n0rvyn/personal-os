@@ -53,6 +53,7 @@ class MediaConfig:
 @dataclass(frozen=True)
 class BudgetConfig:
     video_shots_per_episode: int
+    video_motion_threshold: float = 0.6
 
 
 @dataclass(frozen=True)
@@ -157,7 +158,10 @@ def _validate_media(raw: dict[str, Any]) -> MediaConfig:
 def _validate_budget(raw: dict[str, Any]) -> BudgetConfig:
     if "video_shots_per_episode" not in raw:
         raise ConfigError("missing required key: budget.video_shots_per_episode")
-    return BudgetConfig(video_shots_per_episode=int(raw["video_shots_per_episode"]))
+    return BudgetConfig(
+        video_shots_per_episode=int(raw["video_shots_per_episode"]),
+        video_motion_threshold=float(raw.get("video_motion_threshold", 0.6)),
+    )
 
 
 def _validate_ffmpeg(raw: dict[str, Any]) -> FfmpegConfig:

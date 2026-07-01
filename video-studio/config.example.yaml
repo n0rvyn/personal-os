@@ -24,8 +24,12 @@ media:
   provider: doubao
 
 budget:
-  # Maximum S2V (subject-to-video) shots per episode (conservative for cost control)
-  video_shots_per_episode: 2
+  # motion_value threshold: video beats >= this value are always kept (DP-001=C).
+  # Beats below threshold are downgraded to still regardless of cap.
+  video_motion_threshold: 0.6
+  # Loose hard cap: backstop applied only after threshold gate.
+  # Keeps the highest-motion videos if count still exceeds this limit.
+  video_shots_per_episode: 8
 
 ffmpeg:
   # Must be a libass-enabled build for subtitle burning.

@@ -355,3 +355,36 @@ def test_video_studio_config_env_var_used(tmp_path, monkeypatch):
 
     cfg = load_config()
     assert cfg.output_dir == str(out)
+
+
+# ---------- budget.video_motion_threshold (optional key, DP-001=C) ----------
+
+def test_budget_motion_threshold_missing_defaults_to_0_6(tmp_path):
+    """budget.video_motion_threshold is optional; missing → defaults to 0.6.
+
+    Pre-existing user configs that don't have this key must still load
+    without ConfigError (fail-open on optional keys).
+    """
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    # _minimal_yaml sets budget.video_shots_per_episode=2 but no video_motion_threshold
+    _write_config(cfg_path, _minimal_yaml(out))
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.budget.video_motion_threshold == 0.6
+
+
+def test_budget_motion_threshold_explicit_value(tmp_path):
+    """budget.video_motion_threshold explicit value is parsed correctly."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    # Inject video_motion_threshold under the budget section
+    yaml_text = yaml_text.replace(
+        "  video_shots_per_episode: 2",
+        "  video_shots_per_episode: 2\n  video_motion_threshold: 0.75",
+    )
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.budget.video_motion_threshold == 0.75

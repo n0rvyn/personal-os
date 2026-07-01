@@ -13,6 +13,7 @@ Covers:
 """
 from __future__ import annotations
 
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -222,7 +223,7 @@ def test_next_pending_returns_first_pending_from_cursor(tmp_path: Path) -> None:
     c = load_cursor(c_file)
     result = next_pending(s, c)
     assert result is not None
-    episode, seq, slug = result
+    episode, seq, slug, module = result
     assert episode.title == "VDOT配速表解读"
     assert episode.status == "pending"
 
@@ -244,7 +245,7 @@ def test_next_pending_skips_done_wraps_to_next_module(tmp_path: Path) -> None:
     c = load_cursor(c_file)
     result = next_pending(s, c)
     assert result is not None
-    episode, seq, slug = result
+    episode, seq, slug, module = result
     assert episode.title == "五区训练强度"
 
 
@@ -415,6 +416,66 @@ def test_derive_seq_slug_second_episode(tmp_path: Path) -> None:
     seq, slug = derive_seq_slug(s, module_idx=0, episode_idx=1)
     assert seq == "002"
     assert slug  # non-empty
+
+
+# ---------------------------------------------------------------------------
+# Tests: _slugify CJK pinyin behavior
+# ---------------------------------------------------------------------------
+
+def test_slug_chinese_title_pinyin() -> None:
+    """CJK title produces pinyin slug (not hex) when pypinyin is available."""
+    from lib.syllabus import _slugify
+
+    pytest.importorskip("pypinyin")  # skip if pypinyin not installed
+    slug = _slugify("坡度配速")
+    # Should be hyphen-joined pinyin syllables, all lowercase ASCII
+    assert slug
+    assert all(c.isascii() for c in slug)
+    assert slug not in ("ep",)
+    # Must look like pinyin (letters and hyphens only)
+    assert re.match(r"^[a-z][a-z-]*[a-z]$", slug), f"Unexpected slug: {slug!r}"
+
+
+def test_slug_chinese_title_no_hex() -> None:
+    """CJK title must not produce a hex slug regardless of pypinyin availability."""
+    from lib.syllabus import _slugify
+
+    slug = _slugify("坡度配速")
+    # Old behavior was hex: 5761523660d50901 … must not appear
+    assert not re.search(r"[0-9a-f]{4}", slug), (
+        f"Slug looks like hex-encoded CJK: {slug!r}"
+    )
+
+
+def test_slug_latin_title_unchanged() -> None:
+    """Latin title still produces normal kebab slug regardless of pypinyin."""
+    from lib.syllabus import _slugify
+
+    slug = _slugify("Running Science 101")
+    assert slug == "running-science-101"
+
+
+def test_slug_fallback_without_pypinyin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When pypinyin is not importable, CJK slug falls back to 'ep' (not hex)."""
+    import sys
+    import importlib
+
+    # Temporarily hide pypinyin from imports
+    original = sys.modules.pop("pypinyin", None)
+    # Reload _slugify's module so the import guard fires fresh
+    import lib.syllabus as syllabus_mod
+
+    monkeypatch.setitem(sys.modules, "pypinyin", None)  # type: ignore[arg-type]
+    try:
+        slug = syllabus_mod._slugify("坡度配速")
+        assert slug == "ep", f"Expected 'ep' fallback, got {slug!r}"
+        # Must not be hex
+        assert not re.search(r"[0-9a-f]{4}", slug)
+    finally:
+        if original is not None:
+            sys.modules["pypinyin"] = original
+        else:
+            sys.modules.pop("pypinyin", None)
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +684,103 @@ def test_promote_draft_episode_missing_doc_refs_raises(tmp_path: Path) -> None:
 
     assert not syllabus_path.exists()
     assert not cursor_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Selection.style transparency (Task 2)
+# ---------------------------------------------------------------------------
+
+def test_select_next_style_from_module(tmp_path: Path) -> None:
+    """select_next propagates Module.style into Selection.style."""
+    from lib.syllabus import select_next
+    import types
+
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: VDOT基础
+            style: 简笔日漫
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: pending
+    """)
+    cursor_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(cursor_yaml)
+
+    cfg = types.SimpleNamespace(
+        syllabus_path=str(s_file),
+        cursor_path=str(c_file),
+    )
+    sel = select_next(cfg)
+    assert sel is not None
+    assert sel.style == "简笔日漫"
+
+
+def test_select_next_style_empty_when_module_has_no_style(tmp_path: Path) -> None:
+    """Module with no style produces Selection.style == '', which resolves to SERIES_LOOK."""
+    from lib.syllabus import select_next
+    from lib import grade
+    import types
+
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: VDOT基础
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: pending
+    """)
+    cursor_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(cursor_yaml)
+
+    cfg = types.SimpleNamespace(
+        syllabus_path=str(s_file),
+        cursor_path=str(c_file),
+    )
+    sel = select_next(cfg)
+    assert sel is not None
+    assert sel.style == ""
+    # Empty style should resolve to SERIES_LOOK (冷蓝晨光)
+    assert grade.resolve_look(sel.style) == grade.SERIES_LOOK
+
+
+def test_next_pending_returns_module_in_tuple(tmp_path: Path) -> None:
+    """next_pending 4-tuple: fourth element is the Module containing the episode."""
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(CURSOR_YAML)  # module_idx=0, episode_idx=1
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    result = next_pending(s, c)
+    assert result is not None
+    episode, seq, slug, module = result
+    assert module.name == "VDOT基础"
+    assert module.style == "educational"
 
 
 # ---------------------------------------------------------------------------

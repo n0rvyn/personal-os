@@ -32,14 +32,15 @@ FONT_STYLE = (
 CAMERA_MOVES = ("推近", "拉远", "横移", "竖摇", "静止")
 
 # DP-002: column-locked zoom range — restrained, NOT vlog.
-_ZOOM_MAX = 1.1   # upper bound for all moves
+_ZOOM_MAX = 1.2   # upper bound for all moves
 _ZOOM_MIN = 1.0   # lower bound / static level
-# Pan budget: half of the 1.1x overscan available for each axis (pixels in the
-# zoomed virtual frame, which is 1920*1.1=2112 wide, 1080*1.1=1188 tall).
-# overscan_x = 1920*(1.1-1.0) = 192 → half = 96
-# overscan_y = 1080*(1.1-1.0) = 108 → half = 54
-_PAN_X = 96.0
-_PAN_Y = 54.0
+# Pan budget: half of the 1.2x overscan available for each axis, calculated on
+# the pre-upscaled 3840-wide frame (2x the original 1920).  After scale=3840:-2
+# the zoomed virtual frame is 3840*1.2=4608 wide, 2160*1.2=2592 tall.
+# overscan_x = 3840*(1.2-1.0) = 768 → half = 384
+# overscan_y = 2160*(1.2-1.0) = 432 → half = 216
+_PAN_X = 384.0
+_PAN_Y = 216.0
 
 
 def _fmt_zoom(v: float) -> str:
@@ -63,28 +64,29 @@ def _still_or_chart_filtergraph(
       拉远 — zoom-out 1.0+δ→1.0
       横移 — z=1.1 fixed, pan-x across overscan
       竖摇 — z=1.1 fixed, pan-y across overscan
-      静止 — z=1.0 constant, no motion
+      静止 — z=1.0..1.02 极缓微推(δ=0.02 hardcoded, intensity ignored)
       (unknown/illegal) → fall back to 推近
 
     intensity ∈ [0,1] (clamped) is the director-chosen camera-move MAGNITUDE:
-    it scales the zoom delta (δ = 0.1 * intensity) and the pan step within the
+    it scales the zoom delta (δ = 0.2 * intensity) and the pan step within the
     fixed 克制 ceiling, so the move can never exceed today's restrained max.
-    intensity=1.0 reproduces the pre-intensity amounts byte-identically;
-    lower = gentler. 静止 ignores intensity (no motion either way).
+    intensity=1.0 reaches the full 0.2 delta (cap=1.2); lower = gentler.
+    静止 ignores intensity — drift is hardcoded at δ=0.02.
 
-    DP-002: zoom range [1.0, 1.1]; pan stays within 1.1x overscan.
+    DP-002: zoom range [1.0, 1.2]; pan stays within 1.2x overscan.
     d={frames} and s=1920x1080:fps=30 are NEVER changed by camera_move.
     """
     if camera_move not in CAMERA_MOVES:
         camera_move = "推近"
 
     intensity = max(0.0, min(1.0, float(intensity)))
-    delta = 0.1 * intensity  # scaled zoom range (0.1 at intensity=1.0)
+    delta = 0.2 * intensity  # scaled zoom range (0.2 at intensity=1.0)
 
     frames = max(int(dur_s * 30), 1)
     prefix = (
         "scale=1920:1080:force_original_aspect_ratio=increase,"
         "crop=1920:1080,"
+        "scale=3840:-2,"
     )
     suffix = f":d={frames}:s=1920x1080:fps=30"
 
@@ -99,7 +101,7 @@ def _still_or_chart_filtergraph(
     elif camera_move == "横移":
         x_step = (_PAN_X * intensity) / frames
         zp = (
-            f"zoompan=z='1.1'"
+            f"zoompan=z='1.2'"
             f":x='on*{x_step:.6f}'"
             f":y='(ih-ih/zoom)/2'"
             f"{suffix}"
@@ -107,13 +109,16 @@ def _still_or_chart_filtergraph(
     elif camera_move == "竖摇":
         y_step = (_PAN_Y * intensity) / frames
         zp = (
-            f"zoompan=z='1.1'"
+            f"zoompan=z='1.2'"
             f":x='(iw-iw/zoom)/2'"
             f":y='on*{y_step:.6f}'"
             f"{suffix}"
         )
-    else:  # 静止
-        zp = f"zoompan=z='1.0':d={frames}:s=1920x1080:fps=30"
+    else:  # 静止 — 极缓微推(δ=0.02 硬编码极小值, intensity ignored)
+        _static_drift = 0.02
+        inc = _static_drift / frames
+        cap = 1.0 + _static_drift
+        zp = f"zoompan=z='min(zoom+{inc:.6f},{_fmt_zoom(cap)})'{suffix}"
 
     return prefix + zp
 
@@ -403,6 +408,33 @@ def still_clip_cmd(png: str, dur_s: float, out_mp4: str,
     ]
 
 
+def _static_filtergraph() -> str:
+    """Full-frame STATIC filtergraph: normalize to 1920x1080/30fps with NO
+    zoompan. For code-rendered scientific charts whose axes / tick labels / units
+    must stay entirely in frame for the whole beat — a Ken Burns push-in (the
+    default for photographic stills) zooms to 1.2x and crops the axes out of
+    frame, which destroys a precise data chart's meaning.
+    """
+    return "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30"
+
+
+def static_clip_cmd(png: str, dur_s: float, out_mp4: str,
+                    grade: str | None = None) -> list[str]:
+    """Video-only STATIC clip (no camera move) — for charts that must stay fully
+    readable end to end (axes never leave frame). Same wiring as still_clip_cmd
+    minus the zoompan. `grade` is normally None for charts (keep matplotlib data
+    colours designed/readable), accepted for symmetry.
+    """
+    vf = _static_filtergraph()
+    if grade:
+        vf += f",{grade}"
+    return [
+        "-loop", "1", "-i", png, "-t", str(dur_s), "-r", "30",
+        "-vf", vf,
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
+    ]
+
+
 def still_card_cmd(bg_png: str, dur_s: float, ass: str, out_mp4: str,
                    grade: str | None = None,
                    camera_move: str = "推近",
@@ -446,14 +478,17 @@ def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str,
 
     `grade` (POC5): optional color-grade filterchain.
     `src_dur`: the source clip's real duration. When the source is SHORTER than
-    the beat (S2V is a fixed ~5s but the narration runs longer), the clip is
-    time-stretched (slow motion) to fill the whole beat instead of freezing on
-    the last frame — a frozen picture under continuing narration reads as a
-    glitch. If src_dur is unknown or the source is long enough, normalize + trim.
+    the beat (S2V clips from Seedance are 30fps; we loop the whole clip to fill
+    the beat duration rather than slow-motion-stretching it, which would produce
+    duplicate frames). If src_dur is unknown or the source is long enough, use
+    tpad-clone to freeze the last frame as a fallback.
     """
     chain = ["scale=1920:1080:force_original_aspect_ratio=increase", "crop=1920:1080"]
     if src_dur and src_dur < dur_s:
-        chain.append(f"setpts={dur_s / src_dur:.4f}*PTS")   # slow-mo to fill
+        # Seedance S2V clips are 30fps; size covers all source frames.
+        # loop=-1 repeats indefinitely; -t dur_s (output option) trims to beat.
+        frames = max(1, round(src_dur * 30))
+        chain.append(f"loop=loop=-1:size={frames}")
     else:
         chain.append(f"tpad=stop_mode=clone:stop_duration={int(dur_s) + 1}")
     chain.append("fps=30")

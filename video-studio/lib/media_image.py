@@ -51,15 +51,6 @@ def _request_image_url(payload: dict, timeout: int = 180, sleep_fn=time.sleep) -
     )
 
 
-# Unified style prefix for every generated still. The prefix is HALF of the
-# series look (the other half is the color grade); both live in lib.grade so
-# they're locked together at the column level (POC5). Sourced from the locked
-# SERIES_LOOK so the pictures are generated toward the same look the grade locks.
-from .grade import style_prefix as _series_style_prefix
-
-STYLE_PREFIX = _series_style_prefix()
-
-
 # Cap download size to defend against malicious/huge remote responses.
 _MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
@@ -158,7 +149,7 @@ def gen_still(prompt: str, character_ref_url: str | None, out_path: str) -> str:
     always a talking-head.
 
     Args:
-        prompt: Scene description. The unified STYLE_PREFIX is auto-prepended.
+        prompt: Scene description (style prefix already prepended by MediaSeams).
         character_ref_url: Character ref URL, or None for a character-less shot.
         out_path: Local file path to write the downloaded PNG to.
 
@@ -170,7 +161,7 @@ def gen_still(prompt: str, character_ref_url: str | None, out_path: str) -> str:
     Raises:
         RuntimeError: on API failure, missing image_urls, or download failure.
     """
-    full_prompt = f"{STYLE_PREFIX}, {prompt}"
+    full_prompt = prompt
     payload = {
         "model": "image-01",
         "prompt": full_prompt,

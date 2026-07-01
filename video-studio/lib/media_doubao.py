@@ -24,7 +24,6 @@ import urllib.request
 
 from .media_image import _download as _download_image  # 25MB cap + real-ext sniff
 from .media_video import _download as _download_video  # 200MB cap (videos are big)
-from . import grade
 
 _BASE = os.environ.get("ARK_BASE", "https://ark.cn-beijing.volces.com/api/v3")
 
@@ -128,9 +127,9 @@ def gen_character_ref(prompt: str, out_path: str) -> str:
 def gen_still(prompt: str, character_ref_url: str | None, out_path: str) -> str:
     """Generate a 16:9 still (Seedream). With character_ref_url, locks the
     subject via image-to-image. Returns the ACTUAL saved path (real extension).
-    The unified look prefix is prepended so the palette matches the locked look.
+    Style prefix is prepended by MediaSeams (single prepend point).
     """
-    full_prompt = f"{grade.style_prefix()}, {prompt}"
+    full_prompt = prompt
     url = _gen_image_url(full_prompt, _STILL_SIZE, character_ref_url)
     _log(f"[doubao] downloading still to {out_path}")
     return _download_image(url, out_path)

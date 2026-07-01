@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import re
 
+from lib.ffcmd import DISSOLVE_FADE
+
 # Card on-screen durations (seconds). The clip handed to the xfade chain is
 # DISSOLVE_FADE longer (the overlap is faded back out), same as a beat clip.
 TITLE_DUR = 2.6
@@ -237,10 +239,15 @@ def _rect(x: int, y: int, w: int, h: int, color: str, alpha: str, end: str) -> s
             r"\bord0\shad0\p1}m 0 0 l " + f"{w} 0 {w} {h} 0 {h}" + r"{\p0}")
 
 
-def _text(style: str, x: int, y: int, s: str, end: str) -> str:
-    """Left-middle anchored text with a gentle fade in/out."""
+def _text(style: str, x: int, y: int, s: str, end: str, fade_out: int = 250) -> str:
+    """Left-middle anchored text with a fade in (and optional fade out).
+
+    ``fade_out=0`` holds the text at full opacity through ``end`` — used by the
+    terminal end card so its screenshottable summary is still fully readable on
+    the film's last frame (a fade-out leaves the video ending on greyed/blank
+    text, defeating the "本期 N 个要点" recap)."""
     return (f"Dialogue: 1,0:00:00.00,{end},{style},,0,0,0,,"
-            r"{\an4\pos(" + f"{x},{y}" + r")\fad(450,250)}" + s)
+            r"{\an4\pos(" + f"{x},{y}" + r")\fad(450," + str(fade_out) + r")}" + s)
 
 
 # Title layout: the left text column is ~840px wide (x=140 → 980). At the max
@@ -308,20 +315,25 @@ def build_title_ass(tag: str, title: str, subtitle: str, dur: float = TITLE_DUR)
 def build_end_ass(tag: str, bullets: list, footer: str, dur: float = END_DUR) -> str:
     """ASS overlay for the end card: a screenshottable "本期 3 个要点" summary —
     amber tag bar, numbered bullets with hairline dividers, a footer bar with
-    关注 / 下期. `bullets` is a list of [num, line] pairs."""
-    end = _end_ts(dur)
+    关注 / 下期. `bullets` is a list of [num, line] pairs.
+
+    The end card is the film's TERMINAL clip: the overlay (and its rendered clip,
+    which the assembler makes ``END_DUR + DISSOLVE_FADE`` long so it joins the
+    xfade chain) is held to that full length and the text does NOT fade out, so
+    the last frame shows the fully-readable, screenshottable recap."""
+    end = _end_ts(dur + DISSOLVE_FADE)                      # hold through the dissolve tail
     events = [
         _rect(0, 0, 1920, 1080, _BLACK, "&H38&", end),     # light global dim
         _rect(140, 196, 8, 44, _ACCENT, "&H00&", end),     # tag accent bar
-        _text("Tag", 168, 218, tag, end),
+        _text("Tag", 168, 218, tag, end, fade_out=0),
     ]
     y = 340
     for idx, (num, line) in enumerate(bullets):
-        events.append(_text("Num", 140, y, num, end))
-        events.append(_text("Body", 230, y + 4, line, end))
+        events.append(_text("Num", 140, y, num, end, fade_out=0))
+        events.append(_text("Body", 230, y + 4, line, end, fade_out=0))
         if idx != len(bullets) - 1:
             events.append(_rect(232, y + 70, 1100, 2, _GREY, "&H50&", end))
         y += 150
     events.append(_rect(140, 902, 8, 40, _ACCENT, "&H00&", end))
-    events.append(_text("Foot", 168, 922, footer, end))
+    events.append(_text("Foot", 168, 922, footer, end, fade_out=0))
     return _HEAD + "\n".join(events) + "\n"

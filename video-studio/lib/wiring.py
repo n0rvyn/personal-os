@@ -101,10 +101,12 @@ class MediaSeams:
     those bypass these seams entirely for ref/S2V/cards.
     """
 
-    def __init__(self, dry: bool, provider: str, log: Callable[[str], None]):
+    def __init__(self, dry: bool, provider: str, log: Callable[[str], None],
+                 style_prefix: str = ""):
         self.dry = dry
         self.provider = provider
         self.log = log
+        self.style_prefix = style_prefix
         if not dry:
             if provider == "doubao":
                 from lib import media_doubao as m
@@ -120,7 +122,8 @@ class MediaSeams:
         if self.dry:
             shutil.copy(SPIKE / "character_ref.jpg", out_path)
             return "dry://character_ref"
-        return self._img.gen_character_ref(prompt, out_path)
+        p = f"{self.style_prefix}, {prompt}" if self.style_prefix else prompt
+        return self._img.gen_character_ref(p, out_path)
 
     def gen_still(self, prompt: str, ref_url: str | None, out_path: str) -> str:
         if self.dry:
@@ -129,13 +132,15 @@ class MediaSeams:
             dst = os.path.splitext(out_path)[0] + ".jpg"
             shutil.copy(SPIKE / "b00_shot0.jpg", dst)
             return dst
-        return self._img.gen_still(prompt, ref_url, out_path)
+        p = f"{self.style_prefix}, {prompt}" if self.style_prefix else prompt
+        return self._img.gen_still(p, ref_url, out_path)
 
     def gen_video(self, prompt: str, ref_url: str, out_path: str) -> dict:
         if self.dry:
             shutil.copy(SPIKE / "b04.mp4", out_path)
             return {"ok": True, "path": out_path, "task_id": "dry"}
-        return self._vid.gen_video(prompt, ref_url, out_path)
+        p = f"{self.style_prefix}, {prompt}" if self.style_prefix else prompt
+        return self._vid.gen_video(p, ref_url, out_path)
 
     def synth(self, text: str, out_path: str) -> int:
         if self.dry:
@@ -165,17 +170,24 @@ def ensure_bgm(assets_dir: Path, run_ff: Callable) -> str:
 # Chart content selection helper (module-level for testability)
 # ---------------------------------------------------------------------------
 
-def _chart_content_for_beat(beat: dict, ctx: dict) -> tuple:
-    """Return (title, rows) for a chart beat. Fixture or spec-driven dispatch.
+def _chart_content_for_beat(beat: dict, ctx: dict):
+    """Return rendering descriptor for a chart beat. Fixture or spec-driven dispatch.
 
     Priority:
     1. Fixture (hand-authored): beat has chart_title + chart_rows → verbatim.
     2. Spec-driven: beat["chart"]["type"] dispatches to the authoritative builder.
        - "vdot_pace" → build_pace_chart_from_vdot(ctx["vdot_data"], target_vdot)
        - "zone_boundary" → build_zone_boundary_chart(ctx["zone_data"])
-       - unknown type → RuntimeError naming the type + "权威表" (fail-loud)
+       - "line" → ("__line__", params_dict) sentinel; step_chart calls build_line_chart
+       - unknown type → log warning + return None (upstream degrades to still)
     3. No fixture, no spec → RuntimeError (no blanket VDOT-50 fallback anymore).
+
+    Return values:
+      (title, rows)          — for vdot_pace / zone_boundary / fixture
+      ("__line__", params)   — for line chart (step_chart renders via build_line_chart)
+      None                   — for unknown/unsupported types (degrade to still)
     """
+    import logging
     bid = beat.get("id", "?")
     # Fixture: hand-authored chart_title/chart_rows take precedence
     if "chart_title" in beat and "chart_rows" in beat:
@@ -204,11 +216,13 @@ def _chart_content_for_beat(beat: dict, ctx: dict) -> tuple:
                     f"权威表缺失或为空 (ctx['zone_data'] missing/empty)"
                 )
             return built
+        elif t == "line":
+            return ("__line__", params)
         else:
-            raise RuntimeError(
-                f"[chart] beat {bid}: unknown chart type {t!r} — "
-                f"需先落地该权威表，不编造"
+            logging.warning(
+                "[chart] beat %s: unknown chart type %r — 降级为静图，跳过渲染", bid, t
             )
+            return None
     # No fixture, no spec: no blanket VDOT-50 fallback — fail loud
     raise RuntimeError(
         f"[chart] beat {bid} 是 chart 但导演没给 chart spec，无法填数（不编造）"
@@ -271,6 +285,7 @@ def build_step_fns(
     probe_ms: Callable,
     log: Callable[[str], None],
     selection: Any = None,
+    dry: bool = False,
 ) -> dict[str, Callable]:
     """Return {step_name: fn(step, ctx, scratch_dir)} for the Phase-2 pipeline.
 
@@ -328,13 +343,20 @@ def build_step_fns(
 
     # ---- 3: extract — 3-way dispatch: doc_refs > VIDEO_PDF > fixture ----
     def step_extract(step, ctx, scratch):
-        # grade_vf is a column constant (the locked series look) — independent of
-        # extract mode. Set it unconditionally so doc / PDF / fixture all provision
-        # it. (Phase 7 fix: it used to live ONLY in the fixture branch, so the
-        # doc-mode render path KeyError'd at gen_still — the real Stage-1 path had
-        # never rendered end-to-end because every render E2E used fixture mode.)
-        ctx["grade_vf"] = grade.grade_filter()
-        log(f"[grade] series look = {grade.SERIES_LOOK}")
+        # Resolve the series look once — three-level fallback:
+        #   module.style (selection.style) > config.style > SERIES_LOOK default.
+        # Set ctx["look"] + ctx["grade_vf"] unconditionally so doc / PDF / fixture
+        # all provision them. (Phase 7 fix: it used to live ONLY in the fixture
+        # branch, so the doc-mode render path KeyError'd at gen_still.)
+        _module_style = (selection.style if selection is not None else None) or ""
+        look = grade.resolve_look(_module_style or cfg.style)
+        ctx["look"] = look
+        ctx["grade_vf"] = grade.grade_filter(look)
+        # Late-bind: set seams.style_prefix so ALL three gen lines (character_ref,
+        # still, video) use the same look prefix — must happen before _ensure_ref_url
+        # since gen_character_ref is called from within step_extract itself.
+        seams.style_prefix = grade.style_prefix(look)
+        log(f"[grade] series look = {look}")
 
         def _ensure_ref_url(prompt):
             # character_ref → subject_reference URL, shared across all extract
@@ -538,12 +560,43 @@ def build_step_fns(
                 continue
             bid = beat["id"]
             png = os.path.join(scratch_s, f"{bid}.png")
-            # Resolve (title, rows) via spec-driven dispatch or fixture hand-authored
-            # values. Blanket VDOT-50 fallback removed — director must emit chart spec.
-            chart_title, chart_rows = _chart_content_for_beat(beat, ctx)
-            log(f"[chart] {bid}: resolved → {chart_title!r}")
-            media_chart.render_pace_table(
-                chart_title, [tuple(r) for r in chart_rows], png)
+            # Resolve rendering descriptor via spec-driven dispatch or fixture.
+            # Returns: (title, rows) | ("__line__", params) | None (degrade to still)
+            descriptor = _chart_content_for_beat(beat, ctx)
+            if descriptor is None:
+                # Unknown/unsupported chart type (DP-002=B) — degrade to a still clip
+                # IN-PLACE. _chart_content_for_beat already logged the warning. step 5
+                # (gen_still) only handles still/multi, so this chart beat has NO clip
+                # yet; rendering a fallback still here + backfilling clips_by_index is
+                # mandatory, else step_assemble raises "beats with no clip" AFTER paid
+                # S2V/TTS. Mirrors the S2V→still fallback in step_gen_video.
+                fb = beat.get("image_prompt", beat.get("text", "")) or "跑步场景"
+                clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
+                steps_mod.step_render_shots_clip(
+                    [{"prompt": fb, "with_character": False}],
+                    ctx["clip_len_by_index"][i], clip, bid, scratch_s,
+                    ctx["ref_url"], ctx["grade_vf"],
+                    gen_still_fn=seams.gen_still, run_ff_fn=run_ff,
+                )
+                ctx["clips_by_index"][i] = clip
+                log(f"[chart] {bid}: unknown chart type → fallback still clip {clip}")
+                n += 1
+                continue
+            if isinstance(descriptor, tuple) and descriptor[0] == "__line__":
+                # Line/curve chart — render via build_line_chart from inline params.
+                params = descriptor[1] or {}
+                title = params.get("title", "")
+                x_label = params.get("x_label", params.get("x", ""))
+                y_label = params.get("y_label", params.get("y", ""))
+                pts = params.get("points", [])
+                log(f"[chart] {bid}: line chart → {title!r} ({len(pts)} points)")
+                media_chart.build_line_chart(title, x_label, y_label, pts, png)
+            else:
+                # Table chart (vdot_pace / zone_boundary / fixture).
+                chart_title, chart_rows = descriptor
+                log(f"[chart] {bid}: resolved → {chart_title!r}")
+                media_chart.render_pace_table(
+                    chart_title, [tuple(r) for r in chart_rows], png)
             clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
             steps_mod.step_chart_clip(
                 png, ctx["clip_len_by_index"][i], clip, run_ff_fn=run_ff)
@@ -712,6 +765,10 @@ def build_step_fns(
 
     # ---- 11: publish (syllabus mode: mark done + advance cursor; Phase 7 wires upload) ----
     def step_publish(step, ctx, scratch):
+        if dry:
+            log("[publish] dry mode — skipping mark-done + cursor advance")
+            return
+
         if not (getattr(cfg, "syllabus_path", "") and getattr(cfg, "cursor_path", "") and selection is not None):
             # Phase-2 / no-syllabus mode — preserve placeholder behaviour
             log("[publish] placeholder (Phase 7 wires real publish)")
@@ -1029,8 +1086,12 @@ def make_storyboard_dispatch(
             log(f"[storyboard] parse_shotlist failed → no artifact (retry): {result}")
             return
 
-        # Apply video budget (cap: cfg.budget.video_shots_per_episode)
-        result = apply_video_budget(result, cfg.budget.video_shots_per_episode)
+        # Apply video budget (threshold gate + loose hard cap)
+        result = apply_video_budget(
+            result,
+            cfg.budget.video_shots_per_episode,
+            threshold=cfg.budget.video_motion_threshold,
+        )
 
         # Back-propagate visual_type to ctx["beats"]. For video beats also carry
         # a video_prompt (gen_video reads beat["video_prompt"]) from the director's
@@ -1080,7 +1141,7 @@ def prepare_render(
     seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log)
     step_fns = build_step_fns(
         cfg, seams=seams, fixture_path=fixture_path, seq=seq, slug=slug,
-        run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection,
+        run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection, dry=dry,
     )
     gates = {"check_artifact": episode_mod.check_artifact}
 

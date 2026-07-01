@@ -73,16 +73,21 @@ def _slugify(title: str) -> str:
     """Return an ASCII-safe kebab-case slug from *title*.
 
     For Latin/accented text: NFKD decompose then strip non-ASCII.
-    For CJK/non-ASCII that survives: fall back to hex-encoding each char
-    so the slug is always non-empty.
+    For CJK/non-ASCII that survives: convert to pinyin via pypinyin if
+    available; fall back to "ep" if pypinyin is not installed.
     """
     # Decompose and strip non-ASCII (handles accented Latin chars)
     nfkd = unicodedata.normalize("NFKD", title)
     ascii_text = nfkd.encode("ascii", "ignore").decode("ascii")
 
-    # For purely CJK/non-ASCII titles, fall back to hex-encoding each char
+    # For purely CJK/non-ASCII titles, convert to pinyin
     if not ascii_text.strip():
-        ascii_text = "".join(f"{ord(c):04x}" for c in title if not c.isspace())
+        try:
+            from pypinyin import lazy_pinyin  # optional dependency
+
+            ascii_text = "-".join(lazy_pinyin(title))
+        except ImportError:
+            ascii_text = "ep"
 
     slug = re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
     return slug or "ep"
@@ -270,8 +275,8 @@ def derive_seq_slug(
 
 def next_pending(
     syllabus: Syllabus, cursor: Cursor
-) -> Optional[Tuple[Episode, str, str]]:
-    """Return ``(episode, seq, slug)`` for the first pending episode at or after cursor.
+) -> Optional[Tuple[Episode, str, str, Module]]:
+    """Return ``(episode, seq, slug, module)`` for the first pending episode at or after cursor.
 
     Returns ``None`` if the cursor is past all episodes or no pending episode
     exists from the cursor position onward.
@@ -295,7 +300,7 @@ def next_pending(
         for e_i, episode in enumerate(module.episodes):
             if global_idx >= cursor_global and episode.status == "pending":
                 seq, slug = derive_seq_slug(syllabus, m_i, e_i)
-                return episode, seq, slug
+                return episode, seq, slug, module
             global_idx += 1
 
     return None
@@ -314,6 +319,7 @@ class Selection:
     by step_cursor_read (doc_refs/source/verify_status/topic/learning_goal/
     character_ref → ctx). character_ref is series-level (same face across the
     whole column); carried so doc-mode extract can provision ref_url.
+    style carries the module-level look name (empty string = use config default).
     """
     episode: Episode
     seq: str
@@ -324,6 +330,7 @@ class Selection:
     learning_goal: str
     topic: str
     character_ref: str
+    style: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +361,7 @@ def select_next(cfg: Any) -> Optional[Selection]:
     if result is None:
         return None
 
-    episode, seq, slug = result
+    episode, seq, slug, module = result
     return Selection(
         episode=episode,
         seq=seq,
@@ -365,6 +372,7 @@ def select_next(cfg: Any) -> Optional[Selection]:
         learning_goal=episode.learning_goal,
         topic=episode.title,
         character_ref=syllabus.character_ref,
+        style=module.style,
     )
 
 

@@ -107,13 +107,15 @@ def test_chart_content_vdot_pace_uses_params_vdot():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: unknown chart.type → RuntimeError naming the type and "权威表"
+# Test 3: unknown chart.type → graceful degrade to still (DP-002=B), returns None
 # ---------------------------------------------------------------------------
 
-def test_chart_content_unknown_type_raises_runtime_error():
-    """An unknown chart.type fails loud: RuntimeError naming the type + '权威表'.
+def test_chart_content_unknown_type_degrades_to_still():
+    """An unknown chart.type degrades gracefully: returns None (upstream → still), no raise.
 
-    No fabrication: an un-authored chart type must stop the run, not invent numbers.
+    DP-002=B (Task 7): unknown/unsupported chart types must NOT crash the run —
+    they log a warning and fall back to a still image. (A completely missing
+    chart spec still fails loud — see test_chart_content_missing_spec_raises_runtime_error.)
     """
     beat = {
         "id": "beat-03",
@@ -121,11 +123,10 @@ def test_chart_content_unknown_type_raises_runtime_error():
         "chart": {"type": "mystery", "params": {}},
     }
     ctx = _make_ctx(vdot_data=_VDOT_DATA, zone_data=_ZONE_DATA)
-    with pytest.raises(RuntimeError) as exc_info:
-        wiring_mod._chart_content_for_beat(beat, ctx)
-    msg = str(exc_info.value)
-    assert "mystery" in msg, f"Expected 'mystery' in error, got: {msg!r}"
-    assert "权威表" in msg, f"Expected '权威表' in error, got: {msg!r}"
+    result = wiring_mod._chart_content_for_beat(beat, ctx)
+    assert result is None, (
+        f"Unknown chart type must degrade to None (still fallback), got: {result!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

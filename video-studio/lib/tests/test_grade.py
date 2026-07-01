@@ -1,5 +1,5 @@
 """Unit tests for the color-grade palette and its threading into clip argv."""
-from lib import grade, ffcmd, media_image
+from lib import grade, ffcmd
 
 
 def test_series_look_locked_to_cool_morning():
@@ -19,9 +19,40 @@ def test_each_look_bundles_both_halves():
         assert look["style_prefix"], name
 
 
-def test_media_image_prefix_is_sourced_from_grade():
-    # The two halves of the signature stay coupled (no drift between them).
-    assert media_image.STYLE_PREFIX == grade.style_prefix()
+def test_seam_style_prefix_sourced_from_grade():
+    # MediaSeams.style_prefix comes from grade.style_prefix(look) — single source.
+    # (STYLE_PREFIX import-time constant in media_image removed; seam is the one prepend point.)
+    from lib.wiring import MediaSeams
+    seam = MediaSeams(dry=True, provider="minimax", log=lambda _: None)
+    seam.style_prefix = grade.style_prefix("冷蓝晨光")
+    assert seam.style_prefix == grade.style_prefix("冷蓝晨光")
+    assert seam.style_prefix == grade.LOOKS["冷蓝晨光"]["style_prefix"]
+
+
+def test_anime_look_exists_and_is_clean():
+    assert "简笔日漫" in grade.LOOKS
+    assert "anime" in grade.style_prefix("简笔日漫")
+    assert "film grain" not in grade.style_prefix("简笔日漫")
+
+
+def test_resolve_look_canonical():
+    assert grade.resolve_look("简笔日漫") == "简笔日漫"
+
+
+def test_resolve_look_aliases():
+    assert grade.resolve_look("cinematic") == "冷蓝晨光"
+
+
+def test_resolve_look_empty_and_unknown_fall_back():
+    assert grade.resolve_look("") == grade.SERIES_LOOK
+    assert grade.resolve_look(None) == grade.SERIES_LOOK
+    assert grade.resolve_look("乱写") == grade.SERIES_LOOK
+
+
+def test_resolve_look_no_arg_regression():
+    # style_prefix()/grade_filter() 无参调用仍返回 冷蓝晨光 的值
+    assert grade.style_prefix() == grade.style_prefix("冷蓝晨光")
+    assert grade.grade_filter() == grade.grade_filter("冷蓝晨光")
 
 
 def test_grade_threads_into_photographic_clips_only():

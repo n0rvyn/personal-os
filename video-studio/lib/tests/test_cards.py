@@ -31,6 +31,23 @@ def test_end_ass_single_bullet_has_no_divider():
     assert cards._GREY not in ass
 
 
+def test_end_ass_holds_text_to_last_frame_no_fadeout():
+    """The end card is the film's terminal clip: its text must NOT fade out and
+    must hold through the whole clip (END_DUR + DISSOLVE_FADE) so the last frame
+    shows a fully-readable, screenshottable recap — not greyed/blank text."""
+    ass = cards.build_end_ass("本期 3 个要点", [["01", "甲"], ["02", "乙"]], "footer")
+    assert r"\fad(450,0)" in ass          # fade in, NO fade out
+    assert r"\fad(450,250)" not in ass    # the old fade-out is gone from the end card
+    # events hold through the dissolve tail, not just END_DUR
+    assert f"0:00:{cards.END_DUR + cards.DISSOLVE_FADE:05.2f}" in ass
+
+
+def test_title_ass_keeps_fadeout():
+    """The title card DOES fade out — it cross-dissolves into the first beat."""
+    ass = cards.build_title_ass("跑步知识 · EP.01", "乳酸阈配速", "副标题")
+    assert r"\fad(450,250)" in ass
+
+
 # ---- doc-mode card copy (built faithfully from the episode) ----
 
 def test_build_title_card_from_episode_metadata():

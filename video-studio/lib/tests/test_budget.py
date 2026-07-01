@@ -45,12 +45,19 @@ def fresh(shotlist=None):
 # Under-cap: no downgrade
 # ---------------------------------------------------------------------------
 
-def test_under_cap_returns_unchanged():
-    """video 数 ≤ cap → 原样返回，无降级。"""
+def test_under_cap_above_threshold_returns_unchanged():
+    """video 数 ≤ cap 且 motion_value >= threshold → 无降级。
+    MIXED_SHOTLIST 中 b3(0.4) 低于默认 threshold=0.6 → 降 still；
+    b1(0.9)/b5(0.7) 均高于阈值，cap=3 不砍尾 → 2 video 原样保留。"""
     sl = fresh()
     result = apply_video_budget(sl, cap=3)
     videos = [s for s in result if s["visual_type"] == "video"]
-    assert len(videos) == 3
+    # b1(0.9) and b5(0.7) pass threshold; b3(0.4) is below threshold → still
+    assert len(videos) == 2
+    surviving = {s["beat_id"] for s in videos}
+    assert "b1" in surviving
+    assert "b5" in surviving
+    assert "b3" not in surviving
 
 
 def test_exactly_cap_no_downgrade():
@@ -159,11 +166,13 @@ def test_missing_motion_value_treated_as_zero():
 # ---------------------------------------------------------------------------
 
 def test_stable_sort_tie_break_by_index():
-    """平分时按原 index 升序稳定排序（较早的 index 存活）。"""
+    """平分时按原 index 升序稳定排序（较早的 index 存活）。
+    使用 motion_value=0.7（高于默认 threshold=0.6）确保全部通过阈值门，
+    再由 cap 触发稳定排序降尾。"""
     sl = [
-        make_shot("video", motion_value=0.5, idx=0),
-        make_shot("video", motion_value=0.5, idx=1),
-        make_shot("video", motion_value=0.5, idx=2),
+        make_shot("video", motion_value=0.7, idx=0),
+        make_shot("video", motion_value=0.7, idx=1),
+        make_shot("video", motion_value=0.7, idx=2),
     ]
     result = apply_video_budget(sl, cap=2)
     surviving = [s["beat_id"] for s in result if s["visual_type"] == "video"]
@@ -198,3 +207,63 @@ def test_single_video_under_cap():
     sl = [make_shot("still", idx=0), make_shot("video", motion_value=0.6, idx=1)]
     result = apply_video_budget(sl, cap=2)
     assert result[1]["visual_type"] == "video"
+
+
+# ---------------------------------------------------------------------------
+# Threshold logic (DP-001=C)
+# ---------------------------------------------------------------------------
+
+def test_threshold_below_downgraded_regardless_of_cap():
+    """motion_value < threshold → 降 still，无论 cap 是否还有余量。"""
+    sl = [make_shot("video", motion_value=0.4, idx=0)]
+    result = apply_video_budget(sl, cap=8, threshold=0.6)
+    assert result[0]["visual_type"] == "still"
+
+
+def test_threshold_at_boundary_kept():
+    """motion_value == threshold → 保留为 video（边界包含）。"""
+    sl = [make_shot("video", motion_value=0.6, idx=0)]
+    result = apply_video_budget(sl, cap=8, threshold=0.6)
+    assert result[0]["visual_type"] == "video"
+
+
+def test_threshold_all_above_no_cap_pressure():
+    """所有 video 均高于 threshold，且数量 ≤ cap → 全保留。"""
+    sl = [
+        make_shot("video", motion_value=0.7, idx=0),
+        make_shot("video", motion_value=0.8, idx=1),
+        make_shot("video", motion_value=0.9, idx=2),
+    ]
+    result = apply_video_budget(sl, cap=8, threshold=0.6)
+    videos = [s for s in result if s["visual_type"] == "video"]
+    assert len(videos) == 3
+
+
+def test_threshold_mix_keeps_above_caps_below():
+    """混合列表: 高于阈值的全保留(cap 宽松)，低于阈值的降 still。"""
+    sl = [
+        make_shot("video", motion_value=0.8, idx=0),
+        make_shot("video", motion_value=0.3, idx=1),   # below threshold
+        make_shot("video", motion_value=0.65, idx=2),
+    ]
+    result = apply_video_budget(sl, cap=8, threshold=0.6)
+    surviving = {s["beat_id"] for s in result if s["visual_type"] == "video"}
+    assert "b0" in surviving
+    assert "b2" in surviving
+    assert "b1" not in surviving  # 0.3 < 0.6
+
+
+def test_threshold_cap_trim_after_threshold_gate():
+    """阈值门后仍超 cap → 按 motion_value 降序砍尾。"""
+    sl = [
+        make_shot("video", motion_value=0.9, idx=0),
+        make_shot("video", motion_value=0.75, idx=1),
+        make_shot("video", motion_value=0.65, idx=2),  # all above threshold
+        make_shot("video", motion_value=0.3, idx=3),   # below threshold → still
+    ]
+    result = apply_video_budget(sl, cap=2, threshold=0.6)
+    surviving = {s["beat_id"] for s in result if s["visual_type"] == "video"}
+    assert "b0" in surviving   # 0.9 kept
+    assert "b1" in surviving   # 0.75 kept
+    assert "b2" not in surviving  # 0.65 pruned by cap
+    assert "b3" not in surviving  # 0.3 pruned by threshold

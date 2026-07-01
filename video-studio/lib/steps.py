@@ -284,13 +284,15 @@ def step_chart_clip(
     out_clip: str,
     run_ff_fn: Callable[[list[str], str], None],
 ) -> None:
-    """Render a chart image as a video-only Ken Burns clip WITHOUT color grade.
+    """Render a chart image as a video-only STATIC clip (no camera move, no grade).
 
-    Charts are excluded from the series look so matplotlib data colours stay
-    readable. Pass grade=None to still_clip_cmd explicitly.
+    Code-rendered scientific charts are held fully in frame the entire beat: a
+    Ken Burns push-in zooms to 1.2x and crops the axes / units out of frame,
+    which strips a precise data chart of its meaning. Charts are also excluded
+    from the series look so matplotlib data colours stay readable (grade=None).
     """
     run_ff_fn(
-        ffcmd.still_clip_cmd(png, clip_len, out_clip, None),
+        ffcmd.static_clip_cmd(png, clip_len, out_clip, None),
         "clip-chart",
     )
 

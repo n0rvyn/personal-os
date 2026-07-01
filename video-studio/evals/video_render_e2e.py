@@ -50,7 +50,7 @@ from lib.config import load_config
 # ---------------------------------------------------------------------------
 
 def _assert_ux(cfg, ep, ctx) -> bool:
-    from spike_acceptance import probe_dimensions, probe_duration_s
+    from lib.ffprobe_util import probe_dimensions, probe_duration_s
 
     final_mp4 = str(ep["final"])
     ok = True

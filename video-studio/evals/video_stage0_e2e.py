@@ -378,6 +378,7 @@ def _run_deterministic(log) -> bool:
             verify_status=ep3_ep.verify_status,
             learning_goal=ep3_ep.learning_goal,
             topic=ep3_ep.title,
+            character_ref=post_syllabus2.character_ref,
         )
 
         warn_scratch = tmp_dir / "scratch_warn"

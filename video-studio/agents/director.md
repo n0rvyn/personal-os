@@ -147,6 +147,29 @@ user prompt 会给你：主讲人物描述、整体影像风格、逐段旁白�
 
 ---
 
+## 第五步（续）：chart spec（仅限 chart beat）
+
+`visual_type == "chart"` 的 beat **必须**带一个 `chart` 字段，告诉渲染层该显示哪张权威数据表：
+
+```json
+"chart": {
+  "type": "zone_boundary",
+  "params": {}
+}
+```
+
+| `type` 值 | 含义 | `params` |
+|---|---|---|
+| `"vdot_pace"` | Daniels VDOT 配速表 | `{"vdot": <整数，如 50>}` — 指定本期跑者的 VDOT 值 |
+| `"zone_boundary"` | Daniels 七区强度边界（%VO2max / %HRmax）| `{}` — 无额外参数 |
+
+**硬规则（违反整期重写）：**
+- **导演只选类型 + 参数，绝不写具体数字**——数字由代码从权威表填，LLM 不能捏造数字。
+- **chart beat 必须带 `chart.type`**——漏了整期重写（系统会拒绝并要求重新生成）。
+- 选 `type` 的判断依据：这一句 beat 的内容是在讲配速区间（`vdot_pace`）还是在讲强度区边界（`zone_boundary`）？按实际内容选，不要猜。
+
+---
+
 ## 输出格式（严格 JSON 数组）
 
 只输出一个 JSON 数组，**长度必须等于旁白段数**（user prompt 里的 beats 有几段就几项）。
@@ -233,4 +256,5 @@ user prompt 会给你：主讲人物描述、整体影像风格、逐段旁白�
 8. still/multi 的每个 shot 都有 `camera_move`（和按内容选的 `camera_intensity`）？video/chart 没有这两个字段？
 9. **所有 `pace="quick"` 的 shot，`camera_move` 都是 `"静止"`**？（必查，这是硬规则）
 10. 全景大场面 `camera_intensity` 偏高（0.7–1.0）、金句收尾偏低（0.2–0.4）？没有用 `camera_intensity=0` 代替 `静止`？
-10. 运镜以克制为主——大部分镜头 `静止` 或 `推近`，只有内容确实需要展开/竖摇才用横移/拉远？
+11. 运镜以克制为主——大部分镜头 `静止` 或 `推近`，只有内容确实需要展开/竖摇才用横移/拉远？
+12. **chart beat 是否带了 `chart.type`？**（必查——漏了整期重写）每个 `visual_type=="chart"` 的项都有 `"chart": {"type": "vdot_pace"|"zone_boundary", "params": {...}}`？

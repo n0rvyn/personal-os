@@ -14,6 +14,8 @@ Stage 1 will move card copy + durations into config.
 """
 from __future__ import annotations
 
+import re
+
 # Card on-screen durations (seconds). The clip handed to the xfade chain is
 # DISSOLVE_FADE longer (the overlap is faded back out), same as a beat clip.
 TITLE_DUR = 2.6
@@ -65,6 +67,165 @@ DEFAULT_END = {
 }
 
 
+# ---- doc-mode card copy: derived faithfully from the real episode ----
+# Fixture mode hand-authors card copy (fixture["cards"]); doc mode (a real
+# syllabus episode) has none, so the copy is built here from the episode's own
+# metadata + script. The background prompt stays the column-locked default
+# (冷蓝调 morning scene) — only the TEXT is episode-specific.
+
+def _ep_tag(seq: str) -> str:
+    """Column tag with the episode number, e.g. seq='003' → '跑步知识 · EP.03'.
+
+    Falls back to the default tag when seq is missing/non-numeric.
+    """
+    try:
+        return f"跑步知识 · EP.{int(seq):02d}"
+    except (ValueError, TypeError):
+        return DEFAULT_TITLE["tag"]
+
+
+_SUBTITLE_MAX = 22
+_SUBTITLE_SPLIT_RE = re.compile(r"[。，；、,;]")
+
+
+def _truncate(text: str, max_len: int = _SUBTITLE_MAX) -> str:
+    """Truncate ``text`` to the first punctuation boundary or ``max_len`` chars.
+
+    Cuts at the first occurrence of 。，；、,; (whichever comes first) and then
+    applies the character cap. Returns the empty string when ``text`` is empty.
+    """
+    if not text:
+        return ""
+    parts = _SUBTITLE_SPLIT_RE.split(text, maxsplit=1)
+    return parts[0].strip()[:max_len]
+
+
+def build_title_card(topic: str, learning_goal: str = "", seq: str = "",
+                     subtitle: str = "") -> dict:
+    """Doc-mode title card from real episode metadata (mechanical, faithful).
+
+    Subtitle precedence:
+    1. ``subtitle`` — authored by the digest-writer (short, fits one line).
+    2. ``_truncate(learning_goal)`` — first clause of the learning goal, capped
+       at ``_SUBTITLE_MAX`` chars (prevents overflow; annotation prefixes stay
+       hidden because the authored subtitle takes priority when supplied).
+    3. ``DEFAULT_TITLE["subtitle"]`` — column default (never a fabrication).
+    """
+    if subtitle:
+        sub = subtitle
+    else:
+        sub = _truncate(learning_goal) or DEFAULT_TITLE["subtitle"]
+    return {
+        "tag": _ep_tag(seq) if seq else DEFAULT_TITLE["tag"],
+        "title": topic or DEFAULT_TITLE["title"],
+        "subtitle": sub,
+        "bg_prompt": DEFAULT_TITLE["bg_prompt"],
+    }
+
+
+# Matches a 结尾要点 enumerator: 第一/第二/… followed by a separator (，：、,: or
+# whitespace). Requires the separator so "第一次"/"第一名" don't false-match.
+_TAKEAWAY_RE = re.compile(r"第[一二三四五六七八九十]+[，：、,:\s]")
+
+
+def parse_takeaways(text: str, max_n: int = 3, max_len: int = 22) -> list:
+    """Extract up to ``max_n`` takeaway phrases from a 结尾要点 beat that lists
+    them as 第一…第二…第三…. Each bullet is the first clause after its marker,
+    truncated to ``max_len``. Returns [] when the convention is not cleanly
+    present — the caller MUST fall back rather than fabricate a recap.
+    """
+    if not text:
+        return []
+    parts = _TAKEAWAY_RE.split(text)
+    if len(parts) < 2:          # no 第N enumerators → not a takeaways beat
+        return []
+    bullets = []
+    for seg in parts[1:1 + max_n]:
+        seg = seg.strip()
+        # keep the first sentence/clause only
+        seg = re.split(r"[。\n；;]", seg, maxsplit=1)[0].strip()
+        if len(seg) > max_len:
+            seg = re.split(r"[，,]", seg, maxsplit=1)[0].strip()
+        seg = seg.strip("、，,。；;：: ")   # drop trailing enumerator punctuation
+        if seg:
+            bullets.append(seg[:max_len])
+    return bullets
+
+
+def _bullet_grounded(bullet: str, script_text: str, threshold: float = 0.5) -> bool:
+    """CJK-aware character-bigram overlap check for authored bullets.
+
+    Builds sets of adjacent character pairs from ``bullet`` and ``script_text``
+    (stripping punctuation/whitespace so only CJK characters and alphanumerics
+    participate). Returns True when the fraction of bullet bigrams that also appear
+    in the script meets ``threshold``.
+
+    Design: lenient by design — paraphrased summaries pass, off-topic fabrications
+    fail. Do NOT reuse ledger._anchor_grounded: that function uses ASCII-only
+    tokenisation ([a-z0-9…]) which returns [] for any Chinese string and would
+    vacuously pass every bullet (verifier S1-A2).
+    """
+    _STRIP = re.compile(r'[\s　-〿＀-￯ -⁯ -/'
+                        r':-@[-`{-~]+')
+
+    def _bigrams(text: str) -> set:
+        # keep CJK + alnum, strip punctuation/whitespace
+        chars = _STRIP.sub("", text)
+        return {chars[i:i + 2] for i in range(len(chars) - 1)}
+
+    b_set = _bigrams(bullet)
+    if not b_set:
+        return True  # degenerate: nothing to check, treat as grounded
+    s_set = _bigrams(script_text)
+    overlap = len(b_set & s_set) / max(1, len(b_set))
+    return overlap >= threshold
+
+
+def build_end_card(last_beat_text: str, learning_goal: str = "",
+                   authored_bullets: list | None = None,
+                   script_text: str = "") -> dict:
+    """Doc-mode end card.
+
+    Priority:
+    1. ``authored_bullets`` (from digest-writer) — each checked against
+       ``script_text`` via CJK bigram overlap; grounded bullets used as the card.
+       If all bullets fail the overlap check, falls back to 2.
+    2. ``parse_takeaways(last_beat_text)`` — extract 第一/二/三 bullets from
+       the last beat text.
+    3. Neutral card: the learning goal on one line (never fabricates bullets).
+
+    bg_prompt + footer stay the column defaults.
+    """
+    # 1. Prefer authored bullets (from digest-writer), grounded against script.
+    if authored_bullets:
+        grounded = [b for b in authored_bullets[:3]
+                    if _bullet_grounded(b, script_text)]
+        if grounded:
+            numbered = [[f"{i + 1:02d}", b] for i, b in enumerate(grounded)]
+            return {
+                "tag": f"本期 {len(grounded)} 个要点",
+                "bullets": numbered,
+                "footer": "关注 · 科学跑步不靠感觉",
+                "bg_prompt": DEFAULT_END["bg_prompt"],
+            }
+        # all authored bullets dropped → fall through to parse_takeaways
+
+    # 2. Parse takeaways from last beat text.
+    bullets = parse_takeaways(last_beat_text)
+    if bullets:
+        numbered = [[f"{i + 1:02d}", b] for i, b in enumerate(bullets)]
+        tag = f"本期 {len(bullets)} 个要点"
+    else:
+        numbered = [["", learning_goal]] if learning_goal else []
+        tag = "本期小结"
+    return {
+        "tag": tag,
+        "bullets": numbered,
+        "footer": "关注 · 科学跑步不靠感觉",
+        "bg_prompt": DEFAULT_END["bg_prompt"],
+    }
+
+
 def _end_ts(dur: float) -> str:
     return f"0:00:{dur:05.2f}"
 
@@ -82,19 +243,65 @@ def _text(style: str, x: int, y: int, s: str, end: str) -> str:
             r"{\an4\pos(" + f"{x},{y}" + r")\fad(450,250)}" + s)
 
 
+# Title layout: the left text column is ~840px wide (x=140 → 980). At the max
+# H1 size only ~6 CJK chars fit one line, but episode titles are often full
+# sentences, so the title is length-adaptive: it shrinks the font and breaks at
+# a punctuation boundary into ≤2 lines rather than auto-wrapping (which grows
+# both ways from the anchor and collides with the tag / underline).
+_TITLE_COL_W = 840
+_TITLE_FS_MAX = 128
+_TITLE_FS_MIN = 56
+_TITLE_SPLIT_RE = re.compile(r"[，,：:、；;]")
+
+
+def _layout_title(title: str) -> tuple:
+    """Return (lines, fontsize) so the title fits the left column in ≤2 lines.
+
+    A title that fits one line at the max size stays one big line. A longer one
+    is split at the punctuation boundary nearest the middle (hard split if it has
+    none) and the font shrinks so the longest line fits the column width.
+    """
+    title = (title or "").strip()
+    per_line_max = _TITLE_COL_W // _TITLE_FS_MAX          # ~6 chars at fs128
+    if len(title) <= per_line_max:
+        return [title], _TITLE_FS_MAX
+    seps = [m.end() for m in _TITLE_SPLIT_RE.finditer(title)]
+    mid = len(title) / 2
+    cut = min(seps, key=lambda i: abs(i - mid)) if seps else round(len(title) / 2)
+    parts = [title[:cut].strip("，,：:、；; "), title[cut:].strip("，,：:、；; ")]
+    lines = [p for p in parts if p] or [title]
+    longest = max(len(p) for p in lines)
+    fs = max(_TITLE_FS_MIN, min(_TITLE_FS_MAX, _TITLE_COL_W // longest))
+    return lines, fs
+
+
+def _title_line(y: int, fs: int, s: str, end: str) -> str:
+    """One title line: top-left anchored (grows downward, predictable) with an
+    inline font-size override so multi-line titles stay inside the column."""
+    return (f"Dialogue: 1,0:00:00.00,{end},H1,,0,0,0,,"
+            r"{\an7\pos(140," + str(y) + r")\fs" + str(fs) + r"\fad(450,250)}" + s)
+
+
 def build_title_ass(tag: str, title: str, subtitle: str, dur: float = TITLE_DUR) -> str:
     """ASS overlay for the title card: split layout (dimmed left text column),
-    amber tag bar, large title with an amber underline, a one-line subtitle."""
+    amber tag bar, a length-adaptive title (≤2 lines) with an amber underline,
+    and a one-line subtitle. The underline + subtitle follow the title block so
+    a two-line title never collides with the tag above or the subtitle below."""
     end = _end_ts(dur)
+    lines, fs = _layout_title(title)
+    line_h = int(fs * 1.22)
+    title_top = 452                                        # below the tag bar (392–432)
     events = [
         _rect(0, 0, 1920, 1080, _BLACK, "&HB0&", end),     # global dim
         _rect(0, 0, 980, 1080, _BLACK, "&H50&", end),      # left text column
         _rect(140, 392, 8, 40, _ACCENT, "&H00&", end),     # tag accent bar
         _text("Tag", 168, 412, tag, end),
-        _text("H1", 140, 500, title, end),
-        _rect(146, 596, 190, 8, _ACCENT, "&H00&", end),    # title underline
-        _text("Body", 148, 660, subtitle, end),
     ]
+    for i, line in enumerate(lines):
+        events.append(_title_line(title_top + i * line_h, fs, line, end))
+    underline_y = title_top + len(lines) * line_h + 16
+    events.append(_rect(146, underline_y, 190, 8, _ACCENT, "&H00&", end))
+    events.append(_text("Body", 148, underline_y + 60, subtitle, end))
     return _HEAD + "\n".join(events) + "\n"
 
 

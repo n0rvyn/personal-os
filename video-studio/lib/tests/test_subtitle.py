@@ -13,7 +13,7 @@ These tests lock down the exact behavior of the srt constructor:
 These are the "钉死值" (pinned values) from the plan. The implementation must match
 character-for-character; changing the test = test tampering.
 """
-from lib.subtitle import build_srt, build_ass
+from lib.subtitle import build_srt, build_ass, _split_sentences, _SOFT_MAX
 
 
 def _norm(s: str) -> str:
@@ -140,3 +140,38 @@ def test_build_ass_empty_keywords_no_emphasis():
     beat = {"text": "随便一句话。", "start_ms": 0, "dur_ms": 2000, "keywords": []}
     out = build_ass([beat])
     assert r"\fs74" not in out  # no emphasis when keywords empty (never forced)
+
+
+# ---- cue splitting: half-width terminators + over-long comma split ----
+
+def test_split_on_halfwidth_semicolon():
+    # the script LLM writes half-width ';' — must split like the full-width one
+    segs = _split_sentences("那是 E 档;到了巡航转速;那是 M 档。")
+    assert segs == ["那是 E 档;", "到了巡航转速;", "那是 M 档。"]
+
+
+def test_split_long_sentence_at_commas():
+    # a real over-long, comma-laden clause is broken into readable cues
+    text = ("这七个档位不是凭感觉划的,丹尼尔斯给了一个具体的经验法则,"
+            "配速大约相差六秒每四百米,一档一档往下退。")
+    segs = _split_sentences(text)
+    # every comma-delimited cue lands within the soft max (this text splits cleanly)
+    assert all(len(s) <= _SOFT_MAX for s in segs)
+    assert len(segs) >= 3
+    # verbatim: concatenation must equal the original (no text lost/added)
+    assert "".join(segs) == text
+
+
+def test_decimals_are_not_split():
+    # half-width '.' is NOT a terminator; the decimal stays intact, the clause
+    # comma after it still splits
+    segs = _split_sentences("E 区每公里 4.57 到 5.34,这个区间不能再快。")
+    assert "4.57" in segs[0] and "5.34" in segs[0]
+    assert segs[-1] == "这个区间不能再快。"
+
+
+def test_thousands_separator_not_split():
+    # a comma BETWEEN digits (4,000) is a thousands separator, never a cut point
+    segs = _split_sentences("报名的有 4,000 人,规模不小,气氛热烈,大家都很兴奋。")
+    assert any("4,000" in s for s in segs)
+    assert not any(s.startswith("000") for s in segs)

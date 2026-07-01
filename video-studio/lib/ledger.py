@@ -86,6 +86,16 @@ def _norm_match(s: str) -> str:
     tokenize and substring-search against (case/typography-insensitive)."""
     if not isinstance(s, str):
         return ""
+    # Full-width Chinese punctuation (：U+FF1A, ，U+FF0C) are prose separators,
+    # never part of a number, but NFKC folds them to half-width ':' / ',' which
+    # then fuse adjacent tokens: ':' is kept inside a token (to hold paces like
+    # "5:20"), so "verbatim：59" → "verbatim:59"; ',' is stripped when between
+    # digits (the "1,500"→"1500" thousands rule), so "v1.2，2026-06" →
+    # "v1.22026-06". Both fused tokens then fail zero-tolerance grounding. Split
+    # these full-width marks to spaces BEFORE NFKC so the pieces tokenize apart
+    # (the real digits still ground). Half-width ':' in paces and half-width ','
+    # in genuine thousands separators are untouched.
+    s = s.replace("：", " ").replace("，", " ")
     out = unicodedata.normalize("NFKC", s).lower()
     out = "".join(_QUOTE_DASH_MAP.get(ch, ch) for ch in out)
     out = _WS_RE.sub(" ", out).strip()

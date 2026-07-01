@@ -162,6 +162,101 @@ def ensure_bgm(assets_dir: Path, run_ff: Callable) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Chart content selection helper (module-level for testability)
+# ---------------------------------------------------------------------------
+
+def _chart_content_for_beat(beat: dict, ctx: dict) -> tuple:
+    """Return (title, rows) for a chart beat. Fixture or spec-driven dispatch.
+
+    Priority:
+    1. Fixture (hand-authored): beat has chart_title + chart_rows → verbatim.
+    2. Spec-driven: beat["chart"]["type"] dispatches to the authoritative builder.
+       - "vdot_pace" → build_pace_chart_from_vdot(ctx["vdot_data"], target_vdot)
+       - "zone_boundary" → build_zone_boundary_chart(ctx["zone_data"])
+       - unknown type → RuntimeError naming the type + "权威表" (fail-loud)
+    3. No fixture, no spec → RuntimeError (no blanket VDOT-50 fallback anymore).
+    """
+    bid = beat.get("id", "?")
+    # Fixture: hand-authored chart_title/chart_rows take precedence
+    if "chart_title" in beat and "chart_rows" in beat:
+        return beat["chart_title"], beat["chart_rows"]
+    # Spec-driven dispatch via director chart spec
+    spec = beat.get("chart")
+    if spec:
+        t = (spec.get("type") or "").strip()
+        params = spec.get("params") or {}
+        if t == "vdot_pace":
+            target_vdot = params.get("vdot", 50)
+            built = media_chart.build_pace_chart_from_vdot(
+                ctx.get("vdot_data"), target_vdot=target_vdot
+            )
+            if built is None:
+                raise RuntimeError(
+                    f"[chart] beat {bid}: vdot_pace builder returned None — "
+                    f"权威表缺失或为空 (ctx['vdot_data'] missing/empty)"
+                )
+            return built
+        elif t == "zone_boundary":
+            built = media_chart.build_zone_boundary_chart(ctx.get("zone_data"))
+            if built is None:
+                raise RuntimeError(
+                    f"[chart] beat {bid}: zone_boundary builder returned None — "
+                    f"权威表缺失或为空 (ctx['zone_data'] missing/empty)"
+                )
+            return built
+        else:
+            raise RuntimeError(
+                f"[chart] beat {bid}: unknown chart type {t!r} — "
+                f"需先落地该权威表，不编造"
+            )
+    # No fixture, no spec: no blanket VDOT-50 fallback — fail loud
+    raise RuntimeError(
+        f"[chart] beat {bid} 是 chart 但导演没给 chart spec，无法填数（不编造）"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Card-config discriminator helper (module-level for testability — NH-2 + S1-A5)
+# ---------------------------------------------------------------------------
+
+def _card_configs_for(ctx: dict) -> tuple:
+    """Return ``(tcfg, ecfg)`` for ``step_assemble``.
+
+    Branches on **fixture presence** (``ctx.get("fixture")`` truthy), NOT on
+    ``ctx.get("topic")``:
+
+    - Fixture mode → merge ``fixture.get("cards", {})`` over ``DEFAULT_*``.
+      A cards-less fixture keeps the column defaults (NH-2 fix).
+    - Doc / PDF mode (no fixture) → episode-derived via ``build_title_card`` /
+      ``build_end_card``, never DEFAULT_END's foreign bullets (S1-A5 fix).
+
+    Authored digest fields (``ctx["title_subtitle"]`` / ``ctx["end_card_bullets"]``)
+    are forwarded to the builders when present (seeded by ``make_script_dispatch``).
+    """
+    fixture = ctx.get("fixture")
+    beats = ctx.get("beats", [])
+    if fixture:
+        card_cfg = fixture.get("cards", {})
+        tcfg = {**cards.DEFAULT_TITLE, **card_cfg.get("title", {})}
+        ecfg = {**cards.DEFAULT_END, **card_cfg.get("end", {})}
+    else:
+        script_text = " ".join(b.get("text", "") for b in beats)
+        tcfg = cards.build_title_card(
+            ctx.get("topic", ""),
+            ctx.get("learning_goal", ""),
+            ctx.get("seq", ""),
+            subtitle=ctx.get("title_subtitle", ""),
+        )
+        ecfg = cards.build_end_card(
+            beats[-1].get("text", "") if beats else "",
+            ctx.get("learning_goal", ""),
+            authored_bullets=ctx.get("end_card_bullets"),
+            script_text=script_text,
+        )
+    return tcfg, ecfg
+
+
+# ---------------------------------------------------------------------------
 # Build the 13-step step_fns dict
 # ---------------------------------------------------------------------------
 
@@ -208,6 +303,8 @@ def build_step_fns(
             ctx["verify_status"] = selection.verify_status
             ctx["topic"] = selection.topic
             ctx["learning_goal"] = selection.learning_goal
+            ctx["character_ref"] = selection.character_ref
+            ctx["seq"] = selection.seq
             Path(marker_path).write_text(
                 f"seq={selection.seq}\nslug={selection.slug}\ntopic={selection.topic}",
                 encoding="utf-8",
@@ -231,6 +328,33 @@ def build_step_fns(
 
     # ---- 3: extract — 3-way dispatch: doc_refs > VIDEO_PDF > fixture ----
     def step_extract(step, ctx, scratch):
+        # grade_vf is a column constant (the locked series look) — independent of
+        # extract mode. Set it unconditionally so doc / PDF / fixture all provision
+        # it. (Phase 7 fix: it used to live ONLY in the fixture branch, so the
+        # doc-mode render path KeyError'd at gen_still — the real Stage-1 path had
+        # never rendered end-to-end because every render E2E used fixture mode.)
+        ctx["grade_vf"] = grade.grade_filter()
+        log(f"[grade] series look = {grade.SERIES_LOOK}")
+
+        def _ensure_ref_url(prompt):
+            # character_ref → subject_reference URL, shared across all extract
+            # modes so ref_url is always provisioned before gen_still/gen_video.
+            # Honors the SPIKE_REF_PNG/SPIKE_REF_URL dev reuse hook ($0). NOTE:
+            # within-run only — the provider URL is ephemeral, so cross-episode
+            # same-face reuse is a separate concern (deferred: needs durable host).
+            ep = ctx["ep"]
+            cref_out = str(ep["assets_dir"] / "character_ref.png")
+            ref_png = os.environ.get("SPIKE_REF_PNG")
+            ref_url_env = os.environ.get("SPIKE_REF_URL")
+            if ref_png and ref_url_env:
+                shutil.copy(ref_png, cref_out)
+                ref_url = ref_url_env
+                log(f"[ref] reusing provided character_ref {ref_png}")
+            else:
+                ref_url = seams.gen_character_ref(prompt or "主讲人物", cref_out)
+                log(f"[ref] character_ref -> {cref_out} (url={ref_url[:40]})")
+            ctx["ref_url"] = ref_url
+
         # Doc mode (Phase 6, highest priority): cursor-read seeded doc_refs into ctx.
         doc_refs = ctx.get("doc_refs")
         if doc_refs:
@@ -259,9 +383,19 @@ def build_step_fns(
             if vdot_json_path.exists():
                 with open(vdot_json_path, encoding="utf-8") as _f:
                     vdot_data = json.load(_f)
+                # Carry the authoritative pace data so step_chart can build chart
+                # beats from it (doc mode has no hand-authored chart_title/rows).
+                ctx["vdot_data"] = vdot_data
                 pace_text = extract_mod.render_pace_lines(vdot_data)
                 fulltext = fulltext + "\n" + pace_text
                 log(f"[extract] doc mode: appended vdot pace table ({len(pace_text)} chars)")
+
+            # Load zone_boundary_data.json so step_chart can render zone charts.
+            zone_json_path = snap_dir / "zone_boundary_data.json"
+            if zone_json_path.exists():
+                with open(zone_json_path, encoding="utf-8") as _f:
+                    ctx["zone_data"] = json.load(_f)
+                log(f"[extract] doc mode: loaded zone_boundary_data.json")
 
             ctx["fulltext"] = fulltext
             # Carry source + verify_status from cursor-read into ctx (no-op if absent).
@@ -272,6 +406,8 @@ def build_step_fns(
                 f"[extract] doc mode: {len(doc_refs)} doc(s) → {len(fulltext)} chars "
                 f"(source={ctx.get('source')!r})"
             )
+            # series character_ref (Phase 6: syllabus.character_ref → ctx via cursor-read)
+            _ensure_ref_url(ctx.get("character_ref"))
             return
 
         # PDF mode: VIDEO_PDF + VIDEO_PAGES set → pdftotext -layout per page.
@@ -284,6 +420,7 @@ def build_step_fns(
             ctx["page_text"] = page_text
             ctx["fulltext"] = extract_mod.join_fulltext(page_text)
             log(f"[extract] PDF -layout: pages {pages} -> {len(ctx['fulltext'])} chars")
+            _ensure_ref_url(getattr(cfg, "character_ref", ""))
             return
         # Fixture mode (Phase 2, unchanged): load beats + ref + grade + storyboard.
         with open(fixture_path, encoding="utf-8") as f:
@@ -291,25 +428,9 @@ def build_step_fns(
         beats = fixture["beats"]
         ctx["fixture"] = fixture
         ctx["beats"] = beats
-
-        # character_ref → subject_reference URL (reuse hook or generate fresh)
-        ep = ctx["ep"]
-        cref_out = str(ep["assets_dir"] / "character_ref.png")
-        ref_png = os.environ.get("SPIKE_REF_PNG")
-        ref_url_env = os.environ.get("SPIKE_REF_URL")
-        if ref_png and ref_url_env:
-            shutil.copy(ref_png, cref_out)
-            ref_url = ref_url_env
-            log(f"[ref] reusing provided character_ref {ref_png}")
-        else:
-            cref = fixture.get("character_ref", {})
-            ref_url = seams.gen_character_ref(cref.get("prompt", "主讲人物"), cref_out)
-            log(f"[ref] character_ref -> {cref_out} (url={ref_url[:40]})")
-        ctx["ref_url"] = ref_url
-
-        # locked series grade (every photographic shot; charts excluded)
-        ctx["grade_vf"] = grade.grade_filter()
-        log(f"[grade] series look = {grade.SERIES_LOOK}")
+        # fixture's character_ref is a dict(.prompt); doc/PDF pass a str (str-vs-dict
+        # shape handled at the call site). grade_vf already set at step_extract top.
+        _ensure_ref_url(fixture.get("character_ref", {}).get("prompt", "主讲人物"))
         # ctx["sb"] is set by the 分镜 director step (wiring.make_storyboard_dispatch).
 
     # ---- 4: tts (all beats; drives the timeline) ----
@@ -417,8 +538,12 @@ def build_step_fns(
                 continue
             bid = beat["id"]
             png = os.path.join(scratch_s, f"{bid}.png")
+            # Resolve (title, rows) via spec-driven dispatch or fixture hand-authored
+            # values. Blanket VDOT-50 fallback removed — director must emit chart spec.
+            chart_title, chart_rows = _chart_content_for_beat(beat, ctx)
+            log(f"[chart] {bid}: resolved → {chart_title!r}")
             media_chart.render_pace_table(
-                beat["chart_title"], [tuple(r) for r in beat["chart_rows"]], png)
+                chart_title, [tuple(r) for r in chart_rows], png)
             clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
             steps_mod.step_chart_clip(
                 png, ctx["clip_len_by_index"][i], clip, run_ff_fn=run_ff)
@@ -443,7 +568,7 @@ def build_step_fns(
     # ---- 9: assemble (cards + xfade + mux + ASS-burn + BGM ducking → final) ----
     def step_assemble(step, ctx, scratch):
         beats = ctx["beats"]
-        fixture = ctx["fixture"]
+        fixture = ctx.get("fixture", {})
         grade_vf = ctx["grade_vf"]
         scratch_s = str(scratch)
         ep = ctx["ep"]
@@ -456,9 +581,10 @@ def build_step_fns(
         beat_mp3s = ctx["mp3s"]
 
         # ---- cards: AI/reused bg + code design layer ----
-        card_cfg = fixture.get("cards", {})
-        tcfg = {**cards.DEFAULT_TITLE, **card_cfg.get("title", {})}
-        ecfg = {**cards.DEFAULT_END, **card_cfg.get("end", {})}
+        # Discriminator extracted to _card_configs_for for unit-testability (NH-2 + S1-A5):
+        # branches on fixture presence, not topic presence; passes authored digest
+        # fields (title_subtitle / end_card_bullets) to the builders.
+        tcfg, ecfg = _card_configs_for(ctx)
 
         def _card_bg(hook: str, prompt: str, out: str) -> str:
             reuse = os.environ.get(hook)
@@ -522,7 +648,7 @@ def build_step_fns(
         # ---- BGM + ducking calibration → final.mp4 (EPISODE dir) ----
         # spike_acceptance.measure_gap lives at the plugin root (Phase 7 retires
         # the spike; this is the one remaining production→spike coupling).
-        from spike_acceptance import measure_gap
+        from lib.ffprobe_util import measure_gap
         assets_dir = ep["assets_dir"]
         bgm = ensure_bgm(assets_dir, run_ff)
         final_mp4 = str(ep["final"])
@@ -558,6 +684,12 @@ def build_step_fns(
                 records, ctx.get("source", ""), ctx.get("verify_status", ""))
             prov = {
                 "seq": seq, "slug": slug,
+                # Episode-level attribution (UX-004): source + verify_status are
+                # episode constants from cursor-read, stamped identically onto
+                # every assertion above — surface them here too so the deliverable
+                # is attributable at the episode level, not only per-assertion.
+                "source": ctx.get("source", ""),
+                "verify_status": ctx.get("verify_status", ""),
                 "pages": sorted(page_text),
                 "assertions": records,
             }
@@ -757,10 +889,36 @@ def make_script_dispatch(
                 f"→ no artifact → retry/halt")
             return
 
+        # Normalize the render id: the 忠实门/ledger schema uses `beat_id`
+        # (digest-writer emits it); fixture beats + every render step (tts /
+        # gen_still / gen_video / chart / provenance) read `id`. Bridge the two
+        # schemas here (mechanical, index-fallback) so doc-mode beats render.
+        # (Phase 7: doc-mode render had never run e2e — this surfaced after the
+        # ref_url/grade_vf fix as a KeyError 'id' in step_tts.)
+        for _i, _b in enumerate(beats):
+            _b.setdefault("id", _b.get("beat_id") or f"b{_i:02d}")
+
         ctx["beats"] = beats
         with open(ledger_art, "w", encoding="utf-8") as f:
             json.dump({"beats": beats}, f, ensure_ascii=False)
         ctx["script_ledger"] = ledger_art
+
+        # Read optional authored display-content fields from the digest JSON.
+        # The digest-writer may emit these as top-level fields in the JSON file.
+        try:
+            with open(res["artifact_path"], encoding="utf-8") as _f:
+                _digest_full = json.load(_f)
+            _bullets = _digest_full.get("end_card_bullets")
+            if isinstance(_bullets, list) and _bullets:
+                ctx["end_card_bullets"] = _bullets
+                log(f"[script] end_card_bullets authored ({len(_bullets)} bullets)")
+            _subtitle = _digest_full.get("title_subtitle")
+            if isinstance(_subtitle, str) and _subtitle.strip():
+                ctx["title_subtitle"] = _subtitle.strip()
+                log(f"[script] title_subtitle authored: {_subtitle[:40]!r}")
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass  # authored fields are optional; any read error → ctx stays empty
+
         ep = ctx.get("ep")
         if ep is not None:
             ep["script"].write_text(_beats_to_md(beats), encoding="utf-8")
@@ -874,9 +1032,18 @@ def make_storyboard_dispatch(
         # Apply video budget (cap: cfg.budget.video_shots_per_episode)
         result = apply_video_budget(result, cfg.budget.video_shots_per_episode)
 
-        # Back-propagate visual_type to ctx["beats"]
+        # Back-propagate visual_type to ctx["beats"]. For video beats also carry
+        # a video_prompt (gen_video reads beat["video_prompt"]) from the director's
+        # shot — doc-mode beats don't hand-author it like fixtures do.
+        # For chart beats also carry the director's chart spec (type + params).
         for i, item in enumerate(result):
             ctx["beats"][i]["visual_type"] = item["visual_type"]
+            if item["visual_type"] == "video":
+                _shots = item.get("shots") or []
+                if _shots:
+                    ctx["beats"][i].setdefault("video_prompt", _shots[0].get("prompt", ""))
+            if item.get("chart"):
+                ctx["beats"][i]["chart"] = item["chart"]
 
         # Build ctx["sb"] (shots + keywords, 1:1 with beats)
         ctx["sb"] = [{"shots": item["shots"], "keywords": item["keywords"]}

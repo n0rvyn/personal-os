@@ -103,3 +103,54 @@ def render_pace_table(
     plt.close(fig)
 
     return out_path
+
+
+def build_zone_boundary_chart(zone_data):
+    """Build a (title, rows) intensity-zone boundary chart from the authoritative
+    ``zone_boundary_data.json`` (no AI, no random — faithfulness-safe).
+
+    Returns ``(title, rows)`` where rows is a list of ``(code, "vo2max% / hrmax%")``
+    tuples, or ``None`` if the data is missing or empty (caller decides how to handle).
+    """
+    if not zone_data:
+        return None
+    zones = zone_data.get("zones") or []
+    if not zones:
+        return None
+    title = "七区强度边界（%VO2max / %HRmax）"
+    rows = [(z["code"], f'{z["vo2max"]} / {z["hrmax"]}') for z in zones]
+    return title, rows
+
+
+def build_pace_chart_from_vdot(vdot_data, target_vdot: int = 50):
+    """Build a (title, rows) pace-zone chart for a representative VDOT, pulled
+    straight from the authoritative ``vdot_pace_data.json`` (no AI, no random —
+    faithfulness-safe). Picks the data row nearest ``target_vdot`` and lists its
+    five training-pace zones (E / M / T / I / R) with real paces.
+
+    Returns ``(title, rows)`` where rows is a list of (label, value) tuples, or
+    ``None`` if no usable data (caller decides how to handle a chart beat with no
+    authoritative table).
+    """
+    from lib.extract import _min_to_mmss, _secs_to_mmss
+
+    data = (vdot_data or {}).get("data", [])
+    if not data:
+        return None
+    entry = min(data, key=lambda e: abs((e.get("vdot") or 0) - target_vdot))
+    vdot = entry.get("vdot")
+    p = entry.get("paces", {})
+    rows = []
+    if p.get("easyMin") is not None and p.get("easyMax") is not None:
+        rows.append(("轻松跑 E", f"{_min_to_mmss(p['easyMin'])}–{_min_to_mmss(p['easyMax'])}/km"))
+    if p.get("marathon") is not None:
+        rows.append(("马拉松配速 M", f"{_min_to_mmss(p['marathon'])}/km"))
+    if p.get("threshold") is not None:
+        rows.append(("乳酸阈 T", f"{_min_to_mmss(p['threshold'])}/km"))
+    if p.get("interval") is not None:
+        rows.append(("间歇 I", f"{_min_to_mmss(p['interval'])}/km"))
+    if p.get("repetition400m") is not None:
+        rows.append(("重复 R", f"{_secs_to_mmss(p['repetition400m'])}/400m"))
+    if not rows:
+        return None
+    return f"VDOT {vdot} 训练配速参考", rows

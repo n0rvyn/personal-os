@@ -236,6 +236,21 @@ def parse_shotlist(out: str, n_beats: int):
             if "motion_value" in entry:
                 item["motion_value"] = entry["motion_value"]
 
+            # chart spec: required on chart beats, dropped on all others.
+            if vt == "chart":
+                chart = entry.get("chart")
+                ctype = chart.get("type") if isinstance(chart, dict) else None
+                if not isinstance(ctype, str) or not ctype.strip():
+                    return (
+                        f"beat {i} is visual_type=chart but missing chart.type "
+                        f"(导演须给图表类型)"
+                    )
+                item["chart"] = {
+                    "type": ctype.strip(),
+                    "params": chart.get("params") or {},
+                }
+            # non-chart beats: any stray chart field is intentionally not forwarded.
+
             norm.append(item)
 
         return norm

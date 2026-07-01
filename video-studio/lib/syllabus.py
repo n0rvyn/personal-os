@@ -311,7 +311,9 @@ class Selection:
     """The next pending episode resolved at Stage-1 entry.
 
     All fields are consumed either by the driver (seq/slug → prepare_render) or
-    by step_cursor_read (doc_refs/source/verify_status/topic/learning_goal → ctx).
+    by step_cursor_read (doc_refs/source/verify_status/topic/learning_goal/
+    character_ref → ctx). character_ref is series-level (same face across the
+    whole column); carried so doc-mode extract can provision ref_url.
     """
     episode: Episode
     seq: str
@@ -321,6 +323,7 @@ class Selection:
     verify_status: str
     learning_goal: str
     topic: str
+    character_ref: str
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +364,88 @@ def select_next(cfg: Any) -> Optional[Selection]:
         verify_status=episode.verify_status,
         learning_goal=episode.learning_goal,
         topic=episode.title,
+        character_ref=syllabus.character_ref,
     )
+
+
+# ---------------------------------------------------------------------------
+# promote_draft
+# ---------------------------------------------------------------------------
+
+
+def promote_draft(
+    draft_path: Path,
+    syllabus_path: Path,
+    cursor_path: Path,
+    book: str,
+) -> Syllabus:
+    """Promote a planner draft YAML to a locked syllabus + initialized cursor.
+
+    Strips an optional ```yaml ... ``` fence, validates all required episode
+    fields (source / verify_status / doc_refs + title / learning_goal / status),
+    then atomically writes *syllabus_path* and *cursor_path* only when
+    validation passes (fail-closed — no partial files on error).
+
+    Args:
+        draft_path:   Path to the draft YAML produced by the planner persona.
+        syllabus_path: Destination for the locked syllabus YAML.
+        cursor_path:   Destination for the initialized cursor YAML.
+        book:          Book identifier written into the cursor.
+
+    Returns:
+        The validated Syllabus object.
+
+    Raises:
+        SyllabusError  — YAML parse error, not a mapping, or no modules.
+        KeyError       — Required field absent in a module or episode.
+        FileNotFoundError / OSError  — draft_path missing or unreadable.
+    """
+    draft_path = Path(draft_path)
+    syllabus_path = Path(syllabus_path)
+    cursor_path = Path(cursor_path)
+
+    raw_text = draft_path.read_text(encoding="utf-8")
+
+    # Strip ```yaml … ``` or ``` … ``` fence if present
+    stripped = raw_text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        # Drop first line (e.g. "```yaml") and last line ("```")
+        inner = lines[1:]
+        if inner and inner[-1].strip() == "```":
+            inner = inner[:-1]
+        stripped = "\n".join(inner)
+
+    # Parse YAML
+    try:
+        data = yaml.safe_load(stripped)
+    except yaml.YAMLError as exc:
+        raise SyllabusError(f"YAML parse error in draft {draft_path}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise SyllabusError(f"Expected mapping at top level in draft {draft_path}")
+
+    if "book" not in data:
+        raise KeyError("Draft missing required key: 'book'")
+
+    # Validate modules exist and are non-empty before writing any files
+    if not data.get("modules"):
+        raise SyllabusError(f"Draft {draft_path} has no modules")
+
+    # Validate each module and episode (raises KeyError on missing required keys)
+    modules = [_parse_module(m, i) for i, m in enumerate(data["modules"])]
+
+    syllabus = Syllabus(
+        book=str(data["book"]),
+        character_ref=str(data.get("character_ref", "")),
+        modules=modules,
+    )
+
+    # All validation passed — write files atomically
+    save_syllabus(syllabus, syllabus_path)
+    save_cursor(Cursor(book=book, module_idx=0, episode_idx=0), cursor_path)
+
+    return syllabus
 
 
 # ---------------------------------------------------------------------------

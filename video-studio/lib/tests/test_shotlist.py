@@ -60,7 +60,10 @@ def test_wellformed_still_parses():
 
 
 def test_all_visual_types_accepted():
-    items = [_beat("still"), _beat("video", motion_value=0.8), _beat("chart"), _beat("multi")]
+    # chart beat must now carry a chart spec (parse_shotlist rejects chart beats without one)
+    chart_beat = _beat("chart")
+    chart_beat["chart"] = {"type": "zone_boundary", "params": {}}
+    items = [_beat("still"), _beat("video", motion_value=0.8), chart_beat, _beat("multi")]
     res = _ok(_raw(items), 4)
     assert [r["visual_type"] for r in res] == ["still", "video", "chart", "multi"]
 
@@ -151,7 +154,10 @@ def test_wrong_length_returns_error_string():
 
 
 def test_correct_length_passes():
-    items = [_beat("still"), _beat("video", motion_value=0.5), _beat("chart")]
+    # chart beat must carry a chart spec
+    chart_beat = _beat("chart")
+    chart_beat["chart"] = {"type": "vdot_pace", "params": {"vdot": 50}}
+    items = [_beat("still"), _beat("video", motion_value=0.5), chart_beat]
     res = _ok(_raw(items), 3)
     assert len(res) == 3
 

@@ -64,6 +64,45 @@ def test_pace_is_single_number_token():
     assert "5" not in nums and "20" not in nums, f"colon must not split pace: {nums}"
 
 
+def test_fullwidth_colon_does_not_fuse_word_and_number():
+    # A full-width '：' (Chinese prose separator) must NOT fuse a word to a
+    # following number: "verbatim：59" → "verbatim" + "59", NOT "verbatim:59"
+    # (which _is_number_token would treat as a number and zero-tolerance-flag).
+    from lib.ledger import _content_tokens, _norm_match
+    toks = _content_tokens(_norm_match("verbatim：59 to 74 percent"))
+    assert "verbatim:59" not in toks, f"word:number must not fuse, got {toks}"
+    assert "59" in toks and "74" in toks, f"digits must tokenize apart, got {toks}"
+    # half-width pace colon is unaffected (regression guard)
+    assert _content_tokens(_norm_match("配速 5:20/km")) == ["5:20/km"]
+
+
+def test_fullwidth_comma_does_not_fuse_across_digits():
+    # A full-width '，' between digits ("v1.2，2026-06") must NOT be swallowed by
+    # the thousands-separator rule and fuse to "v1.22026-06"; a half-width ','
+    # thousands separator ("1,500") still collapses to "1500".
+    from lib.ledger import _norm_match
+    assert _norm_match("v1.2，2026-06") == "v1.2 2026-06"
+    assert _norm_match("报名 1,500 人") == "报名 1500 人"
+
+
+def test_compound_anchor_with_verbatim_annotation_grounds():
+    # The exact false-flag class that halted a live render: a compound anchor
+    # (table row ；verbatim：english quote) whose numbers are all in the source.
+    from lib.ledger import verify_anchors
+    fulltext = (
+        "| E | Easy | 59–74% | 65–79% | 有氧基础 | Daniels p.83 |\n"
+        'verbatim 锚点：E = "59 to 74 percent of O2max or about 65 to 79 percent"\n'
+    )
+    ledger = {"beats": [_beat(
+        "b02",
+        "E 区是有氧基础区。",
+        "E | Easy | 59–74% | 65–79% | 有氧基础 | Daniels p.83；"
+        "verbatim：59 to 74 percent of O2max or about 65 to 79 percent",
+    )]}
+    res = verify_anchors(ledger, fulltext)
+    assert res["ok"], f"faithful compound anchor must ground, flagged={res['flagged']}"
+
+
 def test_pace_with_decimal_and_split_stays_grouped():
     from lib.ledger import _content_tokens, _is_number_token
     toks = [t for t in _content_tokens("2:36.2 区间") if _is_number_token(t)]

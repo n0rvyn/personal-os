@@ -221,6 +221,17 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
         print(f"error: {e}", file=sys.stderr)
         return 1
 
+    # Phase 7: preflight — check ffmpeg has libass BEFORE entering render (AD-3).
+    # FFMPEG_BIN env takes priority over config.ffmpeg.ffmpeg_bin (AD-4, mirrors wiring.py:66).
+    import os as _os
+    from lib.preflight import check_ffmpeg_libass, PreflightError
+    _ffmpeg_bin = _os.environ.get("FFMPEG_BIN", config.ffmpeg.ffmpeg_bin)
+    try:
+        check_ffmpeg_libass(_ffmpeg_bin)
+    except PreflightError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
     # Phase 6: Stage-1 entry — select next pending episode from syllabus (if configured).
     # Must run BEFORE prepare_render so seq/slug are closure-bound with the right values.
     from lib.syllabus import select_next

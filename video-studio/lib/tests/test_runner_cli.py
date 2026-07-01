@@ -17,6 +17,13 @@ if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _bypass_preflight(monkeypatch):
+    """This file tests runner wiring, not preflight.  Bypass the libass check so
+    tests with fake ffmpeg bins (/bin/true) are not blocked by preflight."""
+    monkeypatch.setattr("lib.preflight.check_ffmpeg_libass", lambda *a, **kw: None)
+
+
 def _write_config(tmp_path: Path) -> Path:
     """Minimal valid config; output_dir = tmp_path (exists)."""
     cfg = tmp_path / "cfg.yaml"

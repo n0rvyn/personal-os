@@ -15,22 +15,55 @@ from __future__ import annotations
 import re
 
 
-# Chinese sentence terminators. Period kept simple to avoid eating
-# decimal points; we only split on these specific punctuation marks.
-_SENTENCE_TERMINATORS = "。！？；"
+# Sentence terminators — full-width AND their half-width twins, because the
+# script LLM mixes them (writes "那是 E 档;到了…" with a half-width ';'). The
+# half-width '.' is deliberately EXCLUDED so decimals ("4.57") aren't split.
+_SENTENCE_TERMINATORS = "。！？；!?;"
+
+# A cue longer than this (chars) is hard to read as one line, so an over-long
+# segment is split further at commas. ~24 keeps a cue within the usable width
+# (PlayResX minus L/R margins) even with keyword emphasis widening some glyphs.
+_SOFT_MAX = 24
+
+# Split AFTER a comma (full/half-width), but NOT when a digit follows — guards
+# thousands separators like "4,000" while still splitting "5.34,这个" (a decimal
+# followed by a clause comma) at the comma.
+_COMMA_SPLIT = re.compile(r"(?<=[，,])(?![0-9])")
+
+
+def _split_long_at_commas(seg: str) -> list[str]:
+    """Break an over-long segment at comma boundaries, then greedily re-merge
+    the pieces so each cue is as full as possible without exceeding _SOFT_MAX."""
+    pieces = [p for p in _COMMA_SPLIT.split(seg) if p and p.strip()]
+    if len(pieces) < 2:
+        return [seg]
+    merged: list[str] = []
+    for p in pieces:
+        if merged and len(merged[-1]) + len(p) <= _SOFT_MAX:
+            merged[-1] += p
+        else:
+            merged.append(p)
+    return merged
 
 
 def _split_sentences(text: str) -> list[str]:
-    """Split text by Chinese terminators, keeping the terminator with each sentence.
+    """Split text into subtitle-sized cues.
 
-    Empty fragments are dropped. Whitespace-only fragments are dropped.
+    First split after any sentence terminator (keeping the terminator attached);
+    then break any still-over-long segment at commas. Empty/whitespace-only
+    fragments are dropped.
     """
     if not text:
         return []
-    # Build a regex that splits AFTER any of the terminators.
     pattern = f"[{re.escape(_SENTENCE_TERMINATORS)}]"
-    parts = re.split(f"(?<={pattern})", text)
-    return [p for p in parts if p and p.strip()]
+    parts = [p for p in re.split(f"(?<={pattern})", text) if p and p.strip()]
+    out: list[str] = []
+    for seg in parts:
+        if len(seg) <= _SOFT_MAX:
+            out.append(seg)
+        else:
+            out.extend(_split_long_at_commas(seg))
+    return out
 
 
 def _fmt(ms: int) -> str:
@@ -107,7 +140,11 @@ _ASS_HEADER = (
     "ScriptType: v4.00+\n"
     "PlayResX: 1920\n"
     "PlayResY: 1080\n"
-    "WrapStyle: 2\n"
+    # WrapStyle 0 = smart balanced wrapping: a sentence longer than the usable
+    # width (PlayResX minus the 90px L/R margins) folds into balanced lines
+    # instead of running off-frame. WrapStyle 2 (no auto-wrap) let long
+    # narration sentences overflow horizontally.
+    "WrapStyle: 0\n"
     "ScaledBorderAndShadow: yes\n\n"
     "[V4+ Styles]\n"
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "

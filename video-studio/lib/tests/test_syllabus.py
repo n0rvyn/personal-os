@@ -418,6 +418,214 @@ def test_derive_seq_slug_second_episode(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests: promote_draft
+# ---------------------------------------------------------------------------
+
+# Valid draft YAML (plain, no fence) — planner output shape
+DRAFT_YAML_PLAIN = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    modules:
+      - name: VDOT基础
+        style: educational
+        episodes:
+          - title: 什么是VDOT
+            doc_refs: ["01-daniels-vdot-system.md#section-1"]
+            source: Daniels
+            verify_status: "✅"
+            learning_goal: 理解VDOT作为跑者有氧能力指标的含义
+            status: pending
+          - title: VDOT配速表解读
+            doc_refs: ["01-daniels-vdot-system.md#section-2"]
+            source: Daniels
+            verify_status: "✅"
+            learning_goal: 学会用VDOT对应训练配速区间
+            status: pending
+""")
+
+# Same content wrapped in a ```yaml fence (as a planner LLM would output)
+DRAFT_YAML_FENCED = "```yaml\n" + DRAFT_YAML_PLAIN + "```\n"
+
+# Draft missing 'modules' key entirely
+DRAFT_NO_MODULES = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+""")
+
+# Draft with an episode missing required field 'source'
+DRAFT_EPISODE_MISSING_SOURCE = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    modules:
+      - name: VDOT基础
+        style: educational
+        episodes:
+          - title: 什么是VDOT
+            doc_refs: ["01-daniels-vdot-system.md#section-1"]
+            verify_status: "✅"
+            learning_goal: 理解VDOT含义
+            status: pending
+""")
+
+# Draft with an episode missing 'verify_status'
+DRAFT_EPISODE_MISSING_VERIFY_STATUS = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    modules:
+      - name: VDOT基础
+        style: educational
+        episodes:
+          - title: 什么是VDOT
+            doc_refs: ["01-daniels-vdot-system.md#section-1"]
+            source: Daniels
+            learning_goal: 理解VDOT含义
+            status: pending
+""")
+
+# Draft with an episode missing 'doc_refs'
+DRAFT_EPISODE_MISSING_DOC_REFS = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    modules:
+      - name: VDOT基础
+        style: educational
+        episodes:
+          - title: 什么是VDOT
+            source: Daniels
+            verify_status: "✅"
+            learning_goal: 理解VDOT含义
+            status: pending
+""")
+
+
+def test_promote_draft_valid_plain(tmp_path: Path) -> None:
+    """promote_draft with a plain (no-fence) draft: writes syllabus + cursor(0,0)."""
+    from lib.syllabus import promote_draft  # fails until Task 4-impl
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_YAML_PLAIN)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    result = promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    assert result.book == "running-science-v1"
+    assert len(result.modules) == 1
+    assert result.modules[0].name == "VDOT基础"
+    assert syllabus_path.exists()
+    assert cursor_path.exists()
+
+
+def test_promote_draft_strips_yaml_fence(tmp_path: Path) -> None:
+    """promote_draft tolerates a ```yaml ... ``` fence around the draft content."""
+    from lib.syllabus import promote_draft
+    draft = tmp_path / "draft_fenced.yaml"
+    draft.write_text(DRAFT_YAML_FENCED)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    result = promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    assert result.book == "running-science-v1"
+    assert len(result.modules) == 1
+
+
+def test_promote_draft_cursor_initialized_at_zero(tmp_path: Path) -> None:
+    """promote_draft initializes cursor to (book, module_idx=0, episode_idx=0)."""
+    from lib.syllabus import promote_draft
+    from lib.syllabus import load_cursor
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_YAML_PLAIN)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    cursor = load_cursor(cursor_path)
+    assert cursor.book == "running-science-v1"
+    assert cursor.module_idx == 0
+    assert cursor.episode_idx == 0
+
+
+def test_promote_draft_roundtrip(tmp_path: Path) -> None:
+    """After promote_draft, load_syllabus + load_cursor can round-trip correctly."""
+    from lib.syllabus import promote_draft, load_syllabus, load_cursor
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_YAML_PLAIN)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    s = load_syllabus(syllabus_path)
+    c = load_cursor(cursor_path)
+    assert s.book == "running-science-v1"
+    assert s.modules[0].episodes[0].source == "Daniels"
+    assert c.module_idx == 0
+    assert c.episode_idx == 0
+
+
+def test_promote_draft_missing_modules_raises(tmp_path: Path) -> None:
+    """promote_draft raises a named error when draft has no modules; no files written."""
+    from lib.syllabus import promote_draft
+    draft = tmp_path / "draft_no_modules.yaml"
+    draft.write_text(DRAFT_NO_MODULES)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    with pytest.raises((KeyError, ValueError, Exception)):
+        promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    # No half-written files
+    assert not syllabus_path.exists()
+    assert not cursor_path.exists()
+
+
+def test_promote_draft_episode_missing_source_raises(tmp_path: Path) -> None:
+    """promote_draft raises a named error when an episode is missing 'source'."""
+    from lib.syllabus import promote_draft
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_EPISODE_MISSING_SOURCE)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    with pytest.raises(Exception):
+        promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    assert not syllabus_path.exists()
+    assert not cursor_path.exists()
+
+
+def test_promote_draft_episode_missing_verify_status_raises(tmp_path: Path) -> None:
+    """promote_draft raises a named error when an episode is missing 'verify_status'."""
+    from lib.syllabus import promote_draft
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_EPISODE_MISSING_VERIFY_STATUS)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    with pytest.raises(Exception):
+        promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    assert not syllabus_path.exists()
+    assert not cursor_path.exists()
+
+
+def test_promote_draft_episode_missing_doc_refs_raises(tmp_path: Path) -> None:
+    """promote_draft raises a named error when an episode is missing 'doc_refs'."""
+    from lib.syllabus import promote_draft
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_EPISODE_MISSING_DOC_REFS)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+
+    with pytest.raises(Exception):
+        promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+
+    assert not syllabus_path.exists()
+    assert not cursor_path.exists()
+
+
+# ---------------------------------------------------------------------------
 # Tests: save round-trip
 # ---------------------------------------------------------------------------
 

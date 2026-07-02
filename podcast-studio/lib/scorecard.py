@@ -114,6 +114,38 @@ def _hard_gate_intra_dup(body: str) -> dict[str, Any]:
     }
 
 
+def _hard_gate_thesis_advance(thesis_verdict: Any) -> dict[str, Any]:
+    """增量判官门 (Phase 5, DP-001=A + DP-002=B) — 带牙但 fail-soft.
+
+    这不是纯 code 门：`thesis_verdict` 是**判官**对"本期是不是把某条旧论点
+    换个新闻壳子零新意重讲了"的判断（进展是判断题、规则算不出）。取值:
+      - "re-derivation" → 判红 (ok=False): 确信是原地重讲,拦发布/重写。
+      - "advance" / "n/a" / None / 其它 → ok=True: 放行。
+
+    温度盾 (DP-001=A): 界线是**内容是否重复**,不是**有没有观点**——观点自由
+    发挥、一贯立场受保护 (persistence);只有判官**确信**是零新意重推才拦。
+    fail-soft: 判官没判 / 判官挂了 (None) → 放行,绝不因判官缺席误伤好稿。
+    """
+    verdict = None
+    if isinstance(thesis_verdict, str):
+        verdict = thesis_verdict.strip().lower()
+    elif isinstance(thesis_verdict, dict):
+        v = thesis_verdict.get("verdict") or thesis_verdict.get("论点推进")
+        verdict = v.strip().lower() if isinstance(v, str) else None
+
+    is_rederivation = verdict == "re-derivation"
+    return {
+        "name": "thesis_advance",
+        "ok": not is_rederivation,
+        "detail": (
+            "thesis: re-derivation (旧论点零新意重讲,判官确信 → 拦)"
+            if is_rederivation
+            else f"thesis: {verdict or 'n/a'} (放行)"
+        ),
+        "hits": [],
+    }
+
+
 def _hard_gate_cross_dup(script_text: str, store: Any, today: str) -> dict[str, Any]:
     """跨期过热锚硬门 — 委托 `dedup.check_cross_dup`.
 
@@ -266,6 +298,7 @@ def build_scorecard(
     store: Any,
     today: str,
     judge_verdict: Any,
+    thesis_verdict: Any = None,
 ) -> dict[str, Any]:
     """组装记分卡 = 硬门(structlint + dedup) + 判官维度(钱钟书 total 复用 +
     factcheck ok 复用 + 判官 3 维).
@@ -289,7 +322,9 @@ def build_scorecard(
         决定是否纳入 halt). 温度原则的 5 号 acceptance 即由此而来.
       - `hard_gates` = `[{name, ok, detail, hits}, ...]`,**稳定顺序**:
         sections → draft_marker → betting_section → duration → intra_dup
-        → cross_dup. 顺序固定,记分卡渲染行序可预测.
+        → cross_dup → thesis_advance. 顺序固定,记分卡渲染行序可预测.
+        `thesis_advance` (Phase 5) 是带牙判官门: 仅当 `thesis_verdict`
+        =="re-derivation" 时 ok=False (fail-soft: 判官缺席/别的值→放行).
       - `judge_dims` = `[{name, ok, score, detail}, ...]`,**稳定顺序**:
         qianzhongshu_total → factcheck → 有观点 → 有温度 → 不同质化.
       - `reason` = 首个红硬门的 `detail`(给操作员一行定位),或
@@ -304,6 +339,7 @@ def build_scorecard(
         _hard_gate_duration(script_text),
         _hard_gate_intra_dup(body),
         _hard_gate_cross_dup(script_text, store, today),
+        _hard_gate_thesis_advance(thesis_verdict),
     ]
     passed = all(g["ok"] for g in hard_gates)
 

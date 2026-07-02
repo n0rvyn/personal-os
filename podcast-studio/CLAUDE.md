@@ -219,6 +219,26 @@ not next to the artifacts. Migrate an existing flat vault with
   anchors), never davinci self-report — same discipline as `select_draft`
   ignoring the LLM's `selected` flag.
 
+- **论点账本 thesis-ledger is the ARGUMENT-layer memory, PEER to covered-ground
+  (Phase 3–5).** covered-ground catches reused APPARATUS (analogies/anchors);
+  thesis-ledger (`lib/thesis_ledger.py`, `state/thesis-ledger.yaml`,
+  `agents/thesis-distiller.md`) catches a re-derived ARGUMENT — the blind spot
+  that let 54≈57 ship (same thesis, zero shared anchors). Post-publish stations
+  20/21 (`thesis-distill` + `thesis-ledger-update`, both `fail_soft`) record per
+  episode a judge-assigned `advanced` flag (DP-002=B: 有没有真推进 is a judgment,
+  not a rule). Pre-draft: `render_thesis_memo` rides alongside `avoid_memo` into
+  the davinci brief (Phase 4). Pre-publish: the scorecard judge emits a
+  `论点推进` verdict → the `thesis_advance` scorecard gate (Phase 5) is a
+  **带牙 but fail-soft** gate: it reds ONLY on a confident `re-derivation`
+  verdict (missing/`n/a`/judge-dead → 放行). **Temperature boundary (DP-001=A):
+  the line is CONTENT-repetition, not opinion.** A recurring thesis that KEEPS
+  advancing (settles/pushes a prior bet) is protected serialization
+  (persistence), NEVER gated; only 换新闻壳子零新意重讲 (re-derivation) is
+  caught. A gate/memo that makes the host hedge an OPINION is a regression —
+  freedom to opine and hold a consistent stance is preserved; only re-argued
+  same-content is blocked. thesis-ledger is an OPINION-line term, never confused
+  with the paper line's `paper-log` (ubiquitous-language Reserved).
+
 - **Never hard-code machine-absolute paths.** Use `${CLAUDE_PLUGIN_ROOT}` and
   config-injected vault paths. Never `cd` into a machine-specific dir before
   invoking a vendored script.

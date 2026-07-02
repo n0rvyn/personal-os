@@ -550,6 +550,41 @@
       "retry": null,
       "skip_when": null,
       "fail_soft": true
+    },
+    {
+      "name": "thesis-distill",
+      "kind": "agent",
+      "agent": "thesis-distiller",
+      "inputs": [
+        "published.md",
+        "stance-card.yaml",
+        "thesis-ledger.yaml"
+      ],
+      "artifact": "thesis-apparatus.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "thesis-ledger-update",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "thesis-apparatus.json",
+        "vault.output_dir"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
     }
   ],
   "evening": [
@@ -1095,6 +1130,41 @@
       "agent": null,
       "inputs": [
         "coveredground-apparatus.json",
+        "vault.output_dir"
+      ],
+      "artifact": null,
+      "gate": null,
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "thesis-distill",
+      "kind": "agent",
+      "agent": "thesis-distiller",
+      "inputs": [
+        "published.md",
+        "stance-card.yaml",
+        "thesis-ledger.yaml"
+      ],
+      "artifact": "thesis-apparatus.json",
+      "gate": [
+        {
+          "fn": "check_artifact"
+        }
+      ],
+      "parallel": null,
+      "retry": null,
+      "skip_when": null,
+      "fail_soft": true
+    },
+    {
+      "name": "thesis-ledger-update",
+      "kind": "code",
+      "agent": null,
+      "inputs": [
+        "thesis-apparatus.json",
         "vault.output_dir"
       ],
       "artifact": null,

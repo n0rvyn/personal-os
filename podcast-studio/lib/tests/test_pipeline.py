@@ -53,6 +53,7 @@ AGENT_WHITELIST = {
     "zhijianyuan",
     "scorecard",
     "stance-distiller",
+    "thesis-distiller",
 }
 
 

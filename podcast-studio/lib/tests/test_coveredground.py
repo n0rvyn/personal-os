@@ -259,6 +259,43 @@ def test_is_stale_count_window_excludes_old():
     assert is_stale(entry, today.isoformat()) is False
 
 
+# ---------- is_stale: count预测 counts (date,show) uses, not distinct dates ----------
+
+def test_is_stale_same_day_two_shows_count_twice():
+    """A twice-daily cadence must NOT collapse morning+evening of the same
+    date into one use. Two uses on 2026-06-22 (morning + evening) count as
+    2, so — alone — they are below the count≥3 predicate and NOT stale
+    (recency also fails: only 1 distinct date)."""
+    from lib.coveredground import is_stale
+    today = _dt.date(2026, 6, 30)
+    entry = {
+        "count": 2,
+        "episodes": [
+            {"date": "2026-06-22", "show": "morning"},
+            {"date": "2026-06-22", "show": "evening"},
+        ],
+    }
+    assert is_stale(entry, today.isoformat()) is False
+
+
+def test_is_stale_gatling_three_uses_across_two_dates_is_hot():
+    """The 加特林 regression: 3 uses (6/22 morning + 6/22 evening + 6/28
+    morning) span only 2 distinct DATES but 3 distinct (date,show) USES.
+    The count predicate counts uses, so this is stale — the old
+    distinct-DATE counting (2 < 3) wrongly kept it cool."""
+    from lib.coveredground import is_stale
+    today = _dt.date(2026, 6, 30)
+    entry = {
+        "count": 3,
+        "episodes": [
+            {"date": "2026-06-22", "show": "morning"},
+            {"date": "2026-06-22", "show": "evening"},
+            {"date": "2026-06-28", "show": "morning"},
+        ],
+    }
+    assert is_stale(entry, today.isoformat()) is True
+
+
 # ---------- is_stale: recency predicate ----------
 
 def test_is_stale_recency_in_last_three_episodes():

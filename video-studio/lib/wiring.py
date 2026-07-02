@@ -213,11 +213,12 @@ class MediaSeams:
     """
 
     def __init__(self, dry: bool, provider: str, log: Callable[[str], None],
-                 style_prefix: str = ""):
+                 style_prefix: str = "", voice_id: str = ""):
         self.dry = dry
         self.provider = provider
         self.log = log
         self.style_prefix = style_prefix
+        self.voice_id = voice_id   # host TTS voice from cfg.audio.voice_id (empty → media_tts default)
         if not dry:
             if provider == "doubao":
                 from lib import media_doubao as m
@@ -257,7 +258,8 @@ class MediaSeams:
         if self.dry:
             shutil.copy(SPIKE / "b00.raw.mp3", out_path)
             return 5000
-        return media_tts.synth(text, out_path)
+        # Config-driven host voice (cfg.audio.voice_id). Empty → media_tts default.
+        return media_tts.synth(text, out_path, voice_id=self.voice_id or None)
 
 
 # ---------------------------------------------------------------------------
@@ -1308,7 +1310,8 @@ def prepare_render(
     (keeps this module off the runner's import path → no cycle).
     """
     run_ff, probe_ms = make_ff_seams(cfg)
-    seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log)
+    seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log,
+                       voice_id=getattr(cfg.audio, "voice_id", ""))
     step_fns = build_step_fns(
         cfg, seams=seams, fixture_path=fixture_path, seq=seq, slug=slug,
         run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection, dry=dry,

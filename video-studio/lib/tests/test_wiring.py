@@ -448,3 +448,31 @@ def test_director_no_color_grade_keeps_series_default(tmp_path, monkeypatch):
         f"Without director color_grade, grade_vf must keep series default, "
         f"got: {ctx['grade_vf']!r}"
     )
+
+
+def test_mediaseams_synth_passes_configured_voice_id(monkeypatch):
+    """cfg.audio.voice_id must reach media_tts.synth — else changing the config
+    voice silently does nothing (the pre-fix bug: synth ignored the config voice)."""
+    from lib import wiring as _wiring
+    captured = {}
+
+    def fake_synth(text, out_path, timeout=120, voice_id=None):
+        captured["voice_id"] = voice_id
+        return 1000
+
+    monkeypatch.setattr(_wiring.media_tts, "synth", fake_synth)
+    seams = _wiring.MediaSeams(dry=False, provider="doubao", log=lambda _m: None,
+                               voice_id="Chinese (Mandarin)_Warm_Girl")
+    seams.synth("你好", "/tmp/x.mp3")
+    assert captured["voice_id"] == "Chinese (Mandarin)_Warm_Girl"
+
+
+def test_mediaseams_synth_empty_voice_passes_none(monkeypatch):
+    """Empty voice_id → None (media_tts falls back to its own default)."""
+    from lib import wiring as _wiring
+    captured = {}
+    monkeypatch.setattr(_wiring.media_tts, "synth",
+                        lambda text, out, timeout=120, voice_id=None: captured.update(voice_id=voice_id) or 1)
+    seams = _wiring.MediaSeams(dry=False, provider="doubao", log=lambda _m: None, voice_id="")
+    seams.synth("你好", "/tmp/x.mp3")
+    assert captured["voice_id"] is None

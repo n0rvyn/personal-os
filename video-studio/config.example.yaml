@@ -28,8 +28,10 @@ render:
   subtitle_font: PingFang SC
 
 audio:
-  # MiniMax voice ID for TTS narration
-  voice_id: male-qn-jingying-jingpin
+  # MiniMax voice ID for TTS narration. Consumed via MediaSeams → media_tts.synth.
+  # IDs with spaces/parens (new MiniMax naming) MUST be quoted. Smoke-test a new
+  # ID first (3 字) — an unauthorized/typo'd ID returns 2054/1004.
+  voice_id: "Chinese (Mandarin)_Warm_Girl"
   # BGM ducking attenuation in dB (how much to lower BGM under narration)
   bgm_duck_db: 18.0
 

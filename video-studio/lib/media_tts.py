@@ -20,11 +20,13 @@ import sys
 from . import mmclient
 
 
-# Host voice. male-qn-jingying-jingpin (精英青年-精品, MiniMax 2nd-gen) — chosen
-# for premium timbre + natural phrasing, and consistency with the user's podcast
-# (same host voice across formats). Env-overridable now; Stage 1 moves it to
-# per-show config (different shows/topics can use different MiniMax voices —
-# pricing is per-character × model, NOT per voice_id, so switching is free).
+# Host voice. The ACTIVE voice is config-driven: cfg.audio.voice_id → MediaSeams
+# → synth(voice_id=...). This module default is only the fallback when neither the
+# config nor VIDEO_VOICE_ID is set. running-class = 女主播卞旸(跑者学堂), voice =
+# "Chinese (Mandarin)_Warm_Girl" (A/B-picked 2026-07-02; 备选 audiobook_female_1 /
+# Gentle_Senior). Pricing is per-character × model, NOT per voice_id — switching is
+# free. (The old default was male-qn-jingying-jingpin, matching the user's podcast
+# host; retired when video moved to a female animated coach persona.)
 VOICE_ID = os.environ.get("VIDEO_VOICE_ID", "male-qn-jingying-jingpin")
 
 

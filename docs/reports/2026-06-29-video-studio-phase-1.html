@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'">
+<title>video-studio Phase 1 (self-pacing) · 2026-06-29</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--ink:#e6e8ec;--dim:#9aa3b2;--line:#2a2f3a;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--accent:#58a6ff;--code:#11141a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px;}
+  h1{font-size:28px;margin:0 0 4px;}
+  .sub{color:var(--dim);margin-bottom:32px;}
+  h2{font-size:21px;margin:38px 0 12px;padding-top:18px;border-top:1px solid var(--line);}
+  h3{font-size:17px;margin:22px 0 8px;color:var(--accent);}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0;}
+  code{background:var(--code);padding:2px 6px;border-radius:4px;font:14px/1.5 "SF Mono",Menlo,monospace;color:#c9d1d9;}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font:13px/1.6 "SF Mono",Menlo,monospace;}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px;}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top;}
+  th{background:#212631;color:var(--dim);font-weight:600;}
+  .ok{color:var(--ok);} .bad{color:var(--bad);} .warn{color:var(--warn);} .dim{color:var(--dim);}
+  .pill{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12.5px;border:1px solid var(--line);}
+  .pill.ok{border-color:var(--ok);} .pill.bad{border-color:var(--bad);} .pill.warn{border-color:var(--warn);}
+  ul{margin:8px 0;padding-left:22px;} li{margin:5px 0;}
+  blockquote{margin:10px 0;padding:8px 16px;border-left:3px solid var(--accent);color:var(--dim);background:#161a21;}
+  details{margin:10px 0;} summary{cursor:pointer;color:var(--accent);}
+  .tag{font-size:12px;color:var(--dim);}
+  @media print{body{background:#fff;color:#000;} .card,pre,code{background:#f5f5f5;} .wrap{max-width:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>video-studio Phase 1 — 插件骨架 + config + dispatch + ffmpeg 前置</h1>
+  <div class="sub">2026-06-29 · Stage 1 / Phase 1 · self-pacing (phase mode)</div>
+
+  <div class="card"><b>一句话结论：</b>Phase 1 一次跑通到绿 —— config 层 / 唯一 <code>claude -p</code> dispatch 原语（file-artifact 契约）/ ffmpeg(libass) 前置探测全部就位，<span class="ok">146 passed / 3 skipped / 0 failures</span>，真 <code>claude -p</code> smoke 通过，implementation-reviewer <span class="ok">0 must-fix</span>。中途 plan-verifier 抓出我一处 silent downgrade（把已批准的真 claude -p 验收偷偷推到 Phase 2），已修回。</div>
+
+  <h2>建了什么</h2>
+  <table>
+    <tr><th>文件</th><th>作用</th><th>状态</th></tr>
+    <tr><td><code>lib/config.py</code> + <code>config.example.yaml</code></td><td>config schema（render/audio/media/budget/ffmpeg/character_ref/style/output_dir），fail-closed 命名报错，derived 子目录自动建，<code>--validate</code> CLI</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><code>lib/dispatch.py</code></td><td>唯一 <code>claude -p</code> 原语：persona 写产物文件 → 查存在；whitelist + path-traversal 双 guard；argv list 无 shell=True；timeout/退码/缺产物结构化返回。<b>不解析 stdout JSON</b></td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><code>lib/preflight.py</code></td><td>ffmpeg libass 前置探测：无 libass / ffmpeg 不存在 → 清晰可操作错误（指向 libass 静态构建 + FFMPEG_BIN）</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><code>lib/tests/test_{config,dispatch,preflight}.py</code></td><td>46 个新单测（fail-closed / whitelist / 越界 / timeout / 缺产物 / 路径解析）</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><code>lib/tests/smoke_dispatch_live.py</code></td><td>真 <code>claude -p --model sonnet</code> smoke（<code>RUN_LIVE=1</code> 触发）：ok=True+产物 / 缺产物 ok=False</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><code>.claude-plugin/plugin.json</code></td><td>补 metadata（keywords/license，description 提及 Doubao/MiniMax）</td><td><span class="pill ok">done</span></td></tr>
+  </table>
+  <p class="tag">架构决策 DP-001=A：dispatch/config 复制/改写进 video-studio 自有 lib（镜像 podcast-studio），不抽跨插件共享层。</p>
+
+  <h2>过程里发生的一次 STOP</h2>
+  <div class="card">
+    <p><b>plan-verifier 返回 <span class="warn">must-revise</span></b>（severe 门 → self-pacing 按策略停）。3 项同一缺陷类（header/Goal 声称 body 没兑现），0 decisions：</p>
+    <table>
+      <tr><th>#</th><th>问题</th><th>修订</th></tr>
+      <tr><td>F1</td><td><code>--validate config.example.yaml</code> 期望退 0 —— 但占位路径不存在，fail-closed 必退 1（verifier 实跑 podcast 同款拿到 exit 1 为证）</td><td>改期望为"退 1 命名 output_dir"；明确只 output_dir 校验存在性，character_ref/style 宽松（Stage0/Phase6 产物，否则鸡生蛋）</td></tr>
+      <tr><td class="bad">F2 ⚠️</td><td><b>我把"真 claude -p smoke"悄悄推迟到 Phase 2</b> —— 违反 dev-guide 已批准的 Phase 1 验收（line 55）+ plan 自己的 Goal。典型 silent downgrade</td><td>恢复到 Phase 1：加 <code>smoke_dispatch_live.py</code> 真 claude -p smoke</td></tr>
+      <tr><td>F3</td><td>header <code>Threat model: included</code> 但 body 无 <code>## Threat Model</code> 段</td><td>补该段（攻击面/输入校验/失败模式/资源生命周期）</td></tr>
+    </table>
+    <p>另顺手补 advisory：dispatch.py 不要照抄 podcast 的 <code>from lib.episode import check_artifact</code>（video 无 episode.py，用内联 os.path 判存在）。</p>
+    <blockquote>用户在此明确要求继续（"干啊，停在这搞鸡毛啊？！"）→ 授权推进。3 项均为确定性 conformance 修订、已照主源改完，跳过重新 verify 直接执行。</blockquote>
+  </div>
+
+  <h2>执行结果</h2>
+  <table>
+    <tr><th>项</th><th>结果</th></tr>
+    <tr><td>execute-plan workflow（7 个 sonnet agent，1 次调用跑完两 batch）</td><td><span class="ok">7/7 done</span></td></tr>
+    <tr><td>主会话独立复跑 <code>python -m pytest lib/tests/</code></td><td><span class="ok">146 passed, 3 skipped, 0 failures</span></td></tr>
+    <tr><td>真 <code>claude -p</code> smoke（<code>RUN_LIVE=1</code>）</td><td><span class="ok">dispatch live ok</span>（产物内容='ok'）</td></tr>
+    <tr><td>契约抽验（dispatch 无 episode import / 无 stdout-JSON / whitelist+越界 guard / 无 shell=True）</td><td><span class="ok">合规</span></td></tr>
+    <tr><td>scope guard（storyboard.py / media_*.py / ffcmd.py / spike_run.py 等未动）</td><td><span class="ok">git status 证实零改动</span></td></tr>
+  </table>
+
+  <h2>评审结论</h2>
+  <div class="card">
+    <p>implementation-reviewer：<b class="ok">✅ Implementation complete，0 must-fix</b>。逐项 PASS：dispatch 契约 [C:100]、威胁模型代码+测试双钉 [C:95]、config fail-closed（含 <code>output_dir not auto-created</code>）[C:100]、config/preflight 切分干净 [C:100]、无测试篡改 [C:85]、scope clean [C:100]、真 claude -p smoke [C:90]。</p>
+  </div>
+
+  <h2>遗留 / 4 个 nice-to-have（已记 run log，非阻塞）</h2>
+  <ul>
+    <li><span class="tag">[C:90]</span> dispatch.py 的 FileNotFoundError（claude 不在 PATH）+ OSError 分支无测试覆盖（plan 也没列；真实失败模式，可补 2 个 fake-runner 用例）。</li>
+    <li><span class="tag">[C:80]</span> <code>config._read_yaml</code> 只包 ImportError；malformed YAML 会裸传 traceback 而非干净的 <code>config error:</code> 行。</li>
+    <li><span class="tag">[C:85]</span> path-traversal 测试覆盖了 <code>../</code> 没覆盖绝对路径 artifact（代码两者都拒，测试窄于 docstring）。</li>
+    <li><span class="tag">[C:75]</span> smoke 的 ok=False 路径用 fake runner（plan 允许；全 live 负路径更强）。</li>
+  </ul>
+
+  <h2>验证门</h2>
+  <table>
+    <tr><th>门</th><th>命令</th><th>状态</th></tr>
+    <tr><td>单元测试（全套）</td><td><code>python -m pytest lib/tests/</code></td><td><span class="pill ok">146 passed / 3 skipped</span></td></tr>
+    <tr><td>config fail-closed 真路径</td><td><code>python -m lib.config --validate config.example.yaml</code></td><td><span class="pill ok">exit 1，命名 output_dir（fail-closed 证明）</span></td></tr>
+    <tr><td>真 claude -p 端到端</td><td><code>RUN_LIVE=1 python lib/tests/smoke_dispatch_live.py</code></td><td><span class="pill ok">dispatch live ok</span></td></tr>
+    <tr><td>实现评审</td><td>implementation-reviewer agent</td><td><span class="pill ok">0 must-fix</span></td></tr>
+  </table>
+
+  <h2>下一步</h2>
+  <div class="card">
+    <p>Phase 1 是 phase mode 的 seam，已停在这给你 review。继续走 dev-guide 的话：<code>/self-pacing phase</code>（或 <code>/run-phase</code>）开 <b>Phase 2（Pipeline DAG + 纯 runner + 产物落盘）</b>。</p>
+    <p class="tag">Phase 2 前置告诫（plan-verifier 给的）：把 agent 步接到 <code>dispatch_persona</code>，<b>不要</b>在 storyboard 的内联 claude -p 旁边再开第 3 条 claude -p 路径。storyboard→shotlist.json 契约转换是 Phase 4 的活。</p>
+  </div>
+
+  <p class="tag">来源（source of truth）：<code>.claude/self-pacing/video-studio-p1.md</code>（run log）· <code>docs/06-plans/2026-06-29-video-studio-phase-1-plan.md</code>（plan）· <code>docs/06-plans/2026-06-29-video-studio-dev-guide.md</code>（dev-guide，Phase 1 验收已全勾）。crystal：无（Phase 1 零 blocking DP）。</p>
+
+</div>
+</body>
+</html>

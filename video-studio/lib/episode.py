@@ -180,6 +180,52 @@ def make_scratch(output_dir: str | os.PathLike, tag: str) -> Path:
     return scratch
 
 
+def archive_episode_output(
+    output_dir: str | os.PathLike,
+    seq: str,
+    slug: str,
+) -> Path | None:
+    """Move an episode output directory to the archive.
+
+    Moves `{output_dir}/episodes/{seq}-{slug}/` to
+    `{output_dir}/episodes/.archive/{seq}-{slug}-{n}/` where n is the
+    smallest positive integer that yields a non-existent destination
+    (no-overwrite guarantee).
+
+    Returns the destination Path on success, or None if the source
+    episode directory does not exist (no exception raised).
+
+    Raises EpisodeError if seq or slug are invalid.
+    """
+    if not seq or not isinstance(seq, str):
+        raise EpisodeError(f"seq must be a non-empty string, got {seq!r}")
+    if not slug or not isinstance(slug, str):
+        raise EpisodeError(f"slug must be a non-empty string, got {slug!r}")
+
+    safe_seq = _sanitize_component(seq)
+    safe_slug = _sanitize_component(slug)
+    ep_dir_name = f"{safe_seq}-{safe_slug}"
+
+    out_dir = Path(os.path.realpath(str(output_dir)))
+    src = out_dir / "episodes" / ep_dir_name
+
+    if not src.exists():
+        return None
+
+    archive_base = out_dir / "episodes" / ".archive"
+    archive_base.mkdir(parents=True, exist_ok=True)
+
+    n = 1
+    while True:
+        dst = archive_base / f"{ep_dir_name}-{n}"
+        if not dst.exists():
+            break
+        n += 1
+
+    shutil.move(str(src), str(dst))
+    return dst
+
+
 def cleanup_scratch(scratch: str | os.PathLike) -> None:
     """Remove a scratch directory — best-effort.
 

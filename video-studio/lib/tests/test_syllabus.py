@@ -729,7 +729,7 @@ def test_select_next_style_from_module(tmp_path: Path) -> None:
 
 
 def test_select_next_style_empty_when_module_has_no_style(tmp_path: Path) -> None:
-    """Module with no style produces Selection.style == '', which resolves to SERIES_LOOK."""
+    """Module with no style produces Selection.style == '', which resolves to default art style."""
     from lib.syllabus import select_next
     from lib import grade
     import types
@@ -764,8 +764,8 @@ def test_select_next_style_empty_when_module_has_no_style(tmp_path: Path) -> Non
     sel = select_next(cfg)
     assert sel is not None
     assert sel.style == ""
-    # Empty style should resolve to SERIES_LOOK (冷蓝晨光)
-    assert grade.resolve_look(sel.style) == grade.SERIES_LOOK
+    # Empty art style should resolve to the default art style prefix
+    assert grade.resolve_art_style(sel.style) == grade.ART_STYLES[grade.DEFAULT_ART_STYLE]
 
 
 def test_next_pending_returns_module_in_tuple(tmp_path: Path) -> None:
@@ -812,3 +812,427 @@ def test_save_load_cursor_roundtrip(tmp_path: Path) -> None:
     assert c2.book == c.book
     assert c2.module_idx == c.module_idx
     assert c2.episode_idx == c.episode_idx
+
+
+# ---------------------------------------------------------------------------
+# Tests: art_style (Module) + color_grade (Syllabus) — Task 2-tests
+# ---------------------------------------------------------------------------
+
+SYLLABUS_YAML_WITH_ART_STYLE = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    color_grade: 暖金
+    modules:
+      - name: VDOT基础
+        style: educational
+        art_style: 简笔日漫
+        episodes:
+          - title: 什么是VDOT
+            doc_refs: ["01-daniels-vdot-system.md#section-1"]
+            source: Daniels
+            verify_status: "✅"
+            learning_goal: 理解VDOT作为跑者有氧能力指标的含义
+            status: pending
+""")
+
+
+def test_load_syllabus_art_style_and_color_grade(tmp_path: Path) -> None:
+    """load_syllabus parses module.art_style and top-level color_grade."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_WITH_ART_STYLE)
+    s = load_syllabus(f)
+    assert s.color_grade == "暖金"
+    m0 = s.modules[0]
+    assert m0.art_style == "简笔日漫"
+
+
+def test_save_load_art_style_color_grade_roundtrip(tmp_path: Path) -> None:
+    """save_syllabus then load_syllabus preserves art_style and color_grade."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_WITH_ART_STYLE)
+    s = load_syllabus(f)
+    out = tmp_path / "out_syllabus.yaml"
+    save_syllabus(s, out)
+    s2 = load_syllabus(out)
+    assert s2.color_grade == "暖金"
+    assert s2.modules[0].art_style == "简笔日漫"
+    # Existing style field is preserved
+    assert s2.modules[0].style == "educational"
+
+
+def test_load_syllabus_backward_compat_no_art_style(tmp_path: Path) -> None:
+    """Old syllabus (no art_style on module, no color_grade at top) loads without error.
+
+    art_style and color_grade default to empty string.
+    """
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML)  # existing fixture: module has style, no art_style; no color_grade
+    s = load_syllabus(f)
+    assert s.color_grade == ""
+    assert s.modules[0].art_style == ""
+    assert s.modules[0].style == "educational"  # existing style field still present
+
+
+def test_select_next_art_style_from_module(tmp_path: Path) -> None:
+    """select_next propagates module.art_style into Selection.art_style AND
+    series-level color_grade into Selection.color_grade (NTH-1: this assertion
+    is what would have caught MF-1 — Selection missing color_grade + select_next
+    not passing it — which the SimpleNamespace wiring mock hid)."""
+    from lib.syllabus import select_next
+    import types
+
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        color_grade: 暖金
+        modules:
+          - name: VDOT基础
+            style: educational
+            art_style: 简笔日漫
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: pending
+    """)
+    cursor_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(cursor_yaml)
+
+    cfg = types.SimpleNamespace(
+        syllabus_path=str(s_file),
+        cursor_path=str(c_file),
+    )
+    sel = select_next(cfg)
+    assert sel is not None
+    assert sel.art_style == "简笔日漫"
+    assert sel.color_grade == "暖金"   # NTH-1: series color_grade flows to Selection
+
+
+# ---------------------------------------------------------------------------
+# Tests: Module.character_ref (module-level > series-level fallback) — Task 1-tests
+# ---------------------------------------------------------------------------
+
+SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/series_ref.jpg
+    modules:
+      - name: VDOT基础
+        style: educational
+        art_style: 简笔日漫
+        character_ref: assets/character/module0_ref.jpg
+        episodes:
+          - title: 什么是VDOT
+            doc_refs: ["01-daniels-vdot-system.md#section-1"]
+            source: Daniels
+            verify_status: "✅"
+            learning_goal: 理解VDOT作为跑者有氧能力指标的含义
+            status: pending
+      - name: 训练区间
+        style: tutorial
+        episodes:
+          - title: 五区训练强度
+            doc_refs: ["02-training-zones.md#section-1"]
+            source: UESCA
+            verify_status: "✅"
+            learning_goal: 区分5个训练心率区间
+            status: pending
+""")
+
+
+def test_load_syllabus_module_character_ref(tmp_path: Path) -> None:
+    """load_syllabus parses module.character_ref when present."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF)
+    s = load_syllabus(f)
+    assert s.modules[0].character_ref == "assets/character/module0_ref.jpg"
+
+
+def test_load_syllabus_module_character_ref_defaults_empty(tmp_path: Path) -> None:
+    """Module without character_ref defaults to empty string (backward compat)."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF)
+    s = load_syllabus(f)
+    # module 1 has no character_ref key
+    assert s.modules[1].character_ref == ""
+
+
+def test_load_syllabus_old_no_module_character_ref_no_crash(tmp_path: Path) -> None:
+    """Old syllabus (module has no character_ref key) loads without error."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML)  # existing fixture: no module character_ref
+    s = load_syllabus(f)
+    assert s.modules[0].character_ref == ""
+    assert s.modules[1].character_ref == ""
+    # Series-level character_ref still present
+    assert s.character_ref == "assets/character/coach_ref.jpg"
+
+
+def test_save_load_module_character_ref_roundtrip(tmp_path: Path) -> None:
+    """save_syllabus then load_syllabus preserves module.character_ref."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF)
+    s = load_syllabus(f)
+    out = tmp_path / "out_syllabus.yaml"
+    save_syllabus(s, out)
+    s2 = load_syllabus(out)
+    assert s2.modules[0].character_ref == "assets/character/module0_ref.jpg"
+    assert s2.modules[1].character_ref == ""
+
+
+def test_select_next_character_ref_module_level_priority(tmp_path: Path) -> None:
+    """select_next uses module.character_ref when set (module > series priority)."""
+    from lib.syllabus import select_next
+    import types
+
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """))
+
+    cfg = types.SimpleNamespace(
+        syllabus_path=str(s_file),
+        cursor_path=str(c_file),
+    )
+    sel = select_next(cfg)
+    assert sel is not None
+    # Module 0 has its own character_ref → Selection uses it
+    assert sel.character_ref == "assets/character/module0_ref.jpg"
+
+
+def test_select_next_character_ref_series_fallback(tmp_path: Path) -> None:
+    """select_next falls back to series character_ref when module has none."""
+    from lib.syllabus import select_next
+    import types
+
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF)
+    c_file = tmp_path / "cursor.yaml"
+    # Cursor at module 1 which has no character_ref
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 1
+        episode_idx: 0
+    """))
+
+    cfg = types.SimpleNamespace(
+        syllabus_path=str(s_file),
+        cursor_path=str(c_file),
+    )
+    sel = select_next(cfg)
+    assert sel is not None
+    # Module 1 has no character_ref → falls back to series-level
+    assert sel.character_ref == "assets/character/series_ref.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Tests: reset_current — Task 1-tests
+# ---------------------------------------------------------------------------
+
+def test_reset_current_basic(tmp_path: Path) -> None:
+    """reset_current: ep0 done, cursor at ep1 → ep0 back to pending, cursor at ep0."""
+    from lib.syllabus import reset_current  # fails until Task 1-impl
+
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)  # ep0=done, ep1=pending; cursor_yaml points at ep1
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(CURSOR_YAML)  # module_idx=0, episode_idx=1
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+
+    s2, c2 = reset_current(s, c)
+
+    # ep0 (the most recent done) is now pending
+    assert s2.modules[0].episodes[0].status == "pending"
+    # Cursor points back to ep0
+    assert c2.module_idx == 0
+    assert c2.episode_idx == 0
+
+
+def test_reset_current_does_not_mutate_original(tmp_path: Path) -> None:
+    """reset_current is pure: originals are unchanged after call."""
+    from lib.syllabus import reset_current
+
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(CURSOR_YAML)
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+
+    reset_current(s, c)
+
+    # Original ep0 still done
+    assert s.modules[0].episodes[0].status == "done"
+    # Original cursor unchanged
+    assert c.module_idx == 0
+    assert c.episode_idx == 1
+
+
+def test_reset_current_advance_roundtrip(tmp_path: Path) -> None:
+    """advance then reset_current returns to the original state (same episode pending, same cursor)."""
+    from lib.syllabus import reset_current
+
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(CURSOR_YAML)  # module=0, ep=1 pending
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+
+    # Save original state
+    orig_ep1_status = s.modules[0].episodes[1].status
+    orig_module_idx = c.module_idx
+    orig_episode_idx = c.episode_idx
+    assert orig_ep1_status == "pending"
+
+    # Advance: ep1 becomes done, cursor moves to module=1, ep=0
+    s2, c2 = advance(s, c)
+    assert s2.modules[0].episodes[1].status == "done"
+    assert c2.module_idx == 1
+    assert c2.episode_idx == 0
+
+    # Reset: ep1 back to pending, cursor back to module=0, ep=1
+    s3, c3 = reset_current(s2, c2)
+    assert s3.modules[0].episodes[1].status == "pending"
+    assert c3.module_idx == orig_module_idx
+    assert c3.episode_idx == orig_episode_idx
+
+
+def test_reset_current_parked_cursor(tmp_path: Path) -> None:
+    """reset_current with parked cursor (advance on last episode): last episode back to pending, cursor points to it."""
+    from lib.syllabus import reset_current
+
+    # Single-module single-episode syllabus (last episode)
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: assets/character/coach_ref.jpg
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: pending
+    """)
+    cursor_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(cursor_yaml)
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+
+    # Advance the last episode: cursor becomes parked (module_idx=len(modules)=1)
+    s2, c2 = advance(s, c)
+    assert s2.modules[0].episodes[0].status == "done"
+    # Parked: module_idx is beyond the last module
+    assert c2.module_idx >= len(s2.modules) or next_pending(s2, c2) is None
+
+    # Reset: last episode back to pending, cursor NOT parked — points to last episode
+    s3, c3 = reset_current(s2, c2)
+    assert s3.modules[0].episodes[0].status == "pending"
+    assert c3.module_idx == 0
+    assert c3.episode_idx == 0
+
+
+def test_reset_current_no_done_episodes_idempotent(tmp_path: Path) -> None:
+    """reset_current with no done episodes: returns a copy without crashing, state unchanged."""
+    from lib.syllabus import reset_current
+
+    # All pending syllabus
+    all_pending_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: assets/character/coach_ref.jpg
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: pending
+              - title: VDOT配速表解读
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 学会用VDOT对应训练配速区间
+                status: pending
+    """)
+    cursor_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(all_pending_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(cursor_yaml)
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+
+    # Should not crash; no done episode to reset
+    s2, c2 = reset_current(s, c)
+    # All episodes remain pending
+    assert s2.modules[0].episodes[0].status == "pending"
+    assert s2.modules[0].episodes[1].status == "pending"
+    # Cursor unchanged
+    assert c2.module_idx == c.module_idx
+    assert c2.episode_idx == c.episode_idx
+
+
+def test_select_next_character_ref_both_absent_returns_empty(tmp_path: Path) -> None:
+    """select_next returns empty string when neither module nor series has character_ref."""
+    from lib.syllabus import select_next
+    import types
+
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: pending
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """))
+
+    cfg = types.SimpleNamespace(
+        syllabus_path=str(s_file),
+        cursor_path=str(c_file),
+    )
+    sel = select_next(cfg)
+    assert sel is not None
+    assert sel.character_ref == ""

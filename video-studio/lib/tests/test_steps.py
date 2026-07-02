@@ -354,9 +354,9 @@ def test_still_clip_includes_color_grade(tmp_path):
     charts (test above) are excluded. The difference is the invariant.
     """
     from lib.steps import step_still_clip
-    from lib.grade import grade_filter
+    from lib.grade import color_grade_filter
 
-    grade_vf = grade_filter()   # contains "colorbalance"
+    grade_vf = color_grade_filter()   # contains "colorbalance"
     still_argv: list[str] = []
 
     def fake_run_ff(argv: list[str], label: str) -> None:

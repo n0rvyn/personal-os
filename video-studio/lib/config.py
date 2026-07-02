@@ -4,8 +4,8 @@ Single source of truth for the video-studio YAML config file. Used by all
 pipeline steps and runner scripts via `from lib.config import load_config`.
 
 Fails-closed: missing file / missing required key / nonexistent output_dir all
-raise ConfigError naming the offending key. `character_ref` and `style` are
-lenient (Stage 0 / Phase 6 artifacts; not existence-checked at load time).
+raise ConfigError naming the offending key. `character_ref` is lenient
+(Stage 0 / Phase 6 artifact; not existence-checked at load time).
 
 API credentials (ARK_API_KEY, MINIMAX_API_KEY, etc.) live in shell env,
 never in this YAML.
@@ -21,6 +21,10 @@ from typing import Any
 
 class ConfigError(Exception):
     """Raised when the config is missing, malformed, or fails validation."""
+
+
+class ConfigNotFound(ConfigError):
+    """Raised when no config file is found via discovery (neither user-level nor project-level)."""
 
 
 VALID_MEDIA_PROVIDERS = frozenset({"doubao", "minimax"})
@@ -70,7 +74,6 @@ class VideoStudioConfig:
     budget: BudgetConfig
     ffmpeg: FfmpegConfig
     character_ref: str
-    style: str
     output_dir: str
     # derived subdirs — computed from output_dir, auto-created on load
     episodes_dir: str
@@ -86,17 +89,88 @@ class VideoStudioConfig:
 
 
 # ---------------------------------------------------------------------------
-# Path resolution
+# Config discovery helpers
 # ---------------------------------------------------------------------------
 
 
-def _resolve_config_path(path: str | os.PathLike | None) -> Path:
+def _find_project_root(start: Path) -> Path | None:
+    """Walk up from `start` looking for CLAUDE.md, .git, or .video-studio directory."""
+    current = start.resolve()
+    while True:
+        for marker in ("CLAUDE.md", ".git", ".video-studio"):
+            if (current / marker).exists():
+                return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def _discover_config_layers(path: str | os.PathLike | None) -> list[Path]:
+    """Return ordered list of config Paths to deep-merge (base → override).
+
+    Explicit ``path`` arg or ``$VIDEO_STUDIO_CONFIG``:
+        single-layer; file missing → ConfigError (fails-closed, same as before).
+
+    Discovery mode (no explicit path/env):
+        Collects [~/.claude/video-studio/config.yaml (user base),
+                  <project_root>/.video-studio/config.yaml (project override)]
+        keeping only files that exist on disk.
+        Empty result → ConfigNotFound.
+    """
     if path is not None:
-        return Path(path).expanduser()
+        p = Path(path).expanduser()
+        if not p.exists():
+            raise ConfigError(
+                f"config file not found: {p}. "
+                f"解析顺序: 显式 path 参数 → $VIDEO_STUDIO_CONFIG → 发现模式 "
+                f"(~/.claude/video-studio/config.yaml + <project>/.video-studio/config.yaml)。"
+            )
+        return [p]
+
     env = os.environ.get("VIDEO_STUDIO_CONFIG")
     if env:
-        return Path(env).expanduser()
-    return Path.cwd() / "video-studio.yaml"
+        p = Path(env).expanduser()
+        if not p.exists():
+            raise ConfigError(
+                f"config file not found (VIDEO_STUDIO_CONFIG={env}): {p}."
+            )
+        return [p]
+
+    # Discovery mode: user-level (base) then project-level (override)
+    layers: list[Path] = []
+
+    user_cfg = Path.home() / ".claude" / "video-studio" / "config.yaml"
+    if user_cfg.exists():
+        layers.append(user_cfg)
+
+    project_root = _find_project_root(Path.cwd())
+    if project_root is not None:
+        project_cfg = project_root / ".video-studio" / "config.yaml"
+        if project_cfg.exists():
+            layers.append(project_cfg)
+
+    if not layers:
+        raise ConfigNotFound(
+            "No video-studio config found. "
+            "Expected ~/.claude/video-studio/config.yaml (user-level) and/or "
+            "<project>/.video-studio/config.yaml (project-level). "
+            "Run /video-make to scaffold a content project or migrate your "
+            "existing ~/.video-studio config."
+        )
+
+    return layers
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge *override* into *base*. Override wins at every leaf level."""
+    result = dict(base)
+    for key, override_val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(override_val, dict):
+            result[key] = _deep_merge(result[key], override_val)
+        else:
+            result[key] = override_val
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -182,25 +256,21 @@ def _validate_ffmpeg(raw: dict[str, Any]) -> FfmpegConfig:
 def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
     """Resolve and validate the video-studio config.
 
-    Lookup order for the config path:
-    1. explicit `path` arg
-    2. VIDEO_STUDIO_CONFIG env var
-    3. cwd/video-studio.yaml (fallback)
+    Lookup order:
+    1. explicit ``path`` arg (single file; missing → ConfigError)
+    2. ``$VIDEO_STUDIO_CONFIG`` env var (single file; missing → ConfigError)
+    3. Discovery: [~/.claude/video-studio/config.yaml (base),
+                   <project>/.video-studio/config.yaml (override)]
+       deep-merged at leaf level; neither exists → ConfigNotFound(ConfigError).
 
     Fails-closed on missing file, missing required keys, nonexistent output_dir,
-    or invalid media.provider. character_ref and style are lenient (not
-    existence-checked).
+    or invalid media.provider. character_ref is lenient (not existence-checked).
     """
-    cfg_path = _resolve_config_path(path)
+    layers = _discover_config_layers(path)
 
-    if not cfg_path.exists():
-        raise ConfigError(
-            f"config file not found: {cfg_path}. "
-            f"解析顺序: 显式 path 参数 → $VIDEO_STUDIO_CONFIG → cwd/video-studio.yaml。"
-            f"把 $VIDEO_STUDIO_CONFIG 指向你的 config，或在默认路径建文件。"
-        )
-
-    raw = _read_yaml(cfg_path)
+    raw: dict[str, Any] = {}
+    for layer_path in layers:
+        raw = _deep_merge(raw, _read_yaml(layer_path))
 
     # --- required sections ---
     for section in ("render", "audio", "media", "budget", "ffmpeg"):
@@ -234,9 +304,8 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
     for subdir in (episodes_dir, syllabus_dir, state_dir):
         Path(subdir).mkdir(parents=True, exist_ok=True)
 
-    # --- character_ref + style: lenient, not existence-checked ---
+    # --- character_ref: lenient, not existence-checked ---
     character_ref = str(raw.get("character_ref", ""))
-    style = str(raw.get("style", ""))
 
     # --- Phase 6: explicit syllabus + cursor paths (optional; Phase-2 omits) ---
     syllabus_path = str(raw.get("syllabus_path", ""))
@@ -253,7 +322,6 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         budget=budget,
         ffmpeg=ffmpeg_cfg,
         character_ref=character_ref,
-        style=style,
         output_dir=output_dir,
         episodes_dir=episodes_dir,
         syllabus_dir=syllabus_dir,

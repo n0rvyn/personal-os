@@ -1,77 +1,108 @@
-"""Color-grade palette (POC5) — the series-level visual signature.
+"""Visual signature: two orthogonal dimensions — art style and color grade.
 
-A "look" bundles the two halves of how a whole video reads on screen:
-  - ``grade``: an ffmpeg filterchain applied to every photographic shot, so the
-    AI-generated stills / S2V / card backgrounds share one palette instead of
-    drifting warm↔cool shot to shot.
-  - ``style_prefix``: the image-gen prompt prefix, so the pictures are GENERATED
-    toward the same look the grade then locks in.
+Art style (open vocabulary)
+  Controls the *generation* prompt prefix fed to the image model.
+  Known names map to curated prefixes; any unknown name is used directly as a
+  prefix (open vocab), so "赛博朋克 / 油画 / 像素" all produce usable output
+  without requiring an explicit entry here.  Dimension is module-scoped.
 
-These two must agree (a cool grade over warm-prompted images fights itself), so
-they live together here and are chosen ONCE at the column/series level — NOT
-re-rolled per episode. A consistent look is what makes a column recognisable;
-an LLM may later *recommend* a look at column setup, but it stays fixed for the
-column. ``SERIES_LOOK`` is the lock.
+Color grade (finite set)
+  Controls the *ffmpeg filterchain* applied to every photographic shot so stills
+  and S2V clips share one palette instead of drifting warm↔cool.  Known names
+  map to tuned filters; unknown/empty names fall back to DEFAULT_COLOR_GRADE.
+  Dimension is series-scoped (default) with optional per-episode director
+  override.
 
-Scope: the grade is applied to photographic shots only. Charts (matplotlib
-designed data) are excluded to keep numbers readable; card design overlays
-(amber bars, white text) are burned AFTER the grade so they stay pure.
+These two dimensions are independent.  A module can be 简笔日漫 (anime) with
+冷蓝晨光 (cool-morning) color grade, or 写实电影 with 暖金 — every combination
+is valid.  Charts (matplotlib data) are excluded from color grading to keep
+numbers readable; card overlays are burned AFTER grading.
 """
 from __future__ import annotations
 
-# Each look: grade = ffmpeg -vf filterchain (subtle — preserve identity/skin,
-# just unify palette + add a film signature). style_prefix feeds media_image.
-LOOKS: dict[str, dict[str, str]] = {
-    # Locked signature for this column: cool morning, calm, cinematic.
-    "冷蓝晨光": {
-        "grade": ("colorbalance=rs=-0.05:bs=0.07:bm=0.02,"
-                  "curves=master='0/0.02 0.5/0.5 1/0.98',"
-                  "eq=contrast=1.06:saturation=0.97"),
-        "style_prefix": "cinematic, cool morning light, film grain, realistic, no text",
-    },
-    "暖金": {
-        "grade": ("colorbalance=rs=0.06:rh=0.05:bs=-0.05,"
-                  "eq=contrast=1.05:saturation=1.06"),
-        "style_prefix": "cinematic, warm golden hour light, film grain, realistic, no text",
-    },
-    "橙青": {
-        "grade": ("colorbalance=rs=-0.06:bs=0.10:rh=0.07:bh=-0.05,"
-                  "eq=contrast=1.10:saturation=1.02"),
-        "style_prefix": "cinematic teal-and-orange, film grain, realistic, no text",
-    },
-    "简笔日漫": {
-        # 平涂动漫不吃胶片颗粒/写实调色:grade 用近中性(只轻微统一对比/饱和),
-        # 保住线稿干净、不加噪。
-        "grade": "eq=contrast=1.02:saturation=1.05",
-        "style_prefix": (
-            "anime illustration, simple clean line art, flat cel shading, "
-            "soft flat colors, no photorealism, no text"
-        ),
-    },
+# ---------------------------------------------------------------------------
+# COLOR_GRADES — finite set, series-level lock
+# ---------------------------------------------------------------------------
+
+COLOR_GRADES: dict[str, str] = {
+    # Locked signature: cool morning, calm, cinematic.
+    "冷蓝晨光": (
+        "colorbalance=rs=-0.05:bs=0.07:bm=0.02,"
+        "curves=master='0/0.02 0.5/0.5 1/0.98',"
+        "eq=contrast=1.06:saturation=0.97"
+    ),
+    "暖金": (
+        "colorbalance=rs=0.06:rh=0.05:bs=-0.05,"
+        "eq=contrast=1.05:saturation=1.06"
+    ),
+    "橙青": (
+        "colorbalance=rs=-0.06:bs=0.10:rh=0.07:bh=-0.05,"
+        "eq=contrast=1.10:saturation=1.02"
+    ),
+    # Near-neutral: mild eq only, no colorbalance channel shift.
+    # Use for anime/illustration where a cool/warm shift would fight the flat art.
+    "中性": "eq=contrast=1.02:saturation=1.03",
 }
 
-# The locked look for this column. Stage 1: column-level config / LLM recommend.
-SERIES_LOOK = "冷蓝晨光"
+DEFAULT_COLOR_GRADE = "冷蓝晨光"
 
-# config/syllabus 里的 style 值 → 规范 look key。别名容错 + 未知/空回落默认。
-_LOOK_ALIASES = {"cinematic": "冷蓝晨光", "anime": "简笔日漫", "日漫": "简笔日漫"}
+# ---------------------------------------------------------------------------
+# ART_STYLES — open vocabulary; unknown names fall through to raw prefix
+# ---------------------------------------------------------------------------
+
+ART_STYLES: dict[str, str] = {
+    "简笔日漫": (
+        "anime illustration, simple clean line art, flat cel shading, "
+        "soft flat colors, no photorealism, no text"
+    ),
+    # Cinematic realism: color-temperature words removed — the color grade
+    # controls that; style prefix stays palette-agnostic.
+    "写实电影": "cinematic, film grain, realistic, no text",
+}
+
+DEFAULT_ART_STYLE = "写实电影"
+
+# ---------------------------------------------------------------------------
+# resolve_color_grade
+# ---------------------------------------------------------------------------
 
 
-def resolve_look(name: str | None) -> str:
-    """Map a config style value to a canonical LOOKS key; fall back to SERIES_LOOK."""
+def resolve_color_grade(name: str | None = None) -> str:
+    """Return the ffmpeg filterchain for *name*.
+
+    - Known name → its filter.
+    - Empty / None / unknown → ``COLOR_GRADES[DEFAULT_COLOR_GRADE]``.
+    """
     if not name:
-        return SERIES_LOOK
+        return COLOR_GRADES[DEFAULT_COLOR_GRADE]
     n = name.strip()
-    if n in LOOKS:
-        return n
-    return _LOOK_ALIASES.get(n.lower(), _LOOK_ALIASES.get(n, SERIES_LOOK))
+    return COLOR_GRADES.get(n, COLOR_GRADES[DEFAULT_COLOR_GRADE])
 
 
-def grade_filter(look: str = SERIES_LOOK) -> str:
-    """The ffmpeg grade filterchain for `look` (applied to photographic shots)."""
-    return LOOKS[look]["grade"]
+# ---------------------------------------------------------------------------
+# resolve_art_style — open vocabulary
+# ---------------------------------------------------------------------------
 
 
-def style_prefix(look: str = SERIES_LOOK) -> str:
-    """The image-gen prompt prefix for `look` (the other half of the signature)."""
-    return LOOKS[look]["style_prefix"]
+def resolve_art_style(name: str | None = None) -> str:
+    """Return the image-gen prompt prefix for *name*.
+
+    - Known name → its curated prefix.
+    - Empty / None → ``ART_STYLES[DEFAULT_ART_STYLE]``.
+    - Unknown name → ``"{name.strip()}, no text"`` (open vocab — any style works).
+    """
+    if not name:
+        return ART_STYLES[DEFAULT_ART_STYLE]
+    n = name.strip()
+    if n in ART_STYLES:
+        return ART_STYLES[n]
+    # Open vocabulary: unknown name becomes the prompt prefix directly.
+    return f"{n}, no text"
+
+
+# ---------------------------------------------------------------------------
+# Convenience aliases
+# ---------------------------------------------------------------------------
+
+art_style_prefix = resolve_art_style
+color_grade_filter = resolve_color_grade

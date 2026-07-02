@@ -203,7 +203,7 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
         prog="python -m lib.runner",
         description="video-studio pipeline runner — fixture beats → episodes/{seq}-{slug}/final.mp4",
     )
-    parser.add_argument("--config", required=True, help="Path to the video-studio config YAML")
+    parser.add_argument("--config", required=False, default=None, help="Path to the video-studio config YAML (optional; omit to use config discovery)")
     parser.add_argument("--fixture", default="beats.long.fixture.json",
                         help="Fixture beats JSON (default: beats.long.fixture.json)")
     parser.add_argument("--seq", default="001", help="Episode sequence number (default: 001)")
@@ -212,11 +212,21 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
                         help="Dry render: copy cached .spike media seams ($0), real ffmpeg")
     args = parser.parse_args(argv)
 
-    from lib.config import load_config, ConfigError
+    from lib.config import load_config, ConfigError, ConfigNotFound
     from lib.pipeline import load_pipeline, validate_pipeline
 
     try:
         config = load_config(args.config)
+    except ConfigNotFound as e:
+        print(
+            f"error: {e}\n"
+            "未找到配置。请选择：\n"
+            "  • 在内容项目目录中运行（项目根含 CLAUDE.md，.video-studio/config.yaml）；\n"
+            "  • 或用 /video-make 建内容项目；\n"
+            "  • 或迁移旧 ~/.video-studio（迁移工具：lib.content_project.migrate_legacy_config）。",
+            file=sys.stderr,
+        )
+        return 1
     except (ConfigError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

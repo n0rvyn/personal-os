@@ -246,3 +246,51 @@ def test_make_scratch_invalid_tag_raises(tmp_path):
 def test_episode_error_is_exception():
     from lib.episode import EpisodeError
     assert issubclass(EpisodeError, Exception)
+
+
+# ---------- archive_episode_output ----------
+
+def test_archive_moves_episode_dir(tmp_path):
+    """Episode dir is moved to .archive/{seq}-{slug}-1/ and original is gone."""
+    from lib.episode import archive_episode_output
+    ep_dir = tmp_path / "episodes" / "001-x"
+    ep_dir.mkdir(parents=True)
+    (ep_dir / "final.mp4").write_bytes(b"\x00" * 100)
+
+    result = archive_episode_output(tmp_path, seq="001", slug="x")
+
+    assert result is not None
+    archive_dir = tmp_path / "episodes" / ".archive" / "001-x-1"
+    assert result == archive_dir
+    assert archive_dir.exists()
+    assert (archive_dir / "final.mp4").exists()
+    assert not ep_dir.exists()
+
+
+def test_archive_no_overwrite_increments(tmp_path):
+    """Second archive of the same seq-slug gets -2 (no clobber of -1)."""
+    from lib.episode import archive_episode_output
+    ep_dir = tmp_path / "episodes" / "001-x"
+
+    # First archive
+    ep_dir.mkdir(parents=True)
+    (ep_dir / "final.mp4").write_bytes(b"\x00" * 10)
+    r1 = archive_episode_output(tmp_path, seq="001", slug="x")
+    assert r1 == tmp_path / "episodes" / ".archive" / "001-x-1"
+
+    # Rebuild episode dir and archive again
+    ep_dir.mkdir(parents=True)
+    (ep_dir / "final.mp4").write_bytes(b"\x00" * 20)
+    r2 = archive_episode_output(tmp_path, seq="001", slug="x")
+    assert r2 == tmp_path / "episodes" / ".archive" / "001-x-2"
+
+    # Both archives must coexist
+    assert r1.exists()
+    assert r2.exists()
+
+
+def test_archive_nonexistent_returns_none(tmp_path):
+    """Archiving an episode directory that doesn't exist returns None without raising."""
+    from lib.episode import archive_episode_output
+    result = archive_episode_output(tmp_path, seq="999", slug="missing")
+    assert result is None

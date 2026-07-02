@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'">
+<title>video-studio Phase 4 验收 · 2026-06-30</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--ink:#e6e8ec;--dim:#9aa3b2;--line:#2a2f3a;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--accent:#58a6ff;--code:#11141a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px;}
+  h1{font-size:28px;margin:0 0 4px;}
+  .sub{color:var(--dim);margin-bottom:32px;}
+  h2{font-size:21px;margin:38px 0 12px;padding-top:18px;border-top:1px solid var(--line);}
+  h3{font-size:17px;margin:22px 0 8px;color:var(--accent);}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0;}
+  code{background:var(--code);padding:2px 6px;border-radius:4px;font:14px/1.5 "SF Mono",Menlo,monospace;color:#c9d1d9;}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font:13px/1.6 "SF Mono",Menlo,monospace;}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px;}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top;}
+  th{background:#212631;color:var(--dim);font-weight:600;}
+  .ok{color:var(--ok);} .bad{color:var(--bad);} .warn{color:var(--warn);} .dim{color:var(--dim);}
+  .pill{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12.5px;border:1px solid var(--line);}
+  .pill.ok{border-color:var(--ok);color:var(--ok);} .pill.bad{border-color:var(--bad);color:var(--bad);} .pill.warn{border-color:var(--warn);color:var(--warn);}
+  ul{margin:8px 0;padding-left:22px;} li{margin:5px 0;}
+  blockquote{margin:10px 0;padding:8px 16px;border-left:3px solid var(--accent);color:var(--dim);background:#161a21;}
+  details{margin:10px 0;} summary{cursor:pointer;color:var(--accent);}
+  .tag{font-size:12px;color:var(--dim);}
+  @media print{body{background:#fff;color:#000;} .card,pre,code{background:#f5f5f5;} .wrap{max-width:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>video-studio Phase 4 — 分镜判官 + 视频预算门</h1>
+  <div class="sub">2026-06-30 · self-pacing（phase 模式，AFK 自驱）· dev-guide Phase 4</div>
+
+  <div class="card"><b>一句话结论：</b>Phase 4 代码<span class="ok">全部完成并通过门</span>（8 任务、344 单测绿、env-unset DRY 渲染回归门 PASS、预算门 + 坏 JSON demo PASS、implementation-reviewer 0 must-fix）。<b>代码未提交</b>，按你锁的「给你看了才并入」节奏停在 seam，等你<span class="warn">跑一次 live 分镜（真 director claude -p）签字</span> + 决定 commit。</div>
+
+  <h2>现状 / 范围</h2>
+  <p>Phase 4 = 把 storyboard director 从 spike 内联 <code>claude -p</code> 转成正式 dispatch 契约的 <b>agent 步</b>（派 director → 写 shotlist.json → gate 校验），director <b>逐 beat 定 visual_type</b>（承接 digest-writer 只产 <code>{beat_id,text,anchor}</code> 的空缺）+ 给视频候选打 motion_value 分；<b>视频预算门</b>（code 逻辑，宿在 dispatch 闭包内）硬执行 video 镜头数 ≤ 单期上限，超额按分自动降级静图（不 halt，UX-005）。</p>
+
+  <h2>Done — 8 任务全绿</h2>
+  <table>
+    <tr><th>任务</th><th>产物</th><th>状态</th></tr>
+    <tr><td>1-tests / 1-impl</td><td><code>lib/budget.py</code> — <code>apply_video_budget(shotlist, cap)</code> 纯函数（按 motion_value 降序、稳定排序、超 cap 转 still、never halt）</td><td><span class="pill ok">14 UT 绿</span></td></tr>
+    <tr><td>2-tests / 2-impl</td><td><code>lib/storyboard.py</code> +<code>parse_shotlist</code>/<code>_VISUAL_TYPES</code>（复用既有 <code>_extract_json_array</code>，never raise，返错误字符串）</td><td><span class="pill ok">25 UT 绿</span></td></tr>
+    <tr><td>3-tests / 3-impl</td><td><code>lib/wiring.py</code> +<code>make_storyboard_dispatch</code> 闭包 · <code>prepare_render</code> 按 agent 路由（digest-writer→script，director→storyboard）· <code>step_extract</code> 删 sb-reuse；<code>lib/pipeline.py</code> 插 <code>分镜</code> 步（14→15）</td><td><span class="pill ok">22 UT 绿</span></td></tr>
+    <tr><td>4</td><td><code>agents/director.md</code> persona（visual_type 判定 + motion_value 评分 + 迁移景别/pace/keywords 规则 + 严格 JSON）</td><td><span class="pill ok">契约齐</span></td></tr>
+    <tr><td>5</td><td><code>evals/video_storyboard_e2e.py</code> live 分镜 E2E 装置（A 段 live 收口 shotlist.json + B 段 fixture DRY 渲染）</td><td><span class="pill warn">harness 就绪，live 待跑</span></td></tr>
+  </table>
+  <p class="tag">测试新增 64 条真断言（17 budget + 25 shotlist + 22 pipeline-p4），0 空壳；<code>test_pipeline.py</code> 步数断言更新到 15。文件改动与计划精确一致，0 计划外文件，工作树未提交。</p>
+
+  <h2>我自己拍的决策</h2>
+  <table>
+    <tr><th>DP</th><th>选项</th><th>采纳 / 理由</th></tr>
+    <tr><td>DP-001 视频预算策略 <span class="pill">recommended</span></td><td>A 仅单期上限 · B 单期上限+周额度 state</td><td><b class="ok">A（仅单期上限）</b>——<code>config.budget.video_shots_per_episode</code> 已存在且 required（默认 2）；dev-guide 明示用户手动看额度；YAGNI，免一个跨期 state 文件。self-pacing 按 recommended 自采。</td></tr>
+  </table>
+
+  <h2>质量门</h2>
+  <h3>plan-verifier（两轮，每轮 must-revise → 修订）</h3>
+  <p>计划由 self-pacing 自己写，verifier 抓出真问题、在编写循环内修订（与 P3 同法，0 个用户决策）：</p>
+  <table>
+    <tr><th>轮</th><th>裁决</th><th>问题 → 修订</th></tr>
+    <tr><td>round 1</td><td><span class="pill bad">must-revise</span></td><td><b>阻塞#1：</b>director pass-through 判别用 <code>ctx.get("sb")</code> → 错（render E2E 实测 sb=None，会误落 live 派 → halt）。改为<b>判 beats 是否已带 visual_type</b> + 补零-live-dispatch 回归测试 + 真 <code>prepare_render</code> 路由测试。<br><b>阻塞#2：</b>digest beats <code>beat_id</code> ≠ render 消费的 <code>beat["id"]</code> → KeyError。Task 5 live 路在 shotlist.json 收口、render demo 用 fixture beats，跨阶段 schema normalize 显式出 scope。</td></tr>
+    <tr><td>round 2</td><td><span class="pill bad">must-revise</span></td><td>仅一处确定性数字：pipeline 实测 14 步（非 13），插 分镜 后 15。修 4 处 + 断言 <code>==15</code>（pre-impl 14→红，插步后 15→绿）。</td></tr>
+  </table>
+  <p class="tag">两个阻塞均由我独立 empirically 复核（render E2E 无 SPIKE_STORYBOARD_JSON / digest-writer 产 beat_id / gen-video 读 beat["id"]），非盲信 verifier。</p>
+
+  <h3>implementation-reviewer</h3>
+  <div class="card"><span class="pill ok">faithful · 0 must-fix · 2 nice-to-have</span>　7 项 load-bearing 需求全 confirmed vs 代码（pass-through 判 visual_type@wiring.py:695 ✓、len 守卫@:677-681 ✓、shotlist_art 三分支全设 ✓、budget 回写@:744-745 ✓、make_script_dispatch 原样 ✓、坏 JSON→无产物→retry→halt(分镜) ✓、digest→render schema gap 已 scoped out ✓）。我抽验了其中 3 条代码行属实。</div>
+
+  <h3>验证门（实跑实见）</h3>
+  <table>
+    <tr><th>门</th><th>命令 / 信号</th><th>状态</th></tr>
+    <tr><td>单元测试</td><td><code>python -m pytest lib/tests/ -q</code></td><td><span class="pill ok">344 passed / 3 skipped</span></td></tr>
+    <tr><td>编译</td><td><code>py_compile</code> 全部 touched 文件</td><td><span class="pill ok">OK</span></td></tr>
+    <tr><td><b>真路径回归门</b>（REV-2，pytest 抓不到的 wiring 回归）</td><td><code>unset SPIKE_STORYBOARD_JSON; DRY_RUN=1 …/ffmpeg python evals/video_render_e2e.py</code></td><td><span class="pill ok">PASS</span></td></tr>
+    <tr><td>预算门 demo（UX-005）</td><td><code>BUDGET_DEMO=1 python evals/video_storyboard_e2e.py</code> · A-②</td><td><span class="pill ok">4 video→2，2 降级，无 halt</span></td></tr>
+    <tr><td>坏 JSON 容错 demo</td><td>同上 · A-③</td><td><span class="pill ok">漏尾]/多逗号容错、完全坏→干净报错不崩</span></td></tr>
+    <tr><td>live 分镜质量（真 director）</td><td><code>python evals/video_storyboard_e2e.py</code>（需 claude CLI）</td><td><span class="pill warn">待你跑 · 沙箱不能真派 LLM</span></td></tr>
+  </table>
+  <blockquote>回归门关键证据：env-unset 跑出的 render 日志里 <code>[storyboard] fixture pass-through (beats already have visual_type)</code> —— 新 director 步在 sb=None + 无 env 时正确走 visual_type 信号 pass-through（零 live 派），final.mp4 18.8MB，UX-001（1920×1080，drift 0.032s）/002/003（BGM 39.2dB）/006 全 PASS，runner status done。这把 advisor 与 verifier 都点名的「阻塞#1」彻底闭环。</blockquote>
+
+  <h2>遗留 / 建议（intentionally 没做）</h2>
+  <ul>
+    <li><b>N-1：</b>陈旧 <code>SPIKE_STORYBOARD_JSON</code> 长度不符时抛 <code>RuntimeError</code>（traceback）而非优雅 <code>status="halted"</code>（runner.py:163 没包 try/except）。是从旧 step_extract 守卫沿用的行为，且只守一个 operator-only 开发缓存 env 变量，诊断信息可接受。非阻塞。</li>
+    <li><b>N-2：</b>完整 live PDF→render 链<b>未端到端</b>——计划<b>显式</b>把 digest→render 的 <code>beat_id→id</code> schema normalize 推到后续阶段。Phase 4 = eval 的 shotlist-only 子管线 + fixture 渲染。这是已知-延后、非静默缺口。</li>
+    <li>fixture <code>beats.long.fixture.json</code> 是 1 video / 12 beats（低于 cap=2），所以 B 段 DRY 渲染没有超 cap 视频——fixture 渲染里看不到 UX-005 降级（降级在 A-② demo 里验过）。</li>
+  </ul>
+
+  <h2>过程中的停 / 改道</h2>
+  <ul>
+    <li><b>计划 must-revise ×2</b>：均在编写循环内修订（self-pacing 自己写的计划、0 用户决策、确定性修法）—— 没有为「请批准修计划」去打扰你。</li>
+    <li><b>Workflow dispatch 失败 ×2</b>：<code>execute-plan.workflow.js</code> 两次返回 <code>[]</code> / 0 agents（args 没绑进 script runtime）。按「两次失败换思路」→ 改用直接 Agent dispatch（每任务一个 <code>dev-workflow:execute-plan</code>，按 test→impl 依赖串，我从结构化返回记 checkpoint）。</li>
+  </ul>
+
+  <h2>结果 / 下一步（seam）</h2>
+  <div class="card">
+  <b>等你（按锁的节奏「给你看了才并入」）：</b>
+  <ol>
+    <li>跑一次 live 分镜签字（看 director 写的 分镜质量：景别多变 / 不大B脸 / visual_type 合理 / video≤2）：<br><code>cd video-studio &amp;&amp; FFMPEG_BIN=~/.local/ffmpeg-libass/ffmpeg FFPROBE_BIN=~/.local/ffmpeg-libass/ffprobe python evals/video_storyboard_e2e.py</code></li>
+    <li>满意 → commit（Conventional Commit，<code>feat(video-studio): Phase 4 …</code>），然后 Phase 5（运镜）走 <code>/self-pacing phase</code>。</li>
+    <li>有想调的（分镜偏好 / 降级口径 / 持久化）→ 告诉我，在 <code>claude -p</code> 内改 prompt 或调代码。</li>
+  </ol>
+  <p class="tag">确定性核心（预算门、解析容错、pipeline 接线、渲染不回归）已全证绿；只剩生成式 分镜质量需要你的眼睛。</p>
+  </div>
+
+</div>
+</body>
+</html>

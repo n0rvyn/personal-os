@@ -236,6 +236,12 @@ def parse_shotlist(out: str, n_beats: int):
             if "motion_value" in entry:
                 item["motion_value"] = entry["motion_value"]
 
+            # Episode-level color_grade (DP-001=A): keep only on the first entry.
+            # The director outputs this as an episode-wide override; wiring back-
+            # propagates it from result[0] into ctx["beats"][0] then applies it.
+            if i == 0 and entry.get("color_grade"):
+                item["color_grade"] = str(entry["color_grade"]).strip()
+
             # chart spec: required on chart beats, dropped on all others.
             if vt == "chart":
                 chart = entry.get("chart")

@@ -112,3 +112,31 @@ def test_parse_shotlist_chart_beat_empty_type_rejected():
     assert isinstance(result, str), (
         f"expected error string for empty chart.type, got: {result!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 3-tests: color_grade on first beat preserved (DP-001 parse contract)
+# ---------------------------------------------------------------------------
+
+def test_parse_shotlist_keeps_color_grade_on_first_beat():
+    """First beat with color_grade='暖金' → result[0]['color_grade'] == '暖金'.
+
+    This locks the DP-001 parse contract: parse_shotlist must NOT strip
+    color_grade from the first entry (episode-level director override).
+
+    FAILS before Task 3-impl (parse_shotlist drops all unknown fields).
+    PASSES after Task 3-impl (white-lists color_grade on first entry only).
+    """
+    beat = {
+        "visual_type": "still",
+        "shots": [{"prompt": "晨跑跑道全景", "shot_type": "全景", "with_character": False}],
+        "keywords": [],
+        "color_grade": "暖金",
+    }
+    raw = _make_raw([beat])
+    result = storyboard.parse_shotlist(raw, 1)
+    assert isinstance(result, list), f"expected list, got: {result!r}"
+    assert result[0].get("color_grade") == "暖金", (
+        f"color_grade='暖金' on first beat must survive parse_shotlist, "
+        f"got result[0]: {result[0]!r}"
+    )

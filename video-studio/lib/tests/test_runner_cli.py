@@ -80,12 +80,28 @@ def test_cli_help_exits_zero():
     assert exc.value.code == 0
 
 
-def test_cli_missing_config_arg_errors():
-    """--config is required → argparse exits non-zero (code 2)."""
+def test_cli_missing_config_arg_does_not_raise_systemexit2():
+    """--config is now optional; omitting it triggers config discovery.
+    When no config is found (ConfigNotFound), runner returns 1 (not argparse
+    SystemExit(2)).  This test was updated from the old 'required' behaviour
+    by Task 2-impl (Phase 3 config-discovery refactor).
+    """
     from lib.runner import _cli
-    with pytest.raises(SystemExit) as exc:
-        _cli([])
-    assert exc.value.code != 0
+    # Without any config files on disk, discovery raises ConfigNotFound → rc=1.
+    # Must NOT raise SystemExit(2) (argparse "required argument missing").
+    try:
+        rc = _cli([])
+    except SystemExit as e:
+        if e.code == 2:
+            raise AssertionError(
+                "--config must be optional (required=False); "
+                "argparse exited with code 2 (missing required argument)"
+            ) from e
+        # Any other exit is acceptable (e.g. SystemExit(0) from --help)
+    else:
+        assert rc == 1, (
+            f"Without a config, _cli([]) must return 1 (ConfigNotFound), got {rc}"
+        )
 
 
 def test_cli_bad_config_path_fails_closed(tmp_path):

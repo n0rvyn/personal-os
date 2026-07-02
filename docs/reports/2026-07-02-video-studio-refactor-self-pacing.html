@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'">
+<title>video-studio 重构 · self-pacing 收尾报告 · 2026-07-02</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--ink:#e6e8ec;--dim:#9aa3b2;--line:#2a2f3a;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--accent:#58a6ff;--code:#11141a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px;}
+  h1{font-size:28px;margin:0 0 4px;}
+  .sub{color:var(--dim);margin-bottom:32px;}
+  h2{font-size:21px;margin:38px 0 12px;padding-top:18px;border-top:1px solid var(--line);}
+  h3{font-size:17px;margin:22px 0 8px;color:var(--accent);}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0;}
+  code{background:var(--code);padding:2px 6px;border-radius:4px;font:14px/1.5 "SF Mono",Menlo,monospace;color:#c9d1d9;}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font:13px/1.6 "SF Mono",Menlo,monospace;}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px;}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top;}
+  th{background:#212631;color:var(--dim);font-weight:600;}
+  .ok{color:var(--ok);} .bad{color:var(--bad);} .warn{color:var(--warn);} .dim{color:var(--dim);}
+  .pill{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12.5px;border:1px solid var(--line);}
+  .pill.ok{border-color:var(--ok);color:var(--ok);} .pill.bad{border-color:var(--bad);color:var(--bad);} .pill.warn{border-color:var(--warn);color:var(--warn);}
+  ul{margin:8px 0;padding-left:22px;} li{margin:5px 0;}
+  blockquote{margin:10px 0;padding:8px 16px;border-left:3px solid var(--accent);color:var(--dim);background:#161a21;}
+  details{margin:10px 0;} summary{cursor:pointer;color:var(--accent);}
+  .tag{font-size:12px;color:var(--dim);}
+  @media print{body{background:#fff;color:#000;} .card,pre,code{background:#f5f5f5;} .wrap{max-width:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>video-studio 重构 · self-pacing 收尾报告</h1>
+  <div class="sub">2026-07-02 · 插件/内容项目分离 · guide 模式自主跑 4 阶段</div>
+
+  <div class="card"><b>一句话结论：</b>4 个阶段全部 code-clean 完成，<b class="ok">660 passed / 3 skipped / 0 failed</b>；期间自主跑抓出并修掉 4 个「绿套件藏不住的真 bug」。<b class="warn">但改动全部未提交</b>，且每阶段的「真跑/付费/破坏性」环节都留作 <span class="pill warn">user-gated</span>，需你亲自跑。</div>
+
+  <h2>做了什么（4 阶段）</h2>
+  <table>
+    <tr><th>Phase</th><th>交付</th><th>状态</th></tr>
+    <tr><td><b>1 视觉三维解耦</b></td><td>把 <code>grade.py</code> 揉成一坨的 look 拆成两独立维度：<b>画风</b>(art style，开放词表 ART_STYLES)+ <b>色调</b>(color grade，COLOR_GRADES)；syllabus 加模块级 <code>art_style</code>+系列级 <code>color_grade</code>；<code>wiring</code> 移除「叙事文案当画风」错读；退役 <code>cfg.style</code>；导演可选色调经 parse→back-prop→helper 全链覆盖；写手/导演 persona 软化叙事纲领。</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><b>2 模块级画风+人物</b></td><td>人物参考图从「整剧一张」改「每模块一张」；<code>select_next</code> 模块级优先/系列级兜底；纯逻辑 <code>prepare_module</code>（问画风→生成人物图→写回，依赖注入可测）；新 <code>video-module-setup</code> skill（live 交互+付费=user-gated）。</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><b>3 配置发现+迁移</b></td><td>发现级联：显式&gt;env&gt;项目根&gt;用户级(<code>~/.claude/video-studio/</code>)，逐键深合并；<code>ConfigNotFound</code>；runner <code>--config</code> 改 optional 让发现可达；<code>scaffold_content_project</code> + <code>migrate_legacy_config</code>（拆机器级/内容级+搬 syllabus/cursor，不覆盖不删旧）；config.example 分层。</td><td><span class="pill ok">done</span></td></tr>
+    <tr><td><b>4 复位当前期</b></td><td><code>reset_current</code>（advance 的对称逆，含 parked-cursor 特判）+ <code>archive_episode_output</code>（旧输出移 <code>.archive/{seq}-{slug}-{n}</code> 不覆盖）+ 新 <code>video-reset</code> skill（破坏性，确认门）。</td><td><span class="pill ok">done</span></td></tr>
+  </table>
+
+  <h2>你拍板的决策</h2>
+  <table>
+    <tr><th>DP</th><th>选择</th><th>理由</th></tr>
+    <tr><td>DP-001 <code>cfg.style</code> 处置</td><td><b>退役</b></td><td>色调默认已在系列级，config 级冗余、双头漂移</td></tr>
+    <tr><td>DP-001(P1) 导演色调覆盖</td><td><b>A 本阶段接上</b></td><td>符合已确认 dev-guide（色调流回渲染层放 P1）；覆盖你 defer 的推荐</td></tr>
+    <tr><td>DP-002 模块起始交互</td><td><b>A 独立 skill</b></td><td>单一职责、与 Stage0 解耦（self-pacing 自动采纳 recommended）</td></tr>
+    <tr><td>DP-003 真配置位置</td><td><b>B 迁移到 ~/.claude</b></td><td>按原三层设计规范化；提供 migrate 工具（不覆盖不删旧）</td></tr>
+    <tr><td>执行模式</td><td><b>guide 全自动</b></td><td>4 阶段一口气跑，只在阻断/严重/付费停</td></tr>
+  </table>
+
+  <h2>期间停下的每一次（自主跑抓 bug 的核心价值）</h2>
+  <p class="dim">这几个都是「单测全绿、真路径/集成才崩」的坑——正是你项目记忆里被咬过多次的那一类。自主跑 + 对抗式 verify/review 把它们逐个逼了出来。</p>
+  <table>
+    <tr><th>阶段</th><th>问题</th><th>根因</th><th>处置</th></tr>
+    <tr><td>P1 计划</td><td>导演色调覆盖数据流</td><td>producer 无 consumer；连 3 轮 verify 逐层更深（放错步→parse 白名单剥字段→假绿测试）</td><td>移到 <code>make_storyboard_dispatch</code>、打通 parse→back-prop→helper 全链、真集成测试</td></tr>
+    <tr><td>P1 review</td><td><b>MF-1 真路径崩</b></td><td><code>Selection</code> 缺 <code>color_grade</code> 字段，wiring:351 读它 → 真 syllabus 路径 AttributeError；604 绿因 test 用 SimpleNamespace mock 偏离真 dataclass（假绿）</td><td>加字段+select_next 传值+断言堵假绿（你「修了继续」）</td></tr>
+    <tr><td>P2 执行</td><td><code>setup_module</code> 6 errors</td><td>函数名撞 pytest 保留 xUnit hook 名 → 被当 fixture 调</td><td>重命名 <code>prepare_module</code>；又露出 test helper Episode 缺字段，一并修（你「改名之后继续」）</td></tr>
+    <tr><td>P3 计划</td><td>runner 不可达 + 真配置 strand</td><td>runner <code>--config required=True</code> 使发现永不触发；真配置在 <code>~/.video-studio/</code> 而设计指向 <code>~/.claude/</code></td><td>runner optional + DP-003=B 迁移工具</td></tr>
+    <tr><td>P3 计划(v2)</td><td>migrate 丢 <code>budget</code></td><td>budget 是 required section 却不在任一迁移桶 → 迁移后 load 崩</td><td>budget 入机器桶 + 并集覆盖全键回归测试</td></tr>
+    <tr><td>P3 review</td><td><b>M1 迁移指针悬空</b></td><td>migrate 不改写 syllabus_path/cursor_path，真配置是绝对路径 → 迁移后仍指旧目录、删旧即崩；空指针 fixture 藏 bug</td><td>改写指针+拷进 .video-studio/+非空 fixture+回归测试（你「fix and go ahead」）</td></tr>
+    <tr><td>P4 计划</td><td>reset parked-cursor no-op</td><td>advance 把末期做完后 cursor 停越界 → reset 按 idx 匹配不到 → 静默 no-op（正是「复位刚做完末期」用例）</td><td>parked 特判(从 total-1 扫)+末期 shield 测试</td></tr>
+    <tr><td>P4 review</td><td>skill 漏确认门</td><td>video-reset <code>allowed-tools</code> 漏 <code>AskUserQuestion</code>（它自己的破坏性确认）</td><td>补 AskUserQuestion（零判断 frontmatter 一行，直接修）</td></tr>
+  </table>
+
+  <h2>验证门</h2>
+  <div class="card">
+    <p><b>全量单测（主会话亲跑，非 sub-agent claim）：</b> <span class="pill ok">660 passed · 3 skipped · 0 failed</span>（基线开跑时 576；净增 ~84 测试）</p>
+    <p><b>关键点亲验：</b></p>
+    <ul>
+      <li class="ok">✅ 画风开放词表真生效（未知画风名不回落默认）；画风/色调两维独立</li>
+      <li class="ok">✅ 导演色调全链集成测试驱动真 <code>make_storyboard_dispatch</code>（仅 fake persona），非预填假绿</li>
+      <li class="ok">✅ MF-1 崩点在真 <code>Selection</code> 上不再 AttributeError</li>
+      <li class="ok">✅ 迁移键并集覆盖 load_config 全部键（budget 在机器桶）、指针重写进 content_root</li>
+      <li class="ok">✅ parked-cursor 末期复位亲验：advance→cursor(1,0)→reset→ep pending+cursor(0,0)</li>
+    </ul>
+    <p class="tag">3 skipped = 付费 smoke（真 provider 调用），本轮不跑。</p>
+  </div>
+
+  <h2 class="warn">⚠️ 待你亲自做的（user-gated + 未提交）</h2>
+  <div class="card">
+    <p>self-pacing 硬规：付费、真实交互、动真文件/状态的环节不 AFK 自跑。以下留给你：</p>
+    <table>
+      <tr><th>项</th><th>为什么 gated</th></tr>
+      <tr><td><b>P1 真 syllabus 路径 <code>--dry</code> E2E</b></td><td>走 syllabus 路径要派发 script+director persona=付费；导演色调链至今没在真路径跑过（MF-1 之前崩、之后靠集成测试证）</td></tr>
+      <tr><td><b>P2 模块画风锁定 live</b></td><td>AskUserQuestion 交互 + Doubao 出人物图=付费</td></tr>
+      <tr><td><b>P3 迁移真 <code>~/.video-studio/</code></b></td><td>动你正在用的真配置+进度(ep002)；migrate 工具不覆盖不删旧，需你跑 + 确认后自行清旧</td></tr>
+      <tr><td><b>P4 真复位</b></td><td>破坏性：动真输出目录 + 游标</td></tr>
+      <tr><td class="bad"><b>提交（commit）</b></td><td>整轮 4 阶段改动 + 这些天的其它未提交工作全在工作区（红档 churn），<b>一行未提交</b></td></tr>
+    </table>
+  </div>
+
+  <h2>遗留 / 建议（nice-to-have，defer）</h2>
+  <ul>
+    <li>P2：<code>test_select_next_style_empty</code> 把 art-style resolver 用在 <code>sel.style</code>(叙事字段)而非 <code>sel.art_style</code>（两者皆空才过，测错字段）；video-module-setup 措辞润色。</li>
+    <li>P3：scaffold 骨架 syllabus_path/cursor_path 留空（跑 syllabus 模式会静默落 fixture 模式）；config.example 相对路径 vs scaffold 位置漂移。</li>
+    <li>P4：多期 parked reset 缺测试覆盖（逻辑已对）；skill parked+no-done 理论 IndexError（正常流不可达，加 NO_DONE_EPISODE 守卫更稳）。</li>
+  </ul>
+
+  <h2>下一步建议</h2>
+  <div class="card">
+    <ol>
+      <li>先 <b>commit</b> 这一轮（4 阶段 + 之前的画质修复等）——分组 or 一把梭，你定。</li>
+      <li>想真出片：先按 P3 迁移工具把 <code>~/.video-studio/</code> 搬到新方案（或先用显式 <code>--config</code> 跑，迁移随后），再 P2 给模块锁画风+人物，最后跑一次真 <code>--dry</code> 验导演色调链。</li>
+      <li>nice-to-have 攒一个 cleanup 轮统一收。</li>
+    </ol>
+  </div>
+
+  <div class="sub" style="margin-top:40px">运行日志（真相源）: <code>.claude/self-pacing/video-studio-refactor.md</code> · 计划: <code>docs/06-plans/2026-07-02-video-studio-p{1,2,3,4}-*.md</code> · dev-guide: <code>docs/06-plans/2026-07-02-video-studio-refactor-dev-guide.md</code></div>
+
+</div>
+</body>
+</html>

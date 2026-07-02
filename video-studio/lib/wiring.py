@@ -343,20 +343,15 @@ def build_step_fns(
 
     # ---- 3: extract — 3-way dispatch: doc_refs > VIDEO_PDF > fixture ----
     def step_extract(step, ctx, scratch):
-        # Resolve the series look once — three-level fallback:
-        #   module.style (selection.style) > config.style > SERIES_LOOK default.
-        # Set ctx["look"] + ctx["grade_vf"] unconditionally so doc / PDF / fixture
-        # all provision them. (Phase 7 fix: it used to live ONLY in the fixture
-        # branch, so the doc-mode render path KeyError'd at gen_still.)
-        _module_style = (selection.style if selection is not None else None) or ""
-        look = grade.resolve_look(_module_style or cfg.style)
-        ctx["look"] = look
-        ctx["grade_vf"] = grade.grade_filter(look)
-        # Late-bind: set seams.style_prefix so ALL three gen lines (character_ref,
-        # still, video) use the same look prefix — must happen before _ensure_ref_url
+        # Resolve art style and color grade independently (two orthogonal dims).
+        # Set seams.style_prefix + ctx["grade_vf"] unconditionally so doc / PDF / fixture
+        # paths all provision them. Late-bind happens here (before _ensure_ref_url)
         # since gen_character_ref is called from within step_extract itself.
-        seams.style_prefix = grade.style_prefix(look)
-        log(f"[grade] series look = {look}")
+        _art_style = (selection.art_style if selection is not None else "") or ""
+        _color_grade = (selection.color_grade if selection is not None else "") or ""
+        seams.style_prefix = grade.resolve_art_style(_art_style)
+        ctx["grade_vf"] = grade.resolve_color_grade(_color_grade or None)
+        log(f"[grade] art_style={_art_style!r} color_grade={_color_grade!r}")
 
         def _ensure_ref_url(prompt):
             # character_ref → subject_reference URL, shared across all extract
@@ -984,6 +979,18 @@ def make_script_dispatch(
     return dispatch
 
 
+def apply_director_color_grade(ctx: dict, beats: list) -> None:
+    """Override ctx['grade_vf'] with the director's episode-level color_grade.
+
+    Called after back-prop in make_storyboard_dispatch.  If the director assigned
+    a color_grade on the first beat (DP-001=A), resolve it and override the series
+    default already stored in ctx['grade_vf'].  No-op when absent.
+    """
+    cg = beats[0].get("color_grade") if beats else None
+    if cg:
+        ctx["grade_vf"] = grade.resolve_color_grade(cg)
+
+
 def make_storyboard_dispatch(
     cfg: VideoStudioConfig,
     *,
@@ -1105,6 +1112,11 @@ def make_storyboard_dispatch(
                     ctx["beats"][i].setdefault("video_prompt", _shots[0].get("prompt", ""))
             if item.get("chart"):
                 ctx["beats"][i]["chart"] = item["chart"]
+
+        # Copy episode-level color_grade from director's first beat (DP-001=A).
+        if result and result[0].get("color_grade"):
+            ctx["beats"][0]["color_grade"] = result[0]["color_grade"]
+        apply_director_color_grade(ctx, ctx["beats"])
 
         # Build ctx["sb"] (shots + keywords, 1:1 with beats)
         ctx["sb"] = [{"shots": item["shots"], "keywords": item["keywords"]}

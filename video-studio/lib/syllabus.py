@@ -48,6 +48,8 @@ class Module:
     name: str
     style: str
     episodes: List[Episode]
+    art_style: str = ""
+    character_ref: str = ""
 
 
 @dataclass
@@ -55,6 +57,7 @@ class Syllabus:
     book: str
     character_ref: str
     modules: List[Module]
+    color_grade: str = ""
 
 
 @dataclass
@@ -123,6 +126,8 @@ def _parse_module(raw: dict, idx: int) -> Module:
         name=str(raw["name"]),
         style=str(raw.get("style", "")),
         episodes=episodes,
+        art_style=str(raw.get("art_style", "")),
+        character_ref=str(raw.get("character_ref", "")),
     )
 
 
@@ -159,6 +164,7 @@ def load_syllabus(path: Path) -> Syllabus:
         book=str(data["book"]),
         character_ref=str(data.get("character_ref", "")),
         modules=modules,
+        color_grade=str(data.get("color_grade", "")),
     )
 
 
@@ -168,10 +174,13 @@ def save_syllabus(syllabus: Syllabus, path: Path) -> None:
     data = {
         "book": syllabus.book,
         "character_ref": syllabus.character_ref,
+        "color_grade": syllabus.color_grade,
         "modules": [
             {
                 "name": m.name,
                 "style": m.style,
+                "art_style": m.art_style,
+                "character_ref": m.character_ref,
                 "episodes": [
                     {
                         "title": ep.title,
@@ -317,9 +326,11 @@ class Selection:
 
     All fields are consumed either by the driver (seq/slug → prepare_render) or
     by step_cursor_read (doc_refs/source/verify_status/topic/learning_goal/
-    character_ref → ctx). character_ref is series-level (same face across the
-    whole column); carried so doc-mode extract can provision ref_url.
-    style carries the module-level look name (empty string = use config default).
+    character_ref → ctx). character_ref is module-level when set, otherwise falls
+    back to series-level; carried so doc-mode extract can provision ref_url.
+    style carries the module-level narrative text (legacy; not a look name).
+    art_style carries the module-level 画风 (art style); color_grade carries the
+    series-level 色调 default. Both empty = fall back to grade.py defaults.
     """
     episode: Episode
     seq: str
@@ -331,6 +342,8 @@ class Selection:
     topic: str
     character_ref: str
     style: str = ""
+    art_style: str = ""
+    color_grade: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -371,8 +384,10 @@ def select_next(cfg: Any) -> Optional[Selection]:
         verify_status=episode.verify_status,
         learning_goal=episode.learning_goal,
         topic=episode.title,
-        character_ref=syllabus.character_ref,
+        character_ref=(module.character_ref or syllabus.character_ref),
         style=module.style,
+        art_style=module.art_style,
+        color_grade=syllabus.color_grade,
     )
 
 
@@ -447,6 +462,7 @@ def promote_draft(
         book=str(data["book"]),
         character_ref=str(data.get("character_ref", "")),
         modules=modules,
+        color_grade=str(data.get("color_grade", "")),
     )
 
     # All validation passed — write files atomically
@@ -503,4 +519,65 @@ def advance(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]:
     # No subsequent pending episode — park cursor past end
     c2.module_idx = len(s2.modules)
     c2.episode_idx = 0
+    return s2, c2
+
+
+# ---------------------------------------------------------------------------
+# reset_current
+# ---------------------------------------------------------------------------
+
+
+def reset_current(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]:
+    """Rewind one done step: find the most recent done episode at or before the
+    cursor and mark it pending again, moving the cursor back to it.
+
+    Pure-function style: returns new ``(Syllabus, Cursor)`` objects; the
+    originals are not mutated.
+
+    Symmetric to :func:`advance`:
+    - ``advance`` marks current episode done and moves cursor forward.
+    - ``reset_current`` finds the nearest done episode at or before cursor and
+      moves cursor back to it, marking it pending.
+
+    Special case — parked cursor: when ``advance`` finishes the very last
+    episode the cursor is parked at ``module_idx = len(modules)``.  In that
+    state there is no matching episode, so we start the backward scan from the
+    last episode (global index ``total - 1``).
+
+    If there are no done episodes at all, returns deep copies of the originals
+    unchanged.
+    """
+    # Deep-copy to guarantee no mutation of originals
+    s2: Syllabus = copy.deepcopy(syllabus)
+    c2: Cursor = copy.deepcopy(cursor)
+
+    # Build flat list of (module_idx, episode_idx) pairs
+    flat: List[Tuple[int, int]] = []
+    for m_i, module in enumerate(s2.modules):
+        for e_i in range(len(module.episodes)):
+            flat.append((m_i, e_i))
+
+    total = len(flat)
+    if total == 0:
+        return s2, c2
+
+    # Determine the starting index for backward scan.
+    # If cursor is parked (module_idx >= len(modules)) or matches no episode,
+    # start from the very last episode.
+    start_global: int = total - 1
+    for gi, (m_i, e_i) in enumerate(flat):
+        if m_i == cursor.module_idx and e_i == cursor.episode_idx:
+            start_global = gi
+            break
+
+    # Scan backward from start_global (inclusive) for the nearest done episode
+    for gi in range(start_global, -1, -1):
+        m_i, e_i = flat[gi]
+        if s2.modules[m_i].episodes[e_i].status == "done":
+            s2.modules[m_i].episodes[e_i].status = "pending"
+            c2.module_idx = m_i
+            c2.episode_idx = e_i
+            return s2, c2
+
+    # No done episode found — return deep copies unchanged
     return s2, c2

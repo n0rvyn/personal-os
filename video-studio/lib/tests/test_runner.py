@@ -843,3 +843,111 @@ def test_ctx_propagates_across_steps(tmp_path):
         "ctx must carry values set by prior steps; "
         f"got ctx keys: {list(observed_ctx[0])}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 10) CLI argparse: --config optional (Phase 3 config-discovery)
+# ---------------------------------------------------------------------------
+
+def test_cli_argparse_no_config_does_not_raise_systemexit():
+    """runner._cli with no --config must NOT raise SystemExit (argparse must
+    not treat --config as required).
+
+    This test FAILS before Task 2-impl changes --config to required=False.
+    """
+    from lib.runner import _cli
+    from unittest.mock import patch, MagicMock
+
+    # Intercept load_config so we don't need a real config file.
+    fake_config = MagicMock()
+    fake_config.ffmpeg = MagicMock()
+    fake_config.ffmpeg.ffmpeg_bin = "/usr/bin/ffmpeg"
+
+    with patch("lib.config.load_config", return_value=fake_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_next", return_value=None), \
+         patch("lib.runner.run_pipeline", return_value={"status": "done"}):
+        # This must not raise SystemExit due to missing required --config.
+        try:
+            _cli([])  # no --config arg
+        except SystemExit as e:
+            if e.code == 2:
+                raise AssertionError(
+                    "--config must be optional (required=False); "
+                    "argparse exited with code 2 (missing required argument)"
+                ) from e
+            # Any other exit code (0, 1) is acceptable here —
+            # the argparse error is the only forbidden failure.
+
+
+def test_cli_argparse_no_config_calls_load_config_with_none():
+    """When --config is not passed, _cli must call load_config(None) so that
+    the discovery logic in load_config is triggered.
+
+    This test FAILS before Task 2-impl changes runner to pass args.config (None)
+    instead of requiring a value.
+    """
+    from lib.runner import _cli
+    from unittest.mock import patch, MagicMock, call
+
+    fake_config = MagicMock()
+    fake_config.ffmpeg = MagicMock()
+    fake_config.ffmpeg.ffmpeg_bin = "/usr/bin/ffmpeg"
+
+    captured_calls: list = []
+
+    def capturing_load_config(path=None):
+        captured_calls.append(path)
+        return fake_config
+
+    with patch("lib.config.load_config", side_effect=capturing_load_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_next", return_value=None), \
+         patch("lib.runner.run_pipeline", return_value={"status": "done"}):
+        try:
+            _cli([])
+        except SystemExit as e:
+            if e.code == 2:
+                raise AssertionError(
+                    "--config must be optional; argparse SystemExit(2) means "
+                    "required=True is still in place"
+                ) from e
+
+    assert len(captured_calls) >= 1, "load_config must have been called"
+    assert captured_calls[0] is None, (
+        f"load_config must be called with None when --config is absent, "
+        f"got {captured_calls[0]!r}"
+    )
+
+
+def test_cli_argparse_explicit_config_passes_path():
+    """When --config /some/path.yaml is passed, _cli must call
+    load_config('/some/path.yaml') (explicit path takes priority over discovery).
+    """
+    from lib.runner import _cli
+    from unittest.mock import patch, MagicMock
+
+    fake_config = MagicMock()
+    fake_config.ffmpeg = MagicMock()
+    fake_config.ffmpeg.ffmpeg_bin = "/usr/bin/ffmpeg"
+
+    captured_calls: list = []
+
+    def capturing_load_config(path=None):
+        captured_calls.append(path)
+        return fake_config
+
+    with patch("lib.config.load_config", side_effect=capturing_load_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_next", return_value=None), \
+         patch("lib.runner.run_pipeline", return_value={"status": "done"}):
+        try:
+            _cli(["--config", "/fake/config.yaml"])
+        except SystemExit:
+            pass  # exit 0 is acceptable
+
+    assert len(captured_calls) >= 1, "load_config must have been called"
+    assert captured_calls[0] == "/fake/config.yaml", (
+        f"load_config must be called with the explicit path, "
+        f"got {captured_calls[0]!r}"
+    )

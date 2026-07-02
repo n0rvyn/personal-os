@@ -1,11 +1,25 @@
-# video-studio config example
+# video-studio config example — 分层配置
 #
-# Copy to video-studio.yaml (or point VIDEO_STUDIO_CONFIG to any path).
-# API credentials go in shell env, NOT here:
+# 配置分两层，分开存放：
+#
+# --- 机器级（~/.claude/video-studio/config.yaml） ---
+# 机器相关设置（ffmpeg 路径、LLM 供应商、语音 ID、渲染参数、预算参数）
+# 写一次，所有内容项目共用。
+# 放在 ~/.claude/video-studio/config.yaml
+#
+# --- 内容级（项目 .video-studio/config.yaml） ---
+# 每个内容项目独立的设置（输出目录、syllabus 路径、人物参考图、书系名）
+# 放在各内容项目根目录的 .video-studio/config.yaml
+#
+# API credentials 放 shell env，不放这里：
 #   Doubao/火山方舟: ARK_API_KEY
 #   MiniMax:        MINIMAX_API_KEY  MINIMAX_GROUP_ID
 #
-# output_dir must exist on disk before running. video-studio will NOT create it.
+# output_dir 必须在磁盘上先建好。video-studio 不会自动创建。
+
+# =============================================================================
+# 机器级（写到 ~/.claude/video-studio/config.yaml）
+# =============================================================================
 
 render:
   width: 1920
@@ -33,19 +47,29 @@ budget:
 
 ffmpeg:
   # Must be a libass-enabled build for subtitle burning.
-  # Example static build: ~/.local/ffmpeg-libass/ffmpeg
-  # Set FFMPEG_BIN in shell env, or use this key.
-  ffmpeg_bin: /usr/local/bin/ffmpeg
-  ffprobe_bin: /usr/local/bin/ffprobe
+  # Recommended static build: ~/.local/ffmpeg-libass/ffmpeg
+  #   brew install ffmpeg does NOT include libass by default.
+  #   Download libass-enabled static binary and point here.
+  ffmpeg_bin: ~/.local/ffmpeg-libass/ffmpeg
+  ffprobe_bin: ~/.local/ffmpeg-libass/ffprobe
+
+# =============================================================================
+# 内容级（写到 <内容项目>/.video-studio/config.yaml）
+# =============================================================================
 
 # Character reference image for subject-consistent video (Stage 0 artifact).
 # Path to a portrait image of the on-screen character.
 # Not existence-checked at config load time — OK if not yet generated.
 character_ref: /path/to/character-ref.jpg
 
-# Visual style preset name (Phase 6 artifact). Used by the director agent.
-style: cinematic
-
 # Base output directory — MUST exist on disk before running.
 # Subdirectories (episodes/, syllabus/, state/) are auto-created under it.
 output_dir: /path/to/video-studio-output
+
+# Syllabus and cursor paths (relative to content project root, or absolute).
+# scaffold_content_project() fills these automatically.
+syllabus_path: syllabus/runetic-training-science.yaml
+cursor_path: syllabus/runetic-training-science_cursor.yaml
+
+# Book series identifier (matches syllabus/source/<book>/ directory name).
+book_series: runetic-training-science

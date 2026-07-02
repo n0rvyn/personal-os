@@ -11,6 +11,29 @@ allowed-tools:
 
 `/video-plan` 是 Stage 0 课程大纲规划入口。判断归 AI（planner persona），机械存盘/校验/游标初始化归 `lib/syllabus.promote_draft`（不靠 Claude 自律）。
 
+## 前置：确认内容项目存在
+
+`/video-plan` 在内容项目根目录运行（内含 `.video-studio/config.yaml`）。
+若找不到配置（`ConfigNotFound`），询问用户：
+
+> 找不到内容项目配置。请选择：
+> A) 在当前目录建内容项目（scaffold）
+> B) 把旧 `~/.video-studio/` 迁移到新方案（见 `/video-make` 迁移流程）
+
+**选 A**：
+
+```bash
+cd /path/to/new-content-project
+python3 -c "
+from pathlib import Path
+from lib.content_project import scaffold_content_project
+scaffold_content_project(Path('.'), book='<书系名>')
+print('DONE')
+"
+```
+
+脚手架建好并填写 `.video-studio/config.yaml` 后再重跑 `/video-plan`。
+
 ## 步骤
 
 ### ① 收集快照 docs + 确认书系名

@@ -18,6 +18,7 @@ podcast-studio 的术语表。多数论文线条目的 code identifier 标 `(pla
 | 线 / Line | line-registry in `lib/runner.py` (planned) | 把若干 show 归到一条线；一条线有自己的拓扑/人设/评分尺/连续性。引擎按线注册 | "show"(线≠档), "频道" |
 | 档 / show | `--show morning\|evening\|papers` | 一档具体节目；多个 show 可属同一条线（早晚间同属观点线） | "line"(档≠线) |
 | 观点线 / Opinion line | `lib/pipeline.py`, `agents/` | 早间+晚间所在的线：vault-leads、观点优先、反同质化 | — |
+| 论点账本 / thesis-ledger | `lib/thesis_ledger.py`, `state/thesis-ledger.yaml`, `agents/thesis-distiller.md` | 观点线反同质化的**论点层**跨期记忆，与 covered-ground（装置层）平级：记每期的持久论点陈述 + 每期是否推进该论点(advanced)；判"同一论点被重讲但没推进"。装置换说法≠重复，论点原地重讲=重复 | "covered-ground"(那是装置层), "paper-log"(那是论文线、无论点/无 bets), "stance card"(那是每期账;账本是跨期投影) |
 | 论文线 / Paper line | `lib/pipeline_papers.py`, `lib/paperline/`, `agents/papers/` (planned) | AI论文科普所在的线：材料优先、讲清框架、忠实第一、主播观点退场 | — |
 | 引擎 / Engine | `lib/runner.py`(抽线无关后) | 走表/判门/派发/重试/并行/skip/fail_soft/resume 的与线无关执行器；两线共用一份 | "runner"(特指文件), "pipeline" |
 | bundle | line-registry entry (planned) | 一条线交给引擎的零件清单：topology + gate_map + executor_map + editorial_loader + agent_dir | "config", "插件" |
@@ -38,3 +39,5 @@ podcast-studio 的术语表。多数论文线条目的 code identifier 标 `(pla
 | "台账卡"/"stance" 指论文线 | stance card 是观点线含 bets/观点的连续性；论文线无 bets | 论文线说"paper-log" |
 | 单说"评分尺" | 两条线评分尺不同，混说会错配 | 指明"科普评分尺(论文线)"或"四维评分(观点线)" |
 | 单说"档" 当"线"用 | 早晚间是两个档、同一条线；档≠线会让隔离推理错位 | 区分"档(show)"与"线(line)" |
+| "thesis-ledger"/"论点账本" 指论文线 | 论点账本是观点线的论点层跨期记忆（含论点/推进判定）；论文线无论点、用 paper-log | 论文线说"paper-log" |
+| 把"论点账本"和"covered-ground"混用 | 两者故意分层：covered-ground=装置层(比喻/锚)，thesis-ledger=论点层(主张/推进)；混用会让"换说法≠重复、重讲=重复"的边界塌掉 | 指明"装置层(covered-ground)"或"论点层(thesis-ledger)" |

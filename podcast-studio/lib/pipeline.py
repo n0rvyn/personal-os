@@ -108,6 +108,13 @@ must-revise code bridges from the Phase 1 plan):
                                      existing covered-ground.yaml store,
                                      writes the updated store atomically
                                      to output_dir. Fail-soft.
+    20   thesis-distill    agent=thesis-distiller, fail_soft=True (Phase 3) —
+                                     论点账本 night-shift distiller (PEER to 18):
+                                     published.md + stance card + thesis-ledger
+                                     (read-only) → thesis-apparatus.json.
+    21   thesis-ledger-    code, fail_soft=True — folds theses into
+         update                  state/thesis-ledger.yaml (embedding reskin +
+                                     per-episode advanced flag). Fail-soft.
 
 Editorial branches (morning / evening) do NOT change the topology — they
 change the brief the davinci collector reads. So `load_pipeline(show)`
@@ -143,6 +150,7 @@ AGENT_WHITELIST = frozenset({
     "zhijianyuan",
     "scorecard",
     "stance-distiller",
+    "thesis-distiller",
 })
 
 
@@ -648,6 +656,48 @@ def _build_steps() -> list[dict[str, Any]]:
             "agent": None,
             "inputs": [
                 "coveredground-apparatus.json",
+                "vault.output_dir",
+            ],
+            "artifact": None,
+            "gate": None,
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": True,
+        },
+        # --- step 20: thesis-distill (POST-PUBLISH, FAIL-SOFT, Phase 3) ---
+        # 论点账本 night-shift distiller — PEER to coveredground-distill, kept
+        # separate so the装置层 store stays pure. Isolated persona reads the
+        # published body + this episode's stance card + the thesis-ledger
+        # (read-only) and writes `thesis-apparatus.json`: the episode's durable
+        # thesis statement(s), each with the judge's `advanced` verdict
+        # (DP-002=B: 有没有真推进 is a judgment) + bet_ids. Fail-soft.
+        {
+            "name": "thesis-distill",
+            "kind": "agent",
+            "agent": "thesis-distiller",
+            "inputs": [
+                "published.md",
+                "stance-card.yaml",
+                "thesis-ledger.yaml",
+            ],
+            "artifact": "thesis-apparatus.json",
+            "gate": [{"fn": "check_artifact"}],
+            "parallel": None,
+            "retry": None,
+            "skip_when": None,
+            "fail_soft": True,
+        },
+        # --- step 21: thesis-ledger-update (POST-PUBLISH, FAIL-SOFT) ------
+        # Reads `thesis-apparatus.json` from scratch, folds the theses
+        # (embedding reskin) into `state/thesis-ledger.yaml` with per-episode
+        # advanced flag + bet_ids, writes atomically. Fail-soft.
+        {
+            "name": "thesis-ledger-update",
+            "kind": "code",
+            "agent": None,
+            "inputs": [
+                "thesis-apparatus.json",
                 "vault.output_dir",
             ],
             "artifact": None,

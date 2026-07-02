@@ -219,24 +219,31 @@ def _parse_episode_date(ep: Any) -> Optional[_dt.date]:
         return None
 
 
-def _episodes_in_window(
+def _uses_in_window(
     episodes: Iterable[Any],
     today: _dt.date,
     window_days: int,
-) -> list[_dt.date]:
-    """Distinct ISO-parseable episode dates strictly <= today and within
-    `window_days` of today. Future-dated episodes are ignored."""
-    out: set[_dt.date] = set()
+) -> int:
+    """Count distinct (date, show) USES within `window_days` of today.
+
+    Counts each (date, show) tuple separately (NOT deduped to distinct
+    dates): a twice-daily cadence's morning + evening on the SAME date
+    count as TWO uses. This is the
+    count-predicate口径 fix — the old distinct-DATE count collapsed
+    same-day 早晚双更 into one, so an anchor used 3× across 2 dates
+    (加特林: 6/22-morning + 6/22-evening + 6/28-morning) never reached
+    the ≥3 threshold. Future-dated / out-of-window / unparseable episodes
+    are ignored; an episode with a parseable date but no (date,show)
+    signature falls back to counting by (date-iso, None) so it still
+    contributes one use."""
+    seen: set[tuple[str, Any]] = set()
     for ep in episodes:
         d = _parse_episode_date(ep)
-        if d is None:
+        if d is None or d > today or (today - d).days > window_days:
             continue
-        if d > today:
-            continue
-        if (today - d).days > window_days:
-            continue
-        out.add(d)
-    return sorted(out)
+        sig = _episode_signature(ep)
+        seen.add(sig if sig is not None else (d.isoformat(), None))
+    return len(seen)
 
 
 def _distinct_episode_dates(episodes: Iterable[Any]) -> list[_dt.date]:
@@ -287,9 +294,10 @@ def is_stale(
     if not isinstance(episodes, list):
         return False
 
-    # (a) Count predicate — count of distinct dates inside the window.
-    in_window = _episodes_in_window(episodes, td, window_days)
-    if len(in_window) >= 3:
+    # (a) Count predicate — count of distinct (date,show) USES in window.
+    # Same-day morning+evening count as TWO (twice-daily cadence must not
+    # collapse to one date — the 加特林 regression).
+    if _uses_in_window(episodes, td, window_days) >= 3:
         return True
 
     # (b) Recency predicate — distinct dates in the last 3 episodes

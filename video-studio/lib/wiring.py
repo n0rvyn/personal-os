@@ -40,7 +40,7 @@ from lib import episode as episode_mod
 from lib import extract as extract_mod
 from lib import steps as steps_mod
 from lib.config import VideoStudioConfig
-from lib.budget import apply_video_budget
+from lib.budget import apply_video_budget, apply_video_floor
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
 from lib.provenance import build_provenance, stamp_episode_provenance
 from lib.storyboard import parse_shotlist
@@ -50,6 +50,117 @@ SPIKE = PLUGIN_ROOT / ".spike"
 
 BGM_START_VOLUME = 0.12
 MAX_CALIB_ROUNDS = 3
+
+
+# ---------------------------------------------------------------------------
+# Character reference resolution (cross-episode persistence via base64)
+# ---------------------------------------------------------------------------
+
+# Image magic-byte signatures — used to reject a corrupt/non-image file stored as
+# character_ref before we base64-encode it as an image-to-image reference.
+_IMAGE_MAGIC = {
+    b"\x89PNG\r\n\x1a\n": "png",
+    b"\xff\xd8\xff": "jpeg",
+    b"GIF87a": "gif",
+    b"GIF89a": "gif",
+    b"BM": "bmp",
+}
+
+
+def _sniff_image_format(data: bytes) -> str | None:
+    """Return the image format ('png'/'jpeg'/...) from magic bytes, or None if the
+    bytes are not a recognized image (empty / corrupt / non-image file)."""
+    if not data:
+        return None
+    for magic, fmt in _IMAGE_MAGIC.items():
+        if data.startswith(magic):
+            return fmt
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _looks_like_path(s: str) -> str:
+    """True if *s* is meant as a file path (not a natural-language description).
+    A stored character_ref path has a slash / ~ / a known image extension; a
+    prompt description ("一位动漫女教练…") has none of these."""
+    s = s.strip()
+    if s.startswith(("/", "~", "./", "../")) or ("/" in s) or ("\\" in s):
+        return True
+    return s.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"))
+
+
+def resolve_character_ref_url(
+    character_ref: str,
+    cref_out: str,
+    gen_character_ref_fn: Callable[[str, str], str],
+    log: Callable[[str], None],
+    provider: str = "doubao",
+) -> str:
+    """Resolve the image-to-image reference URL for the episode's主讲人物.
+
+    Priority (fixes the character_ref path-vs-prompt contract + 跨集固定):
+      1. SPIKE_REF_PNG + SPIKE_REF_URL env → dev reuse hook (highest).
+      2. ``character_ref`` is an existing, readable IMAGE file:
+         - provider == "doubao" → return a base64 ``data:image/...`` URI (Doubao/Ark
+           accepts base64 as image-to-image ref; verified live for BOTH Seedream
+           (image) and Seedance (S2V video)), so the SAME png locks the face every
+           episode — no external hosting needed. gen is NOT called.
+         - other provider (e.g. MiniMax) → its subject_reference wants a REMOTE URL,
+           not a data URI, so base64 reuse is unsupported: log a warning and fall
+           back to gen_character_ref (returns a real URL; loses exact-face reuse but
+           never silently ships a broken ref). Durable cross-provider reuse needs a
+           hosted URL — deferred.
+      3. ``character_ref`` is a description → use it as the generation prompt.
+         Empty, or a path that doesn't exist / is corrupt → generate with the default
+         prompt "主讲人物" (never feed a raw path string in as a prompt; never crash).
+    """
+    import base64
+
+    ref_png = os.environ.get("SPIKE_REF_PNG")
+    ref_url_env = os.environ.get("SPIKE_REF_URL")
+    if ref_png and ref_url_env:
+        try:
+            shutil.copy(ref_png, cref_out)
+        except OSError:
+            pass
+        log(f"[ref] reusing SPIKE hook {ref_png}")
+        return ref_url_env
+
+    cref = character_ref.strip() if isinstance(character_ref, str) else ""
+    if cref:
+        p = os.path.expanduser(cref)
+        if os.path.isfile(p):
+            # A stored image path. Only Doubao accepts a base64 data-URI ref.
+            if provider != "doubao":
+                log(f"[ref] 持久人物图 base64 复用仅 doubao 支持，provider={provider} 回退生成"
+                    f"（失去精确同脸；跨 provider 复用需托管 URL）")
+                return gen_character_ref_fn("主讲人物", cref_out)
+            try:
+                data = Path(p).read_bytes()
+                fmt = _sniff_image_format(data)
+                if fmt is None:
+                    raise ValueError("not a decodable image")
+                data_uri = f"data:image/{fmt};base64," + base64.b64encode(data).decode("ascii")
+                try:
+                    shutil.copy(p, cref_out)
+                except OSError:
+                    pass
+                log(f"[ref] reusing persistent character_ref {p} (base64 {fmt}, {len(data)} bytes)")
+                return data_uri
+            except (OSError, ValueError) as exc:
+                # Path exists but unreadable/corrupt → graceful fallback to gen.
+                log(f"[ref] persistent character_ref 不可读，回退生成: {exc}")
+                return gen_character_ref_fn("主讲人物", cref_out)
+        if _looks_like_path(cref):
+            # Meant as a path but the file is missing → do NOT use the path string
+            # as a generation prompt (garbage); fall back to the default prompt.
+            log(f"[ref] character_ref 路径不存在，回退默认 prompt: {cref}")
+            return gen_character_ref_fn("主讲人物", cref_out)
+        # Natural-language description → use it as the generation prompt.
+        return gen_character_ref_fn(cref, cref_out)
+    # Empty → default prompt.
+    return gen_character_ref_fn("主讲人物", cref_out)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +329,8 @@ def _chart_content_for_beat(beat: dict, ctx: dict):
             return built
         elif t == "line":
             return ("__line__", params)
+        elif t == "bar":
+            return ("__bar__", params)
         else:
             logging.warning(
                 "[chart] beat %s: unknown chart type %r — 降级为静图，跳过渲染", bid, t
@@ -260,6 +373,8 @@ def _card_configs_for(ctx: dict) -> tuple:
             ctx.get("learning_goal", ""),
             ctx.get("seq", ""),
             subtitle=ctx.get("title_subtitle", ""),
+            channel=ctx.get("channel", ""),
+            module_name=ctx.get("module_name", ""),
         )
         ecfg = cards.build_end_card(
             beats[-1].get("text", "") if beats else "",
@@ -320,6 +435,11 @@ def build_step_fns(
             ctx["learning_goal"] = selection.learning_goal
             ctx["character_ref"] = selection.character_ref
             ctx["seq"] = selection.seq
+            # R2: brand tag inputs — module name (from selection) + channel (from
+            # configured host). _card_configs_for reads these for the title tag.
+            ctx["module_name"] = getattr(selection, "module_name", "")
+            _host = getattr(cfg, "host", None)
+            ctx["channel"] = getattr(_host, "channel", "") if _host is not None else ""
             Path(marker_path).write_text(
                 f"seq={selection.seq}\nslug={selection.slug}\ntopic={selection.topic}",
                 encoding="utf-8",
@@ -354,23 +474,17 @@ def build_step_fns(
         log(f"[grade] art_style={_art_style!r} color_grade={_color_grade!r}")
 
         def _ensure_ref_url(prompt):
-            # character_ref → subject_reference URL, shared across all extract
-            # modes so ref_url is always provisioned before gen_still/gen_video.
-            # Honors the SPIKE_REF_PNG/SPIKE_REF_URL dev reuse hook ($0). NOTE:
-            # within-run only — the provider URL is ephemeral, so cross-episode
-            # same-face reuse is a separate concern (deferred: needs durable host).
+            # Resolve the主讲人物 image-to-image ref. `prompt` is the character_ref
+            # value (may be a stored image PATH → base64 reuse for 跨集同一张脸, a
+            # DESCRIPTION → generate, or empty → default). SPIKE_REF hook still wins.
+            # See resolve_character_ref_url for the full priority + corrupt-file
+            # fallback. This replaces the old within-run-only ephemeral-URL path.
             ep = ctx["ep"]
             cref_out = str(ep["assets_dir"] / "character_ref.png")
-            ref_png = os.environ.get("SPIKE_REF_PNG")
-            ref_url_env = os.environ.get("SPIKE_REF_URL")
-            if ref_png and ref_url_env:
-                shutil.copy(ref_png, cref_out)
-                ref_url = ref_url_env
-                log(f"[ref] reusing provided character_ref {ref_png}")
-            else:
-                ref_url = seams.gen_character_ref(prompt or "主讲人物", cref_out)
-                log(f"[ref] character_ref -> {cref_out} (url={ref_url[:40]})")
-            ctx["ref_url"] = ref_url
+            ctx["ref_url"] = resolve_character_ref_url(
+                prompt or "", cref_out, seams.gen_character_ref, log,
+                provider=getattr(seams, "provider", "doubao"),
+            )
 
         # Doc mode (Phase 6, highest priority): cursor-read seeded doc_refs into ctx.
         doc_refs = ctx.get("doc_refs")
@@ -586,6 +700,17 @@ def build_step_fns(
                 pts = params.get("points", [])
                 log(f"[chart] {bid}: line chart → {title!r} ({len(pts)} points)")
                 media_chart.build_line_chart(title, x_label, y_label, pts, png)
+            elif isinstance(descriptor, tuple) and descriptor[0] == "__bar__":
+                # Bar chart (0-baseline) — discrete/equivalence comparison. params is
+                # a dict (storyboard-parsed): access via .get(), NOT attribute access.
+                params = descriptor[1] or {}
+                title = params.get("title", "")
+                x_label = params.get("x_label", params.get("x", ""))
+                y_label = params.get("y_label", params.get("y", ""))
+                cats = params.get("categories", [])
+                vals = params.get("values", [])
+                log(f"[chart] {bid}: bar chart → {title!r} ({len(cats)} bars)")
+                media_chart.build_bar_chart(title, x_label, y_label, cats, vals, png)
             else:
                 # Table chart (vdot_pace / zone_boundary / fixture).
                 chart_title, chart_rows = descriptor
@@ -909,9 +1034,27 @@ def make_script_dispatch(
                 "本期内容含工程估计/产品设定（非源直出）：念稿时明说「这是工程估计、"
                 "不是源直出」，不把它当科学定论冒充。"
             )
+        # R2: fixed host persona (configurable). When cfg.host.name is set, tell the
+        # writer to open with a greeting-as-hook + sign off, in the given tone.
+        _host = getattr(cfg, "host", None)
+        _host_line = ""
+        if _host is not None and getattr(_host, "name", ""):
+            _ch = getattr(_host, "channel", "")
+            _tone = getattr(_host, "tone", "")
+            _host_line = (
+                f"本期主播：{_host.name}"
+                + (f"（频道：{_ch}）" if _ch else "")
+                + (f"，口吻基调：{_tone}" if _tone else "")
+                + f"。开场第一个 beat 用「大家好，我是{_host.name}"
+                + (f"，欢迎来到{_ch}" if _ch else "")
+                + "」式问候，且问候必须和钩子合一（问候后立刻抛反差/悬念，不许干念"
+                  "「今天我们讲 X」）；结尾最后一个 beat 用主播签名收尾（暖收束+一句留客），"
+                  "整期贯穿该口吻。\n"
+            )
         user_prompt = (
             f"教材原文（只依据这段原文，不外检索）在: {src}\n"
             f"本期主源: {_src_label or '教材原文'}；溯源状态: {_vstatus or '已溯源'}。{_disclosure}\n"
+            f"{_host_line}"
             f"读它，写一期结构化跑步知识脚本 beats。"
         )
         res = dispatch_persona_fn(
@@ -1100,6 +1243,17 @@ def make_storyboard_dispatch(
             threshold=cfg.budget.video_motion_threshold,
         )
 
+        # Video floor safety net: guarantee ≥ video_floor 段真人跑步 b-roll，即使导演
+        # 漏判（抽象期常见）。promote 最佳候选 still（跑步意象 > 人物 > 其它）→ video。
+        _before = sum(1 for e in result if e.get("visual_type") == "video")
+        result = apply_video_floor(result, cfg.budget.video_floor)
+        _after = sum(1 for e in result if e.get("visual_type") == "video")
+        if _after < cfg.budget.video_floor:
+            log(f"[storyboard] video floor 未达成：无跑步候选可提升 "
+                f"(floor={cfg.budget.video_floor}, got={_after})")
+        elif _after > _before:
+            log(f"[storyboard] video floor 安全网：promote {_after - _before} 段 still→video")
+
         # Back-propagate visual_type to ctx["beats"]. For video beats also carry
         # a video_prompt (gen_video reads beat["video_prompt"]) from the director's
         # shot — doc-mode beats don't hand-author it like fixtures do.
@@ -1108,8 +1262,12 @@ def make_storyboard_dispatch(
             ctx["beats"][i]["visual_type"] = item["visual_type"]
             if item["visual_type"] == "video":
                 _shots = item.get("shots") or []
-                if _shots:
-                    ctx["beats"][i].setdefault("video_prompt", _shots[0].get("prompt", ""))
+                # Prefer an explicit video_prompt (e.g. the running shot apply_video_floor
+                # picked via _shot_score) over shots[0] — for a multi-shot beat the running
+                # shot may not be first, and gen_video reads beat["video_prompt"].
+                _vp = item.get("video_prompt") or (_shots[0].get("prompt", "") if _shots else "")
+                if _vp:
+                    ctx["beats"][i].setdefault("video_prompt", _vp)
             if item.get("chart"):
                 ctx["beats"][i]["chart"] = item["chart"]
 

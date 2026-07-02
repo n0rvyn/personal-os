@@ -198,3 +198,56 @@ def test_pdf_mode_retry_then_ground(tmp_path):
                        gates={"check_artifact": check_artifact}, scratch_dir=scratch)
     assert res["status"] == "done"
     assert state["n"] == 2  # one retry then grounded
+
+
+# ---------------- R2: host persona injected into the digest-writer prompt ----------------
+
+def test_host_persona_injected_into_prompt(tmp_path):
+    """When cfg.host.name is set, the dispatched prompt tells the writer to open
+    with a greeting-as-hook + sign off in the given tone."""
+    from types import SimpleNamespace
+    from lib.wiring import make_script_dispatch
+    from lib.config import HostConfig
+
+    captured = {}
+
+    def capturing_persona(agent, prompt, scratch_dir, expected, **kw):
+        captured["prompt"] = prompt
+        out = Path(scratch_dir) / expected
+        # return a grounded beat so the flow completes cleanly (not the focus here)
+        out.write_text(json.dumps({"beats": [
+            {"beat_id": "b0", "text": "示例", "anchor": "配速 5:25"}
+        ]}), encoding="utf-8")
+        return {"ok": True, "artifact_path": str(out)}
+
+    cfg = SimpleNamespace(host=HostConfig(name="卞旸", channel="跑者学堂", tone="亲切"))
+    ctx = {"fulltext": LAYOUT_FT}
+    d = make_script_dispatch(cfg, dispatch_persona_fn=capturing_persona)
+    d("digest-writer", _script_step(), ctx, tmp_path)
+
+    p = captured["prompt"]
+    assert "卞旸" in p and "跑者学堂" in p and "亲切" in p
+    assert "问候" in p and "签名" in p
+
+
+def test_no_host_no_greeting_directive(tmp_path):
+    """No host configured → prompt carries no greeting/signoff directive (cold open)."""
+    from types import SimpleNamespace
+    from lib.wiring import make_script_dispatch
+    from lib.config import HostConfig
+
+    captured = {}
+
+    def capturing_persona(agent, prompt, scratch_dir, expected, **kw):
+        captured["prompt"] = prompt
+        out = Path(scratch_dir) / expected
+        out.write_text(json.dumps({"beats": [
+            {"beat_id": "b0", "text": "示例", "anchor": "配速 5:25"}
+        ]}), encoding="utf-8")
+        return {"ok": True, "artifact_path": str(out)}
+
+    cfg = SimpleNamespace(host=HostConfig())  # empty host
+    ctx = {"fulltext": LAYOUT_FT}
+    d = make_script_dispatch(cfg, dispatch_persona_fn=capturing_persona)
+    d("digest-writer", _script_step(), ctx, tmp_path)
+    assert "本期主播" not in captured["prompt"]

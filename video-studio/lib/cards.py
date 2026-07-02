@@ -53,8 +53,10 @@ DEFAULT_TITLE = {
     "tag": "跑步知识 · EP.01",
     "title": "乳酸阈配速",
     "subtitle": "搞懂这一个概念，训练效率上一个台阶",
-    "bg_prompt": "清晨田径场跑道，一位跑者迎着晨光在画面右侧奔跑的剪影，"
-                 "左侧大量留白晨雾，电影感，冷蓝调",
+    # bg_prompt stays style-agnostic: the art_style prefix (e.g. 简笔日漫) + the
+    # episode color_grade decide the look, so the card matches the body. No baked
+    # "电影感/冷蓝调/剪影" here (those fought the flat-cel anime body — R2 fix).
+    "bg_prompt": "清晨田径场跑道，一位跑步者在画面右侧轻松奔跑，左侧留白，明亮清爽",
 }
 DEFAULT_END = {
     "tag": "本期 3 个要点",
@@ -64,8 +66,8 @@ DEFAULT_END = {
         ["03", "每周 1-2 次阈值跑，单次 20-40 分钟"],
     ],
     "footer": "关注 · 科学跑步不靠感觉      下期 · 跑姿与步频",
-    "bg_prompt": "清晨空旷红色跑道笔直延伸向远方，晨雾弥漫，冷蓝调，"
-                 "大量留白，无人，电影感",
+    # style-agnostic (see DEFAULT_TITLE note): let art_style + color_grade decide look.
+    "bg_prompt": "清晨空旷跑道向远方笔直延伸，两侧留白，明亮清爽，无人",
 }
 
 
@@ -102,8 +104,18 @@ def _truncate(text: str, max_len: int = _SUBTITLE_MAX) -> str:
     return parts[0].strip()[:max_len]
 
 
+def _brand_tag(channel: str, module_name: str, seq: str) -> str:
+    """Title-card tag. With a configured channel → '频道 · 模块短名' (module short
+    = text before the first ：/: separator, keeping the tag bar compact). Without
+    a channel → legacy '跑步知识 · EP.0X' (backward compatible)."""
+    if channel:
+        mod_short = (module_name or "").split("：")[0].split(":")[0].strip()
+        return f"{channel} · {mod_short}" if mod_short else channel
+    return _ep_tag(seq) if seq else DEFAULT_TITLE["tag"]
+
+
 def build_title_card(topic: str, learning_goal: str = "", seq: str = "",
-                     subtitle: str = "") -> dict:
+                     subtitle: str = "", channel: str = "", module_name: str = "") -> dict:
     """Doc-mode title card from real episode metadata (mechanical, faithful).
 
     Subtitle precedence:
@@ -118,7 +130,7 @@ def build_title_card(topic: str, learning_goal: str = "", seq: str = "",
     else:
         sub = _truncate(learning_goal) or DEFAULT_TITLE["subtitle"]
     return {
-        "tag": _ep_tag(seq) if seq else DEFAULT_TITLE["tag"],
+        "tag": _brand_tag(channel, module_name, seq),
         "title": topic or DEFAULT_TITLE["title"],
         "subtitle": sub,
         "bg_prompt": DEFAULT_TITLE["bg_prompt"],
@@ -258,7 +270,27 @@ def _text(style: str, x: int, y: int, s: str, end: str, fade_out: int = 250) -> 
 _TITLE_COL_W = 840
 _TITLE_FS_MAX = 128
 _TITLE_FS_MIN = 56
-_TITLE_SPLIT_RE = re.compile(r"[，,：:、；;]")
+# Split at CJK punctuation AND sentence enders (？！?!。) so a title like
+# "…是伪科学？UESCA…" breaks after the 「？」 instead of mid-word.
+_TITLE_SPLIT_RE = re.compile(r"[，,：:、；;？！?!。]")
+
+
+def _is_ascii_alnum(c: str) -> bool:
+    return c.isascii() and c.isalnum()
+
+
+def _shift_cut_off_ascii_word(title: str, cut: str) -> int:
+    """If a hard split would land inside an ASCII alphanumeric run (e.g. cutting
+    'UESCA' into 'U'|'ESCA'), move the cut to the nearest boundary where the two
+    neighbouring chars are not both ASCII-alnum."""
+    n = len(title)
+    if not (0 < cut < n and _is_ascii_alnum(title[cut - 1]) and _is_ascii_alnum(title[cut])):
+        return cut
+    for d in range(1, n):
+        for c in (cut - d, cut + d):
+            if 0 < c < n and not (_is_ascii_alnum(title[c - 1]) and _is_ascii_alnum(title[c])):
+                return c
+    return cut
 
 
 def _layout_title(title: str) -> tuple:
@@ -266,7 +298,8 @@ def _layout_title(title: str) -> tuple:
 
     A title that fits one line at the max size stays one big line. A longer one
     is split at the punctuation boundary nearest the middle (hard split if it has
-    none) and the font shrinks so the longest line fits the column width.
+    none) and the font shrinks so the longest line fits the column width. A hard
+    split never cuts an ASCII word/number in half (_shift_cut_off_ascii_word).
     """
     title = (title or "").strip()
     per_line_max = _TITLE_COL_W // _TITLE_FS_MAX          # ~6 chars at fs128
@@ -274,8 +307,11 @@ def _layout_title(title: str) -> tuple:
         return [title], _TITLE_FS_MAX
     seps = [m.end() for m in _TITLE_SPLIT_RE.finditer(title)]
     mid = len(title) / 2
-    cut = min(seps, key=lambda i: abs(i - mid)) if seps else round(len(title) / 2)
-    parts = [title[:cut].strip("，,：:、；; "), title[cut:].strip("，,：:、；; ")]
+    if seps:
+        cut = min(seps, key=lambda i: abs(i - mid))
+    else:
+        cut = _shift_cut_off_ascii_word(title, round(len(title) / 2))
+    parts = [title[:cut].strip("，,：:、；;？！?!。 "), title[cut:].strip("，,：:、；;？！?!。 ")]
     lines = [p for p in parts if p] or [title]
     longest = max(len(p) for p in lines)
     fs = max(_TITLE_FS_MIN, min(_TITLE_FS_MAX, _TITLE_COL_W // longest))

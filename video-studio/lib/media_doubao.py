@@ -86,8 +86,29 @@ def _vid_ep() -> str:
     return ep
 
 
-def _gen_image_url(prompt: str, size: str, ref_url: str | None) -> str:
-    """POST /images/generations and return data[0].url, retrying transients."""
+class ContentModerationError(RuntimeError):
+    """Doubao/Ark flagged the generated image as sensitive (permanent 4xx). A
+    sanitized retry already failed. Callers should fall back (not crash the run)."""
+
+
+# Safety prefix for the ONE sanitized retry after a content-moderation flag.
+_SAFE_PREFIX = "健康阳光、正能量、安全内容、适合所有年龄，画面干净、无文字，"
+
+
+def _is_moderation(err: str) -> bool:
+    e = err.lower()
+    return ("sensitivecontent" in e or "sensitive information" in e
+            or "outputimagesensitive" in e)
+
+
+def _gen_image_url(prompt: str, size: str, ref_url: str | None,
+                   _sanitize_attempt: bool = False) -> str:
+    """POST /images/generations and return data[0].url, retrying transients.
+
+    Content-moderation false-positives (OutputImageSensitiveContentDetected) get
+    ONE sanitized retry (safety prefix + drop the ref, which can itself trip the
+    filter). If that also flags, raise ContentModerationError so the caller can
+    fall back for that shot instead of crashing the whole episode."""
     payload: dict = {
         "model": _pic_ep(), "prompt": prompt, "size": size,
         "response_format": "url", "watermark": False,
@@ -108,6 +129,13 @@ def _gen_image_url(prompt: str, size: str, ref_url: str | None) -> str:
             # only transient ones (5xx / timeout / 429 / empty data) are worth a
             # retry. 4xx won't fix itself; re-sending burns time, not quota.
             if " HTTP 4" in last and " HTTP 429" not in last:
+                if _is_moderation(last) and not _sanitize_attempt:
+                    _log("[doubao] 内容审核拦截 — 用净化 prompt 重试一次（去 ref）")
+                    return _gen_image_url(_SAFE_PREFIX + prompt, size, None,
+                                          _sanitize_attempt=True)
+                if _is_moderation(last):
+                    raise ContentModerationError(
+                        f"content moderation (sanitized retry 仍被拦): {last}")
                 raise RuntimeError(f"Seedream permanent error (no retry): {last}")
         if attempt < _IMG_RETRIES - 1:
             _log(f"[doubao] image transient: {last} — retry {attempt + 1}/{_IMG_RETRIES}")

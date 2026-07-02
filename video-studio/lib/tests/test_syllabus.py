@@ -1236,3 +1236,37 @@ def test_select_next_character_ref_both_absent_returns_empty(tmp_path: Path) -> 
     sel = select_next(cfg)
     assert sel is not None
     assert sel.character_ref == ""
+
+
+# ---------------------------------------------------------------------------
+# module_name on Selection (R2: channel · module tag needs the module name)
+# ---------------------------------------------------------------------------
+
+def test_select_next_carries_module_name(tmp_path):
+    """select_next must expose the owning module's name on the Selection so the
+    title card can render a '跑者学堂 · 模块名' brand tag."""
+    from types import SimpleNamespace
+    from lib.syllabus import select_next
+
+    syl = tmp_path / "syllabus.yaml"
+    cur = tmp_path / "cursor.yaml"
+    syl.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ''
+        modules:
+          - name: 训练科学认知刷新：破除流行神话
+            style: educational
+            episodes:
+              - title: 测试期
+                doc_refs: ["01-x.md"]
+                source: UESCA
+                verify_status: "✅"
+                learning_goal: 目标
+                status: pending
+    """), encoding="utf-8")
+    cur.write_text("book: running-science-v1\nmodule_idx: 0\nepisode_idx: 0\n", encoding="utf-8")
+
+    cfg = SimpleNamespace(syllabus_path=str(syl), cursor_path=str(cur))
+    sel = select_next(cfg)
+    assert sel is not None
+    assert sel.module_name == "训练科学认知刷新：破除流行神话"

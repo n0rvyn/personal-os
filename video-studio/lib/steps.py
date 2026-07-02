@@ -26,6 +26,7 @@ Design invariants preserved from spike_run.py:
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from typing import Callable
@@ -253,7 +254,21 @@ def step_render_shots_clip(
     for j, (shot, slice_s) in enumerate(zip(shots, durs)):
         prompt, ref = build_shot_prompt(shot, ref_url)
         spng = os.path.join(scratch, f"{bid}_shot{j}.png")
-        actual_png = gen_still_fn(prompt, ref, spng)
+        try:
+            actual_png = gen_still_fn(prompt, ref, spng)
+        except Exception as exc:  # noqa: BLE001 — one shot's gen failure (e.g. content
+            # moderation) must NOT kill the whole paid episode. Fall back to a neutral
+            # brand-color placeholder via ffmpeg (never fails); the beat keeps its slot.
+            actual_png = os.path.join(scratch, f"{bid}_shot{j}_placeholder.png")
+            run_ff_fn(
+                ["-f", "lavfi", "-i", "color=c=0x1B2A38:s=1920x1080",
+                 "-frames:v", "1", actual_png],
+                f"{bid}-shot{j}-placeholder",
+            )
+            logging.warning(
+                "[gen-still] %s_shot%d 生成失败(%s) — 用中性占位图兜底，不中断整期",
+                bid, j, exc,
+            )
         sub = os.path.join(scratch, f"{bid}_sub{j}.mp4")
         move = _resolve_camera_move(shot, slice_s)
         intensity = float(shot.get("camera_intensity", 1.0))

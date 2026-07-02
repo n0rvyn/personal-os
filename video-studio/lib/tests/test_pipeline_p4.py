@@ -52,6 +52,9 @@ def _make_cfg(cap: int = 2, threshold: float = 0.6):
     cfg = MagicMock()
     cfg.budget.video_shots_per_episode = cap
     cfg.budget.video_motion_threshold = threshold
+    # Floor disabled here: these tests target budget DOWNGRADE counts; the video
+    # floor (promotion) is a separate concern covered by test_budget_floor.py.
+    cfg.budget.video_floor = 0
     return cfg
 
 
@@ -979,3 +982,47 @@ def test_step_chart_unknown_type_backfills_fallback_clip(tmp_path):
         "without it step_assemble raises 'beats with no clip' AFTER paid S2V/TTS"
     )
     assert gen_still_calls, "fallback path must render a still via gen_still"
+
+
+# ---------------------------------------------------------------------------
+# R2 fix #1+#4: floor promotes the RUNNING shot of a multi-shot beat, and the
+# back-prop carries THAT shot's prompt to gen_video (not shots[0]).
+# ---------------------------------------------------------------------------
+
+def test_floor_promoted_multishot_beat_uses_running_shot_prompt(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPIKE_STORYBOARD_JSON", raising=False)
+    from lib.wiring import make_storyboard_dispatch
+
+    # All still; beat 1 has TWO shots, the running one is shots[1] (not first).
+    shotlist_data = [
+        {"visual_type": "still", "keywords": [],
+         "shots": [{"prompt": "训练日历本特写", "with_character": False, "pace": "normal"}]},
+        {"visual_type": "still", "keywords": [],
+         "shots": [
+             {"prompt": "手机屏幕特写，加量提醒", "with_character": False, "pace": "normal"},
+             {"prompt": "晨光跑道，教练从容奔跑，侧跟拍", "with_character": True, "pace": "hold"},
+         ]},
+        {"visual_type": "still", "keywords": [],
+         "shots": [{"prompt": "训练日志本翻页", "with_character": False, "pace": "normal"}]},
+    ]
+
+    def fake_persona(agent, prompt, scratch_dir, expected, **kw):
+        out = Path(scratch_dir) / expected
+        out.write_text(json.dumps(shotlist_data), encoding="utf-8")
+        return {"ok": True, "artifact_path": str(out)}
+
+    cfg = _make_cfg(cap=8)
+    cfg.budget.video_floor = 1                      # enable the floor for this test
+    beats = _beats_without_visual_type(3)
+    ctx: dict = {"beats": beats, "ep": {"shotlist": tmp_path / "shotlist.json"}}
+
+    dispatch = make_storyboard_dispatch(
+        cfg, dispatch_persona_fn=fake_persona, plugin_root=PLUGIN_ROOT, log=lambda m: None)
+    dispatch("director", _shenjing_step(), ctx, tmp_path)
+
+    # beat 1 (the one with a running shot) must be the promoted video
+    promoted = [i for i, b in enumerate(ctx["beats"]) if b.get("visual_type") == "video"]
+    assert promoted == [1], f"expected beat 1 promoted (has running shot), got {promoted}"
+    vp = ctx["beats"][1].get("video_prompt", "")
+    assert "奔跑" in vp, f"gen_video must animate the RUNNING shot, got video_prompt={vp!r}"
+    assert "手机" not in vp, f"must NOT animate shots[0] (手机特写), got {vp!r}"

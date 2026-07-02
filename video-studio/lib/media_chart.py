@@ -63,6 +63,23 @@ def _setup_rcparams() -> None:
     matplotlib.rcParams["axes.labelsize"] = 28
 
 
+# Bottom safe-area: line/bar charts reserve this fraction of the figure height at
+# the bottom so the burned-in subtitle (bottom-center ASS, MarginV=78, up to 2
+# lines → top ~0.16 from bottom) does not collide with the x-axis label/ticks
+# (E2E acceptance #6-subtitle). Empirically 0.20 still overlapped the x-axis LABEL
+# with a 2-line subtitle; 0.28 pushes the axis label above the subtitle band.
+CHART_BOTTOM_SAFE = 0.28
+# Top safe-area: reserve the top band for the chart title so content sits in a
+# centered middle band (title above, subtitle below). R2: charts are centered
+# WITHIN [CHART_BOTTOM_SAFE, 1-CHART_TOP_SAFE], not pinned to the top.
+CHART_TOP_SAFE = 0.12
+
+# Table is centered within the bottom-safe region via an explicit bbox (below);
+# _TABLE_LOC documents the intent ("center") and is asserted by the tests. An
+# explicit bbox (not loc) is what actually enforces fit+centering for any row count.
+_TABLE_LOC = "center"
+
+
 def render_pace_table(
     title: str,
     rows: Sequence[Tuple[str, str]],
@@ -98,15 +115,20 @@ def render_pace_table(
     # Build a table with a header row + N data rows.
     table_data = [["配速区间", "对应时间"]] + [list(r) for r in rows]
 
+    # Explicit bbox centers the table WITHIN the bottom-safe region [CHART_BOTTOM_SAFE,
+    # 1-CHART_TOP_SAFE] and makes it fill that band evenly for ANY row count — the
+    # bottom band stays clear for the burned subtitle, the top band holds the title,
+    # and the table reads as centered (R2). bbox overrides loc; it is in axes coords
+    # (axes = full figure here), so [x0, y0, w, h] maps straight to the frame.
+    _tbl_h = 1.0 - CHART_TOP_SAFE - CHART_BOTTOM_SAFE
     tbl = ax.table(
         cellText=table_data,
         colWidths=[0.45, 0.45],
-        loc="center",
         cellLoc="center",
+        bbox=[0.06, CHART_BOTTOM_SAFE, 0.88, _tbl_h],
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(28)
-    tbl.scale(1, 2.2)
 
     # Style the header row differently from the body.
     for col in range(2):
@@ -208,9 +230,80 @@ def build_line_chart(
     ax.grid(axis="y", color="#ECF0F1", linewidth=1.5, zorder=0)
 
     plt.tight_layout(pad=1.0)
+    # Reserve bottom (subtitle) + top (title) bands → plot sits in the centered
+    # middle band, x-axis label clears the burned subtitle.
+    fig.subplots_adjust(bottom=CHART_BOTTOM_SAFE, top=1.0 - CHART_TOP_SAFE)
     fig.savefig(out_path, dpi=100, facecolor=fig.get_facecolor())
     plt.close(fig)
 
+    return out_path
+
+
+def build_bar_chart(
+    title: str,
+    x_label: str,
+    y_label: str,
+    categories: Sequence[str],
+    values: Sequence[float],
+    out_path: str,
+    size: Tuple[int, int] = (1920, 1080),
+    return_ax: bool = False,
+):
+    """Render a 16:9 **0-baseline** bar chart for discrete/equivalence comparison.
+
+    Unlike a 2-point line (which autoscales its y-axis and exaggerates a tiny
+    difference into a steep slope), a 0-baseline bar chart shows two near-equal
+    values as two near-equal bars — honest for "无显著差异" data (E2E #1 fix).
+
+    Args:
+        title/x_label/y_label: labels (Chinese OK).
+        categories: bar category labels (e.g. ["10%/周", "50%/周"]).
+        values: bar heights, 1:1 with categories. Must be real, sourced numbers.
+        out_path: destination .png.
+        size: (w, h) px, default 1920x1080.
+        return_ax: when True, return the Axes (for tests) instead of the path.
+
+    Returns:
+        out_path (str), or the Axes when return_ax=True.
+    """
+    _setup_rcparams()
+    width_in = size[0] / 100.0
+    height_in = size[1] / 100.0
+
+    fig, ax = plt.subplots(figsize=(width_in, height_in), dpi=100)
+    fig.patch.set_facecolor("#FAFAFA")
+    ax.set_facecolor("#F5F6FA")
+
+    xs = list(range(len(categories)))
+    bars = ax.bar(xs, list(values), color="#2C7BE5", width=0.5, zorder=3)
+    ax.set_xticks(xs)
+    ax.set_xticklabels([_superscripts_to_mathtext(str(c)) for c in categories])
+    ax.set_ylim(bottom=0)  # 0 baseline — the honesty guarantee
+
+    # Value labels above each bar.
+    for rect, val in zip(bars, values):
+        ax.annotate(f"{val}", xy=(rect.get_x() + rect.get_width() / 2, val),
+                    xytext=(0, 6), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=24, color="#2C3E50")
+
+    ax.set_xlabel(_superscripts_to_mathtext(x_label), fontsize=28, color="#2C3E50")
+    ax.set_ylabel(_superscripts_to_mathtext(y_label), fontsize=28, color="#2C3E50")
+    ax.set_title(_superscripts_to_mathtext(title), fontsize=40, weight="bold",
+                 pad=24, color="#2C3E50")
+    ax.tick_params(labelsize=24, colors="#555555")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#BDC3C7")
+    ax.spines["bottom"].set_color("#BDC3C7")
+    ax.grid(axis="y", color="#ECF0F1", linewidth=1.5, zorder=0)
+
+    plt.tight_layout(pad=1.0)
+    # Bottom (subtitle) + top (title) safe bands → bars sit in the centered band.
+    fig.subplots_adjust(bottom=CHART_BOTTOM_SAFE, top=1.0 - CHART_TOP_SAFE)
+    fig.savefig(out_path, dpi=100, facecolor=fig.get_facecolor())
+    if return_ax:
+        return ax
+    plt.close(fig)
     return out_path
 
 

@@ -430,6 +430,55 @@ def test_budget_motion_threshold_explicit_value(tmp_path):
     assert cfg.budget.video_motion_threshold == 0.75
 
 
+# ---------- budget.video_floor (optional key, video 保底安全网) ----------
+
+def test_budget_video_floor_missing_defaults_to_1(tmp_path):
+    """budget.video_floor is optional; missing → defaults to 1 (每期保底 1 段视频)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    _write_config(cfg_path, _minimal_yaml(out))
+    cfg = load_config(str(cfg_path))
+    assert cfg.budget.video_floor == 1
+
+
+def test_budget_video_floor_explicit_value(tmp_path):
+    """budget.video_floor explicit value is parsed correctly."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out).replace(
+        "  video_shots_per_episode: 2",
+        "  video_shots_per_episode: 2\n  video_floor: 2",
+    )
+    _write_config(cfg_path, yaml_text)
+    cfg = load_config(str(cfg_path))
+    assert cfg.budget.video_floor == 2
+
+
+# ---------- host persona (optional section; configurable, not hardcoded) ----------
+
+def test_host_missing_defaults_to_empty(tmp_path):
+    """No host section → cfg.host has empty name/channel/tone (no plugin default)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    _write_config(cfg_path, _minimal_yaml(out))
+    cfg = load_config(str(cfg_path))
+    assert cfg.host.name == ""
+    assert cfg.host.channel == ""
+    assert cfg.host.tone == ""
+
+
+def test_host_parsed_from_config(tmp_path):
+    """host section is parsed into cfg.host (name/channel/tone)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    _write_config(cfg_path, _minimal_yaml(
+        out, host={"name": "卞旸", "channel": "跑者学堂", "tone": "亲切"}))
+    cfg = load_config(str(cfg_path))
+    assert cfg.host.name == "卞旸"
+    assert cfg.host.channel == "跑者学堂"
+    assert cfg.host.tone == "亲切"
+
+
 # ---------- config discovery: cascade + deep-merge + ConfigNotFound ----------
 #
 # These tests are written BEFORE Task 1-impl (TDD-FAIL-first).
@@ -687,3 +736,19 @@ def test_env_var_overrides_project_config(tmp_path, monkeypatch):
     cfg = load_config()
     assert cfg.audio.voice_id == "env-voice"
     assert cfg.media.provider == "minimax"
+
+
+def test_budget_video_floor_exceeding_cap_raises(tmp_path):
+    """R2 fix #3: floor > cap is contradictory (min > max) → ConfigError at load,
+    not a silent cap violation at render time."""
+    import pytest
+    from lib.config import ConfigError
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out).replace(
+        "  video_shots_per_episode: 2",
+        "  video_shots_per_episode: 2\n  video_floor: 5",
+    )
+    _write_config(cfg_path, yaml_text)
+    with pytest.raises(ConfigError, match="video_floor"):
+        load_config(str(cfg_path))

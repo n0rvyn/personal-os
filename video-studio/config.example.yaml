@@ -44,6 +44,10 @@ budget:
   # Loose hard cap: backstop applied only after threshold gate.
   # Keeps the highest-motion videos if count still exceeds this limit.
   video_shots_per_episode: 8
+  # Video floor safety net: minimum真人跑步 b-roll video beats per episode. When the
+  # director returns fewer, the pipeline promotes the best-candidate still beat
+  # (running imagery > character > other) to video. 0 disables the floor.
+  video_floor: 1
 
 ffmpeg:
   # Must be a libass-enabled build for subtitle burning.
@@ -73,3 +77,11 @@ cursor_path: syllabus/runetic-training-science_cursor.yaml
 
 # Book series identifier (matches syllabus/source/<book>/ directory name).
 book_series: runetic-training-science
+
+# Host persona + channel brand (optional; configurable — never hardcoded in the
+# plugin). Feeds the fixed greeting/signoff (digest-writer) and the title card's
+# "频道 · 模块" brand tag. Omit the whole section for no fixed host (legacy).
+host:
+  name: 卞旸          # 主播名，出现在开场问候/签名收尾
+  channel: 跑者学堂    # 频道品牌，标题卡标签用 "频道 · 模块名"
+  tone: 亲切          # 口吻基调（亲切 / 专业冷静 / 活泼 …）

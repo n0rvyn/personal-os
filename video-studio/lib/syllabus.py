@@ -344,6 +344,7 @@ class Selection:
     style: str = ""
     art_style: str = ""
     color_grade: str = ""
+    module_name: str = ""   # R2: owning module's name → title card '频道 · 模块' tag
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +389,7 @@ def select_next(cfg: Any) -> Optional[Selection]:
         style=module.style,
         art_style=module.art_style,
         color_grade=syllabus.color_grade,
+        module_name=module.name,
     )
 
 

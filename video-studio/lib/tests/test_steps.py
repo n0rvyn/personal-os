@@ -854,3 +854,37 @@ def test_absent_camera_intensity_defaults_to_1_0(tmp_path):
     assert "zoom+0.002222" in vf and ",1.2)" in vf, (
         f"absent camera_intensity must default to 1.0 (current amounts); got: {vf}"
     )
+
+
+def test_gen_still_failure_falls_back_to_placeholder_no_crash(tmp_path):
+    """R2 fix #12: one shot's gen_still failure (e.g. content moderation) must NOT
+    crash the episode — step_render_shots_clip falls back to a neutral placeholder
+    (ffmpeg lavfi color, never fails) and the clip still gets produced."""
+    from lib.steps import step_render_shots_clip
+
+    placeholder_calls: list[str] = []
+
+    def raising_gen_still(prompt: str, ref, out: str) -> str:
+        raise RuntimeError("ark POST /images/generations HTTP 400: OutputImageSensitiveContentDetected")
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        if "placeholder" in label:
+            placeholder_calls.append(label)
+        for arg in argv:
+            if arg.endswith((".png", ".mp4")):
+                Path(arg).write_bytes(b"stub")
+
+    # must NOT raise
+    step_render_shots_clip(
+        shots=[{"prompt": "被审核拦的镜头", "with_character": False}],
+        clip_len=3.0,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="b07",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=raising_gen_still,
+        run_ff_fn=fake_run_ff,
+    )
+    assert placeholder_calls, "a placeholder ffmpeg render must be used when gen_still fails"
+    assert Path(tmp_path / "out.mp4").exists(), "clip must still be produced despite gen failure"

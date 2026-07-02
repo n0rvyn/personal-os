@@ -27,6 +27,13 @@ allowed-tools:
 
 4. **写回**：调 `prepare_module(...)`（ask_fn 返回步骤2的画风、gen_fn 返回步骤3的图路径、save_fn=save_syllabus）→ 持久化 syllabus。`force=True` 时即使已设也重做。
 
+   > **`module.character_ref` 存的是持久人物图的文件路径**（不是描述文字）。出片时
+   > pipeline（`lib.wiring.resolve_character_ref_url`）读这个路径 → 把图 base64 成
+   > `data:image/...` 作 image-to-image 参考 → **跨集每期都用同一张脸**（Doubao/Ark 收
+   > base64，无需外部托管）。语义：**路径存在=复用那张图；路径为空/是描述文字=当场生成**
+   > （生成后建议把图存到内容项目 assets、把路径写回 character_ref，之后各期就固定了）。
+   > 路径存在但图损坏/不可读 → 自动回退当场生成，不中断出片。
+
 5. **报告**：打印锁定的画风 + 生成的人物图路径，供用户目检人物是否符合所选画风。
 
 ## 与其它 skill 的关系

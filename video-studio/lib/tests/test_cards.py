@@ -242,3 +242,44 @@ def test_silence_mp3_cmd_matches_tts_params():
     assert argv[argv.index("-t") + 1] == "2.6"
     assert "libmp3lame" in argv
     assert argv[-1] == "/sil.mp3"
+
+
+# ---------------- R2: title word-break + brand tag ----------------
+
+def test_layout_title_does_not_break_ascii_word():
+    """The '？' boundary + ASCII-word protection must keep 'UESCA' intact across
+    the ≤2-line split (the ep003 bug split it as 'U' / 'ESCA')."""
+    title = "80/20训练法则是伪科学？UESCA教练认证课程的真实说法"
+    lines, fs = cards._layout_title(title)
+    assert len(lines) <= 2
+    # No line may end with a dangling ASCII fragment that continues on the next.
+    joined = "\n".join(lines)
+    assert "UESCA" in "".join(lines)             # word survived
+    for ln in lines:
+        # a line must not END mid-ASCII-word (last char alnum while the word continues)
+        assert not (ln and ln[-1].isascii() and ln[-1].isalnum() and
+                    any(l.startswith(tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"))
+                        for l in lines if l != ln and lines.index(l) > lines.index(ln))), \
+            f"ASCII word broken across lines: {lines!r}"
+
+
+def test_build_title_card_brand_tag_with_channel_and_module():
+    """channel + module_name → '频道 · 模块短名' tag (module short = before ：)."""
+    tcfg = cards.build_title_card(
+        "某期标题", seq="003",
+        channel="跑者学堂", module_name="训练科学认知刷新：破除流行神话")
+    assert tcfg["tag"] == "跑者学堂 · 训练科学认知刷新"
+
+
+def test_build_title_card_falls_back_to_ep_tag_without_channel():
+    """No channel → legacy '跑步知识 · EP.0X' tag (backward compatible)."""
+    tcfg = cards.build_title_card("某期标题", seq="003")
+    assert tcfg["tag"] == "跑步知识 · EP.03"
+
+
+def test_brand_tag_edges():
+    """channel with empty module → bare channel; half-width ':' also splits."""
+    assert cards._brand_tag("跑者学堂", "", "003") == "跑者学堂"
+    assert cards._brand_tag("跑者学堂", "训练科学:破除神话", "003") == "跑者学堂 · 训练科学"
+    # no channel → legacy tag regardless of module_name
+    assert cards._brand_tag("", "训练科学：X", "003") == "跑步知识 · EP.03"

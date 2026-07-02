@@ -368,6 +368,7 @@ def test_director_color_grade_survives_backprop_and_overrides_grade_vf(
     cfg = _MagicMock()
     cfg.budget.video_shots_per_episode = 2
     cfg.budget.video_motion_threshold = 0.6
+    cfg.budget.video_floor = 1
 
     beats = _beats_live(n)
     ep = {"shotlist": tmp_path / "shotlist.json"}
@@ -426,6 +427,7 @@ def test_director_no_color_grade_keeps_series_default(tmp_path, monkeypatch):
     cfg = _MagicMock()
     cfg.budget.video_shots_per_episode = 2
     cfg.budget.video_motion_threshold = 0.6
+    cfg.budget.video_floor = 1
 
     cool_morning_vf = grade.resolve_color_grade("冷蓝晨光")
     beats = _beats_live(n)

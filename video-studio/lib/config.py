@@ -58,12 +58,23 @@ class MediaConfig:
 class BudgetConfig:
     video_shots_per_episode: int
     video_motion_threshold: float = 0.6
+    video_floor: int = 1
 
 
 @dataclass(frozen=True)
 class FfmpegConfig:
     ffmpeg_bin: str
     ffprobe_bin: str
+
+
+@dataclass(frozen=True)
+class HostConfig:
+    """Optional host persona + channel brand (content-level, configurable — never
+    hardcoded in the plugin). Feeds digest-writer's fixed greeting/signoff and the
+    title card's '频道 · 模块' brand tag. All empty = no fixed host (legacy behaviour)."""
+    name: str = ""       # e.g. "卞旸"
+    channel: str = ""    # e.g. "跑者学堂"
+    tone: str = ""       # e.g. "亲切"
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,8 @@ class VideoStudioConfig:
     book_series: str = ""
     # Phase 6: syllabus source directory (snapshot of training science materials)
     syllabus_source_dir: str = ""
+    # R2: optional host persona + channel brand (configurable, content-level)
+    host: HostConfig = HostConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -232,9 +245,20 @@ def _validate_media(raw: dict[str, Any]) -> MediaConfig:
 def _validate_budget(raw: dict[str, Any]) -> BudgetConfig:
     if "video_shots_per_episode" not in raw:
         raise ConfigError("missing required key: budget.video_shots_per_episode")
+    _cap = int(raw["video_shots_per_episode"])
+    _floor = int(raw.get("video_floor", 1))
+    # Cross-check: the floor (minimum videos) cannot exceed the cap (maximum). If it
+    # did, apply_video_floor would re-promote stills back above the cap that
+    # apply_video_budget just enforced — a silent budget violation. Fail loud.
+    if _floor > _cap:
+        raise ConfigError(
+            f"budget.video_floor ({_floor}) 不能大于 budget.video_shots_per_episode "
+            f"({_cap})：下限不能高于上限，否则视频数会突破预算 cap。"
+        )
     return BudgetConfig(
-        video_shots_per_episode=int(raw["video_shots_per_episode"]),
+        video_shots_per_episode=_cap,
         video_motion_threshold=float(raw.get("video_motion_threshold", 0.6)),
+        video_floor=_floor,
     )
 
 
@@ -315,6 +339,14 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
     book_series = str(raw.get("book_series", ""))
     syllabus_source_dir = str(raw.get("syllabus_source_dir", ""))
 
+    # --- R2: host persona (optional; empty = no fixed host) ---
+    host_raw = raw.get("host") or {}
+    host = HostConfig(
+        name=str(host_raw.get("name", "")),
+        channel=str(host_raw.get("channel", "")),
+        tone=str(host_raw.get("tone", "")),
+    )
+
     return VideoStudioConfig(
         render=render,
         audio=audio,
@@ -330,6 +362,7 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         cursor_path=cursor_path,
         book_series=book_series,
         syllabus_source_dir=syllabus_source_dir,
+        host=host,
     )
 
 

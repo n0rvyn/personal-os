@@ -44,6 +44,7 @@ class VisualLedger:
     def __init__(self, episode_dir: str | Path, prior_dirs: Iterable[str | Path] = ()):
         self.episode_dir = Path(episode_dir)
         self._seen: set[str] = set()
+        self._ids: set[int] = set()
 
         # Load this episode's own already-recorded signatures (if any) —
         # supports round-tripping across separate pipeline runs.
@@ -65,17 +66,36 @@ class VisualLedger:
         if isinstance(sigs, list):
             self._seen.update(str(s) for s in sigs)
 
+        # MR#4: "ids" key alongside "signatures"; tolerate absence in old json.
+        ids = data.get("ids", []) if isinstance(data, dict) else []
+        if isinstance(ids, list):
+            for i in ids:
+                try:
+                    self._ids.add(int(i))
+                except (TypeError, ValueError):
+                    continue
+
     def seen(self, signature: str) -> bool:
         return signature in self._seen
 
     def record(self, signature: str) -> None:
         self._seen.add(signature)
 
+    def seen_id(self, video_id: int) -> bool:
+        return video_id in self._ids
+
+    def record_id(self, video_id: int) -> None:
+        self._ids.add(video_id)
+
     def save(self) -> None:
         self.episode_dir.mkdir(parents=True, exist_ok=True)
         out_path = self.episode_dir / self._FILENAME
         out_path.write_text(
-            json.dumps({"signatures": sorted(self._seen)}, ensure_ascii=False, indent=2),
+            json.dumps(
+                {"signatures": sorted(self._seen), "ids": sorted(self._ids)},
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
 

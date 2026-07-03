@@ -633,7 +633,7 @@ def test_step_gen_still_consumes_N_windows_not_old_shots(tmp_path, monkeypatch):
     recorded_calls = []
 
     def fake_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
-                     gen_still_fn=None, run_ff_fn=None, durs=None):
+                     gen_still_fn=None, run_ff_fn=None, durs=None, fetch_lib_clip_fn=None):
         recorded_calls.append({"bid": bid, "shots": shots, "durs": durs})
         Path(out_clip).write_bytes(b"\x00mp4 stub")
 
@@ -694,7 +694,7 @@ def test_step_gen_still_windows_preserve_camera_fields_R5(tmp_path, monkeypatch)
     recorded_calls = []
 
     def fake_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
-                     gen_still_fn=None, run_ff_fn=None, durs=None):
+                     gen_still_fn=None, run_ff_fn=None, durs=None, fetch_lib_clip_fn=None):
         recorded_calls.append(shots)
         Path(out_clip).write_bytes(b"\x00mp4 stub")
 
@@ -802,7 +802,7 @@ def test_step_gen_video_s2v_once_plus_relay_stills_cover_full_beat(tmp_path, mon
     render_calls = []
 
     def _spy_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
-                     gen_still_fn=None, run_ff_fn=None, durs=None):
+                     gen_still_fn=None, run_ff_fn=None, durs=None, fetch_lib_clip_fn=None):
         render_calls.append({"bid": bid, "clip_len": clip_len, "durs": durs})
         _Path(out_clip).write_bytes(b"\x00mp4 stub")
 
@@ -910,7 +910,7 @@ def test_step_gen_video_s2v_failure_fallback_is_windowed(tmp_path, monkeypatch):
     render_calls = []
 
     def _spy_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
-                     gen_still_fn=None, run_ff_fn=None, durs=None):
+                     gen_still_fn=None, run_ff_fn=None, durs=None, fetch_lib_clip_fn=None):
         render_calls.append({"bid": bid, "clip_len": clip_len, "durs": durs})
         _Path(out_clip).write_bytes(b"\x00mp4 stub")
 
@@ -980,7 +980,7 @@ def test_step_chart_long_beat_followup_is_windowed(tmp_path, monkeypatch):
     render_calls = []
 
     def _spy_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
-                     gen_still_fn=None, run_ff_fn=None, durs=None):
+                     gen_still_fn=None, run_ff_fn=None, durs=None, fetch_lib_clip_fn=None):
         render_calls.append({"durs": durs})
         _Path(out_clip).write_bytes(b"\x00mp4 stub")
 
@@ -1442,6 +1442,37 @@ def test_step_gen_still_no_regression_when_library_empty(tmp_path, monkeypatch):
     )
 
 
+def test_step_gen_still_persists_pexels_ids_for_cross_episode_dedup_MF1(tmp_path, monkeypatch):
+    """MF-1: step_gen_still must call ledger.save() so Pexels ids recorded during
+    fetch_clip persist to disk — otherwise a pure still/multi 写实 episode (all
+    b-roll, no S2V/chart save site) writes "ids":[] and the NEXT episode re-picks
+    the same clips (cross-episode dedup silently broken; a single-episode live
+    render only exercises the in-memory set, so it can't surface this).
+    """
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+    beats = _three_beats_one_long()
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={},
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    ctx["clip_len_by_index"] = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+    # simulate a Pexels fetch_clip having recorded an id during this episode's
+    # gen-still (fetch_lib_clip_fn → PexelsSource.fetch_clip → ledger.record_id).
+    ctx["visual_ledger"].record_id(4242)
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    # A fresh ledger loaded from this episode's dir (== the next episode's
+    # prior_dirs source) must see the id — proving step_gen_still persisted it.
+    from lib.visual_ledger import VisualLedger
+    ep_dir = ctx["ep"]["final"].parent
+    reloaded = VisualLedger(str(ep_dir))
+    assert reloaded.seen_id(4242), (
+        "step_gen_still must ledger.save() so recorded Pexels ids persist to disk; "
+        "without it the on-disk ledger keeps ids:[] and cross-episode dedup breaks"
+    )
+
+
 def test_step_gen_still_routes_to_library_stub_when_bound(tmp_path, monkeypatch):
     """D-003 (library-first): once config binds this episode's art_style to a
     stub library, every content-still window must be served by LibrarySource
@@ -1843,3 +1874,122 @@ def test_querywriter_query_e2e_no_query_keeps_interim_prompt_for_render(
         "query-writer produced no query"
     )
     assert old_director_prompt in recorded_prompts
+
+
+# ===========================================================================
+# Phase 4 (P4-pexels plan) — Task 2-tests: render library-first wiring.
+# step_gen_still must thread a fetch_lib_clip_fn=... kwarg into
+# step_render_shots_clip built on router.fetch_library_clip (MR#3: ledger
+# from ctx["visual_ledger"] threaded through so id-dedup isn't silently inert
+# in production). No library bound (generate-only style) → the same
+# threaded callable, calling through to router.fetch_library_clip, returns
+# None for every window (router.library is None) → falls through to
+# generate unchanged (no-regression, already covered by
+# test_step_gen_still_no_regression_when_library_empty).
+#
+# FAILS before Task 2-impl: build_step_fns' "gen-still" step calls
+# steps_mod.step_render_shots_clip(...) with no fetch_lib_clip_fn kwarg —
+# spying on the call captures kwargs.get("fetch_lib_clip_fn") is None.
+# ===========================================================================
+
+def test_step_gen_still_threads_fetch_lib_clip_fn_from_router(tmp_path, monkeypatch):
+    """step_gen_still must pass a fetch_lib_clip_fn built on
+    router.fetch_library_clip into step_render_shots_clip — spy on the
+    render call to capture the kwarg, then invoke it and assert it
+    delegates to router.fetch_library_clip with the same (window, dur_s,
+    out_path) plus run_ff/grade/ledger threaded from ctx.
+    """
+    from lib import wiring as wiring_mod
+
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={}, art_style="写实电影",
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    ctx["clip_len_by_index"] = {0: 6.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    fetch_library_clip_calls: list[tuple] = []
+    orig_fetch_library_clip = router.fetch_library_clip
+
+    def spy_fetch_library_clip(window, dur_s, out_path, run_ff=None,
+                                grade=None, ledger=None):
+        fetch_library_clip_calls.append((window, dur_s, out_path, run_ff, grade, ledger))
+        return orig_fetch_library_clip(window, dur_s, out_path, run_ff, grade, ledger)
+
+    monkeypatch.setattr(router, "fetch_library_clip", spy_fetch_library_clip)
+
+    captured_kwargs: dict = {}
+    orig_render = wiring_mod.steps_mod.step_render_shots_clip
+
+    def spy_render(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return orig_render(*args, **kwargs)
+
+    monkeypatch.setattr(wiring_mod.steps_mod, "step_render_shots_clip", spy_render)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    assert "fetch_lib_clip_fn" in captured_kwargs, (
+        "step_gen_still must pass fetch_lib_clip_fn=... into step_render_shots_clip"
+    )
+    fetch_lib_clip_fn = captured_kwargs["fetch_lib_clip_fn"]
+    assert fetch_lib_clip_fn is not None, (
+        "fetch_lib_clip_fn must be a callable built on router.fetch_library_clip "
+        "(not the literal None) even when no library is bound"
+    )
+
+    # Invoke the threaded callable directly for one window and confirm it
+    # delegates to router.fetch_library_clip with the ledger from ctx (MR#3).
+    window0 = ctx["windows"][0][0]
+    out_path = str(tmp_path / "probe_lib_clip.mp4")
+    fetch_lib_clip_fn(window0, 6.0, out_path)
+
+    assert fetch_library_clip_calls, (
+        "invoking the threaded fetch_lib_clip_fn must call router.fetch_library_clip"
+    )
+    called_window, called_dur, called_out, called_run_ff, called_grade, called_ledger = (
+        fetch_library_clip_calls[-1]
+    )
+    assert called_window is window0
+    assert called_dur == 6.0
+    assert called_out == out_path
+    assert called_ledger is ctx["visual_ledger"], (
+        "MR#3: fetch_lib_clip_fn must thread ctx['visual_ledger'] through to "
+        "router.fetch_library_clip — else id-dedup is silently inert in prod"
+    )
+
+
+def test_step_gen_still_fetch_lib_clip_fn_none_library_falls_back_to_generate(
+        tmp_path, monkeypatch):
+    """When no library is bound for this style (router.library stays None),
+    the threaded fetch_lib_clip_fn must itself return None for every window
+    (router.fetch_library_clip's own no-library short-circuit) so
+    step_render_shots_clip falls back to generate — no-regression, same
+    assertion surface as test_step_gen_still_no_regression_when_library_empty
+    but exercised through the actual fetch_lib_clip_fn callable.
+    """
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = _three_beats_one_long()
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={},  # no binding for 写实电影 → all-generate
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    assert router.library is None
+    ctx["clip_len_by_index"] = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    total_windows = sum(len(ctx["windows"][i]) for i in ctx["windows"])
+    assert len(fake_seams.gen_still_calls) == total_windows, (
+        "fetch_lib_clip_fn returning None for every window (no library bound) "
+        "must fall back to generate for every window unchanged"
+    )

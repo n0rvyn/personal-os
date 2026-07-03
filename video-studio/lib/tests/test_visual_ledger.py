@@ -154,3 +154,77 @@ def test_done_episode_dirs_returns_empty_tuple_when_seq_missing_even_with_paths(
     ctx = {}  # still no "seq"
     result = _done_episode_dirs(_CfgWithPaths(), ctx)
     assert result == ()
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (Phase 4): record_id / seen_id — Pexels id dedup (DP-P4-002)
+# ---------------------------------------------------------------------------
+
+
+def test_seen_id_false_initially_true_after_record_id(tmp_path):
+    ep_dir = tmp_path / "ep-id-001"
+    ep_dir.mkdir()
+    ledger = VisualLedger(ep_dir)
+
+    assert ledger.seen_id(8459963) is False
+    ledger.record_id(8459963)
+    assert ledger.seen_id(8459963) is True
+
+
+def test_record_id_save_writes_ids_alongside_signatures(tmp_path):
+    ep_dir = tmp_path / "ep-id-002"
+    ep_dir.mkdir()
+    ledger = VisualLedger(ep_dir)
+    s = sig("远景晨跑者剪影")
+    ledger.record(s)
+    ledger.record_id(8459963)
+    ledger.save()
+
+    out_path = ep_dir / "visual_ledger.json"
+    data = json.loads(out_path.read_text(encoding="utf-8"))
+    # MR#4: key is "signatures", not "sigs" — must not break existing dedup.
+    assert s in data.get("signatures", [])
+    assert 8459963 in data.get("ids", [])
+
+
+def test_record_id_save_then_reload_round_trip(tmp_path):
+    ep_dir = tmp_path / "ep-id-003"
+    ep_dir.mkdir()
+
+    ledger = VisualLedger(ep_dir)
+    ledger.record_id(8459963)
+    ledger.save()
+
+    reloaded = VisualLedger(ep_dir)
+    assert reloaded.seen_id(8459963) is True
+
+
+def test_prior_dirs_ids_are_visible_to_seen_id(tmp_path):
+    old_dir = tmp_path / "ep-id-old"
+    old_dir.mkdir()
+
+    old_ledger = VisualLedger(old_dir)
+    old_ledger.record_id(8459963)
+    old_ledger.save()
+
+    new_dir = tmp_path / "ep-id-new"
+    new_dir.mkdir()
+    new_ledger = VisualLedger(new_dir, prior_dirs=[old_dir])
+
+    assert new_ledger.seen_id(8459963) is True
+    # An id never recorded anywhere must still read as unseen.
+    assert new_ledger.seen_id(1) is False
+
+
+def test_load_tolerates_missing_ids_key_backward_compat(tmp_path):
+    # An old visual_ledger.json written before Phase 4 has no "ids" key —
+    # loading it must not raise, and seen_id must simply report False.
+    ep_dir = tmp_path / "ep-id-legacy"
+    ep_dir.mkdir()
+    (ep_dir / "visual_ledger.json").write_text(
+        json.dumps({"signatures": ["oldsig"]}), encoding="utf-8"
+    )
+
+    ledger = VisualLedger(ep_dir)
+    assert ledger.seen("oldsig") is True
+    assert ledger.seen_id(8459963) is False

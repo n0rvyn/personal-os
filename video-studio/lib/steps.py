@@ -228,6 +228,7 @@ def step_render_shots_clip(
     gen_still_fn: Callable[[str, str | None, str], str],
     run_ff_fn: Callable[[list[str], str], None],
     durs: list[float] | None = None,
+    fetch_lib_clip_fn: Callable[[dict, float, str], str | None] | None = None,
 ) -> None:
     """Render N shots into one silent video clip of clip_len seconds.
 
@@ -264,6 +265,12 @@ def step_render_shots_clip(
 
     subs: list[str] = []
     for j, (shot, slice_s) in enumerate(zip(shots, durs)):
+        sub = os.path.join(scratch, f"{bid}_sub{j}.mp4")
+        if fetch_lib_clip_fn is not None:
+            lib_sub = fetch_lib_clip_fn(shot, slice_s, sub)
+            if lib_sub is not None:
+                subs.append(lib_sub)
+                continue
         prompt, ref = build_shot_prompt(shot, ref_url)
         spng = os.path.join(scratch, f"{bid}_shot{j}.png")
         try:
@@ -281,7 +288,6 @@ def step_render_shots_clip(
                 "[gen-still] %s_shot%d 生成失败(%s) — 用中性占位图兜底，不中断整期",
                 bid, j, exc,
             )
-        sub = os.path.join(scratch, f"{bid}_sub{j}.mp4")
         move = _resolve_camera_move(shot, slice_s)
         intensity = float(shot.get("camera_intensity", 1.0))
         run_ff_fn(

@@ -1009,3 +1009,199 @@ def test_gen_still_failure_falls_back_to_placeholder_no_crash(tmp_path):
     )
     assert placeholder_calls, "a placeholder ffmpeg render must be used when gen_still fails"
     assert Path(tmp_path / "out.mp4").exists(), "clip must still be produced despite gen failure"
+
+
+# ===========================================================================
+# 7. Phase 4 (Task 2): render library-first — fetch_lib_clip_fn (D-003)
+#
+# step_render_shots_clip gains an optional fetch_lib_clip_fn(shot, slice_s,
+# sub_out_path) -> str|None param. Per-window it is tried FIRST; a non-None
+# hit is used verbatim (gen_still_fn must NOT be called for that window); a
+# None miss falls through to the existing gen_still_fn -> still_clip_cmd
+# generation path unchanged (no-regression hard door). fetch_lib_clip_fn=None
+# (the default) must reproduce Phase-3 behavior byte-for-byte (every window
+# generated).
+#
+# FAILS before Task 2-impl: step_render_shots_clip() has no
+# `fetch_lib_clip_fn` parameter -> TypeError: unexpected keyword argument.
+# ===========================================================================
+
+def test_fetch_lib_clip_fn_hit_skips_gen_still(tmp_path):
+    """A window whose fetch_lib_clip_fn hit returns a sub-clip path must NOT
+    call gen_still_fn for that window (library clip used verbatim)."""
+    from lib.steps import step_render_shots_clip
+
+    gen_still_calls: list[str] = []
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        gen_still_calls.append(prompt)
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        for arg in argv:
+            if arg.endswith((".png", ".mp4")):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    def fake_lib(shot: dict, slice_s: float, out: str):
+        Path(out).write_bytes(b"\x00lib-clip")
+        return out
+
+    step_render_shots_clip(
+        shots=[{"prompt": "跑者晨跑全景", "with_character": False, "query": "runner"}],
+        clip_len=6.0,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="lib01",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=fake_gen_still,
+        run_ff_fn=fake_run_ff,
+        fetch_lib_clip_fn=fake_lib,
+    )
+
+    assert gen_still_calls == [], (
+        f"library-hit window must not call gen_still_fn; got calls={gen_still_calls}"
+    )
+    assert Path(tmp_path / "out.mp4").exists()
+
+
+def test_fetch_lib_clip_fn_miss_falls_back_to_gen_still_no_regression(tmp_path):
+    """fetch_lib_clip_fn returning None (miss) must fall back to the existing
+    gen_still_fn -> still_clip_cmd generation path unchanged (no-regression
+    hard door — same behavior as Phase 3 with no library)."""
+    from lib.steps import step_render_shots_clip
+
+    gen_still_calls: list[str] = []
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        gen_still_calls.append(prompt)
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        for arg in argv:
+            if arg.endswith((".png", ".mp4")):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    def fake_lib_miss(shot: dict, slice_s: float, out: str):
+        return None
+
+    step_render_shots_clip(
+        shots=[{"prompt": "跑者晨跑全景", "with_character": False}],
+        clip_len=6.0,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="lib02",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=fake_gen_still,
+        run_ff_fn=fake_run_ff,
+        fetch_lib_clip_fn=fake_lib_miss,
+    )
+
+    # gen_still receives build_shot_prompt output — for with_character=False (空镜)
+    # windows that appends the no-person disclaimer (pre-existing, steps.py:129).
+    # The library-miss fallback is exact/unchanged; only the expected must account
+    # for that transform (same as the Phase-2 no-regression test fix).
+    assert gen_still_calls == ["跑者晨跑全景，画面中没有任何人物，纯环境与物体细节"], (
+        f"library miss must fall back to gen_still_fn (unchanged generate path); "
+        f"got calls={gen_still_calls}"
+    )
+    assert Path(tmp_path / "out.mp4").exists()
+
+
+def test_fetch_lib_clip_fn_mixed_windows_concat(tmp_path):
+    """3 windows: fake_lib hits shot0 + shot2, misses shot1 -> gen_still_fn
+    called only for shot1; the resulting beat clip concatenates 3 subs (2
+    library + 1 generated) via the existing hard-concat path."""
+    from lib.steps import step_render_shots_clip
+
+    gen_still_calls: list[str] = []
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        gen_still_calls.append(prompt)
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    concat_labels: list[str] = []
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        if label.endswith("-concat"):
+            concat_labels.append(label)
+        for arg in argv:
+            if arg.endswith((".png", ".mp4")):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    def fake_lib(shot: dict, slice_s: float, out: str):
+        if shot.get("query") == "miss-me":
+            return None
+        Path(out).write_bytes(b"\x00lib-clip")
+        return out
+
+    shots = [
+        {"prompt": "跑道空镜1", "with_character": False, "query": "runner1"},
+        {"prompt": "跑道空镜2", "with_character": False, "query": "miss-me"},
+        {"prompt": "跑道空镜3", "with_character": False, "query": "runner3"},
+    ]
+
+    step_render_shots_clip(
+        shots=shots,
+        clip_len=18.0,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="lib03",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=fake_gen_still,
+        run_ff_fn=fake_run_ff,
+        fetch_lib_clip_fn=fake_lib,
+    )
+
+    assert gen_still_calls == ["跑道空镜2，画面中没有任何人物，纯环境与物体细节"], (
+        f"only the fetch_lib_clip_fn miss must call gen_still_fn; got {gen_still_calls}"
+    )
+    assert concat_labels, "3 windows (mixed library/generate) must hard-concat into one beat clip"
+    assert Path(tmp_path / "out.mp4").exists()
+
+
+def test_fetch_lib_clip_fn_none_reproduces_phase3_behavior(tmp_path):
+    """fetch_lib_clip_fn=None (the default, no library bound for this style)
+    must reproduce Phase-3 behavior verbatim: every window generated via
+    gen_still_fn, none skipped."""
+    from lib.steps import step_render_shots_clip, build_shot_prompt
+
+    gen_still_calls: list[str] = []
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        gen_still_calls.append(prompt)
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        for arg in argv:
+            if arg.endswith((".png", ".mp4")):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    shots = [
+        {"prompt": "跑道空镜1", "with_character": False},
+        {"prompt": "跑道空镜2", "with_character": False},
+    ]
+
+    step_render_shots_clip(
+        shots=shots,
+        clip_len=6.0,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="lib04",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=fake_gen_still,
+        run_ff_fn=fake_run_ff,
+        # fetch_lib_clip_fn omitted -> defaults to None
+    )
+
+    expected_prompts = [build_shot_prompt(s, None)[0] for s in shots]
+    assert gen_still_calls == expected_prompts, (
+        f"fetch_lib_clip_fn=None must generate every window unchanged; got {gen_still_calls}"
+    )

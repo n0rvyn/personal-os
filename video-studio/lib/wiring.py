@@ -675,14 +675,27 @@ def build_step_fns(
             shots = windows[i]
             durs = [w["dur"] for w in shots]
             clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
+            ledger = ctx.get("visual_ledger")
+            fetch_lib_clip_fn = lambda w, d, o: router.fetch_library_clip(
+                w, d, o, run_ff, grade_vf, ledger,
+            )
             steps_mod.step_render_shots_clip(
                 shots, ctx["clip_len_by_index"][i], clip, bid, scratch_s,
                 ref_url, grade_vf,
                 gen_still_fn=router.gen_still, run_ff_fn=run_ff,
                 durs=durs,
+                fetch_lib_clip_fn=fetch_lib_clip_fn,
             )
             ctx["clips_by_index"][i] = clip
             n += 1
+        # MF-1: persist Pexels ids recorded during fetch_clip (via
+        # fetch_lib_clip_fn) so cross-episode dedup works. step_gen_still is the
+        # ONLY save site for a pure still/multi 写实 episode (no S2V/chart save
+        # runs); without this the on-disk ledger keeps "ids":[] and the next
+        # episode re-picks the same clips.
+        _ledger = ctx.get("visual_ledger")
+        if _ledger is not None:
+            _ledger.save()
         ctx["stills_dir"] = _sentinel(Path(scratch), "stills_dir", f"{n} still beats")
         log(f"[gen-still] rendered {n} still/multi beats")
 

@@ -822,6 +822,28 @@ def test_library_invalid_kind_raises(tmp_path):
     assert "火星" in str(exc.value)
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: "pexels" library kind (online CC0 library for 写实/写实电影 style)
+# ---------------------------------------------------------------------------
+
+
+def test_valid_library_kinds_includes_pexels():
+    from lib.config import VALID_LIBRARY_KINDS
+    assert "pexels" in VALID_LIBRARY_KINDS
+
+
+def test_library_section_accepts_pexels_binding(tmp_path):
+    """library: {写实电影: pexels} is a legal binding (Phase 4 online library)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    yaml_text += "library:\n  写实电影: pexels\n"
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert dict(cfg.library) == {"写实电影": "pexels"}
+
+
 def test_budget_video_floor_exceeding_cap_raises(tmp_path):
     """R2 fix #3: floor > cap is contradictory (min > max) → ConfigError at load,
     not a silent cap violation at render time."""

@@ -496,6 +496,127 @@ def test_shot_durations_fallback_to_equal_when_below_min_dwell(tmp_path):
 
 
 # ===========================================================================
+# 5b. MR-2 (Task 3-tests, Phase-1 shot-timeline): explicit durs= param —
+#     step_render_shots_clip must NOT recompute shot_durations when the caller
+#     supplies durs= verbatim (lib.shotplan.plan_windows' dur is authoritative;
+#     a second shot_durations pass would silently drop the WINDOW_MAX cap).
+# ===========================================================================
+
+def test_durs_param_bypasses_internal_shot_durations_recompute(tmp_path, monkeypatch):
+    """step_render_shots_clip(shots, clip_len, ..., durs=[...]) → does NOT call
+    ffcmd.shot_durations internally; each sub-clip's -t slice == the
+    corresponding durs[] entry verbatim (not a pace-weighted recompute).
+
+    FAILS before Task 3-impl: step_render_shots_clip has no `durs` parameter
+    (TypeError: unexpected keyword argument 'durs').
+    """
+    from lib import steps as steps_mod
+    from lib import ffcmd
+
+    shot_durations_calls = []
+    orig_shot_durations = ffcmd.shot_durations
+
+    def spy_shot_durations(*a, **kw):
+        shot_durations_calls.append((a, kw))
+        return orig_shot_durations(*a, **kw)
+
+    monkeypatch.setattr(ffcmd, "shot_durations", spy_shot_durations)
+    monkeypatch.setattr(steps_mod.ffcmd, "shot_durations", spy_shot_durations)
+
+    clip_len = 21.0
+    # Deliberately lopsided durs that do NOT match a pace-weighted split of
+    # clip_len — if the implementation silently recomputes durs via
+    # shot_durations, the resulting -t values will NOT match these.
+    explicit_durs = [7.0, 2.0, 12.0]
+    shots = [
+        {"prompt": "镜头A", "with_character": False, "pace": "quick"},
+        {"prompt": "镜头B", "with_character": False, "pace": "hold"},
+        {"prompt": "镜头C", "with_character": False, "pace": "normal"},
+    ]
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    slice_lens: list[float] = []
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        try:
+            t_idx = argv.index("-t")
+            val = float(argv[t_idx + 1])
+            if label.endswith(("-shot0", "-shot1", "-shot2")):
+                slice_lens.append(val)
+        except (ValueError, IndexError):
+            pass
+        for arg in argv:
+            if arg.endswith(".mp4"):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    steps_mod.step_render_shots_clip(
+        shots=shots,
+        clip_len=clip_len,
+        out_clip=str(tmp_path / "out.mp4"),
+        bid="b03",
+        scratch=str(tmp_path),
+        ref_url=None,
+        grade_vf=None,
+        gen_still_fn=fake_gen_still,
+        run_ff_fn=fake_run_ff,
+        durs=explicit_durs,
+    )
+
+    assert shot_durations_calls == [], (
+        "step_render_shots_clip must NOT call ffcmd.shot_durations when durs= "
+        f"is supplied verbatim; got calls: {shot_durations_calls}"
+    )
+    assert slice_lens == explicit_durs, (
+        f"sub-clip durations must reuse durs= verbatim, got {slice_lens} "
+        f"expected {explicit_durs}"
+    )
+
+
+def test_durs_none_still_uses_internal_shot_durations(tmp_path):
+    """durs=None (the default / old caller contract) → unchanged behavior:
+    step_render_shots_clip still computes durations via ffcmd.shot_durations
+    internally (backward compatibility for any caller that doesn't pass durs=).
+    """
+    from lib.steps import step_render_shots_clip
+
+    clip_len = 6.0
+    shots = [
+        {"prompt": "镜头A", "with_character": False, "pace": "normal"},
+        {"prompt": "镜头B", "with_character": False, "pace": "normal"},
+    ]
+
+    def fake_gen_still(prompt: str, ref, out: str) -> str:
+        Path(out).write_bytes(b"\x89PNG stub")
+        return out
+
+    slice_lens: list[float] = []
+
+    def fake_run_ff(argv: list[str], label: str) -> None:
+        try:
+            t_idx = argv.index("-t")
+            val = float(argv[t_idx + 1])
+            if label.endswith(("-shot0", "-shot1")):
+                slice_lens.append(val)
+        except (ValueError, IndexError):
+            pass
+        for arg in argv:
+            if arg.endswith(".mp4"):
+                Path(arg).write_bytes(b"\x00mp4 stub")
+
+    step_render_shots_clip(
+        shots=shots, clip_len=clip_len, out_clip=str(tmp_path / "out.mp4"),
+        bid="b04", scratch=str(tmp_path), ref_url=None, grade_vf=None,
+        gen_still_fn=fake_gen_still, run_ff_fn=fake_run_ff,
+    )
+
+    assert len(slice_lens) == 2
+    assert sum(slice_lens) == pytest.approx(clip_len, abs=0.01)
+
+
+# ===========================================================================
 # 6. BGM ducking calibration
 # ===========================================================================
 

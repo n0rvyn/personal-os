@@ -82,18 +82,19 @@ def test_load_pipeline_step_count():
     )
 
 
-def test_load_pipeline_step_count_15():
-    """Phase-4: after inserting the 分镜 agent step, the pipeline must have
-    exactly 15 stations (14 Phase-2/3 steps + 分镜 = 15).
+def test_load_pipeline_step_count_16():
+    """Phase-1 (shot-timeline): after inserting the 镜头计划 code step (post-tts,
+    pre-gen-still), the pipeline must have exactly 16 stations (15 Phase-2/3/4
+    steps + 镜头计划 = 16).
 
-    Pre-impl (Task 3-impl pending): returns 14 → FAILS (red).
-    Green after Task 3-impl inserts the 分镜 step.
+    Pre-impl (Task 3-impl pending): returns 15 → FAILS (red).
+    Green after Task 3-impl inserts the 镜头计划 step.
     """
     from lib.pipeline import load_pipeline
 
     steps = load_pipeline()
-    assert len(steps) == 15, (
-        f"expected 15 stations (Phase-4 分镜 inserted), got {len(steps)}"
+    assert len(steps) == 16, (
+        f"expected 16 stations (Phase-1 镜头计划 inserted), got {len(steps)}"
     )
 
 
@@ -246,6 +247,41 @@ def test_step_order_tts_before_gen_still():
     assert _step_index(steps, "tts") < _step_index(steps, "gen-still"), (
         "tts must come before gen-still"
     )
+
+
+def test_shotplan_between_tts_and_gen_still():
+    """'镜头计划' (Phase-1 shot-timeline step) must sit strictly between 'tts'
+    and 'gen-still': it needs the real per-beat durations tts just measured,
+    and gen-still must consume the windows it writes.
+
+    Pre-impl: '镜头计划' is absent from the step table → ValueError from
+    _step_index (module absent) → red. Green after Task 3-impl.
+    """
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    idx_tts = _step_index(steps, "tts")
+    idx_shotplan = _step_index(steps, "镜头计划")
+    idx_gen_still = _step_index(steps, "gen-still")
+
+    assert idx_tts < idx_shotplan < idx_gen_still, (
+        f"镜头计划 (idx {idx_shotplan}) must be between tts (idx {idx_tts}) "
+        f"and gen-still (idx {idx_gen_still})"
+    )
+
+
+def test_shotplan_step_shape_is_code_kind_no_gate():
+    """镜头计划 is a pure-code step (no agent dispatch, no gate) — MR check
+    per plan Task 3-impl step 1: gate=[] (falsy) so runner.py's
+    `if not step.get("gate"): break` skips gate-running for this step."""
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    idx_shotplan = _step_index(steps, "镜头计划")
+    step = steps[idx_shotplan]
+    assert step["kind"] == "code"
+    assert step["agent"] is None
+    assert step["gate"] == []
 
 
 def test_step_order_gen_still_before_subtitle():

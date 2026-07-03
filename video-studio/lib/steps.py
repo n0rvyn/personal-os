@@ -227,6 +227,7 @@ def step_render_shots_clip(
     grade_vf: str | None,
     gen_still_fn: Callable[[str, str | None, str], str],
     run_ff_fn: Callable[[list[str], str], None],
+    durs: list[float] | None = None,
 ) -> None:
     """Render N shots into one silent video clip of clip_len seconds.
 
@@ -242,13 +243,24 @@ def step_render_shots_clip(
     Each shot → Ken Burns sub-clip (still_clip_cmd with optional grade_vf).
     Single shot → copy; multiple → hard-concat.
     Narration is muxed separately (the audio is a separate track).
-    """
-    n_max = ffcmd.max_shots(clip_len)
-    if len(shots) > n_max:
-        shots = shots[:n_max]
 
-    weights = [pace_weight(s.get("pace", "normal")) for s in shots]
-    durs = ffcmd.shot_durations(clip_len, weights)
+    `durs` (Phase-1 shot-timeline, MR-2): when the caller (lib.wiring's
+    step_gen_still, fed by lib.shotplan.plan_windows) supplies durs=
+    explicitly, those durations are authoritative and reused verbatim — this
+    function must NOT re-derive/truncate via max_shots/shot_durations, which
+    would silently drop plan_windows' WINDOW_MAX cap. durs=None (default)
+    preserves the old caller contract: internal n_max clamp + pace-weighted
+    shot_durations recompute.
+    """
+    if durs is not None:
+        durs = list(durs)
+    else:
+        n_max = ffcmd.max_shots(clip_len)
+        if len(shots) > n_max:
+            shots = shots[:n_max]
+
+        weights = [pace_weight(s.get("pace", "normal")) for s in shots]
+        durs = ffcmd.shot_durations(clip_len, weights)
 
     subs: list[str] = []
     for j, (shot, slice_s) in enumerate(zip(shots, durs)):

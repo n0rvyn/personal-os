@@ -369,6 +369,13 @@ DISSOLVE_FADE = 0.3  # seconds of cross-dissolve between beats (0.3 ≈ less fac
 # duration and (via max_shots) how many shots a beat of given length can hold.
 MIN_DWELL = 0.8
 
+# Hard ceiling on any single window's dwell (S2V clip or still shot). A shot
+# held longer than this reads as a stall (POC-era hold/loop bug) rather than
+# an edit. Defined here (not lib.shotplan) because video_clip_cmd needs it and
+# lib.shotplan already imports from lib.ffcmd (importing the other way would
+# be circular); lib.shotplan re-exports this constant for its own callers.
+WINDOW_MAX = 7.0
+
 
 def max_shots(clip_len: float, min_dwell: float = MIN_DWELL) -> int:
     """How many shots a beat of clip_len seconds can hold without any shot
@@ -486,29 +493,29 @@ def silence_mp3_cmd(dur_s: float, out_mp3: str) -> list[str]:
 
 def video_clip_cmd(src_mp4: str, dur_s: float, out_mp4: str,
                    grade: str | None = None, src_dur: float | None = None) -> list[str]:
-    """Video-only S2V clip normalized to 1920x1080/30, covering dur_s.
+    """Video-only S2V clip normalized to 1920x1080/30 — "once + relay" contract
+    (Task 4, replaces the Task 2 loop-fill contract).
 
     `grade` (POC5): optional color-grade filterchain.
-    `src_dur`: the source clip's real duration. When the source is SHORTER than
-    the beat (S2V clips from Seedance are 30fps; we loop the whole clip to fill
-    the beat duration rather than slow-motion-stretching it, which would produce
-    duplicate frames). If src_dur is unknown or the source is long enough, use
-    tpad-clone to freeze the last frame as a fallback.
+    `src_dur`: the source clip's real duration. The S2V source plays ONCE,
+    capped at WINDOW_MAX (7.0s) — it is NEVER looped or tpad-cloned to fill
+    the whole beat (that produced duplicate/frozen frames — POC-era bugs
+    ⑤/⑧/⑨). The beat's remaining duration is covered by relay still windows
+    wired in `lib.wiring.step_gen_video`, not by stretching this clip.
+
+    actual_dur = min(src_dur, WINDOW_MAX) when src_dur is known; when src_dur
+    is None (unknown), actual_dur = dur_s as given (caller's responsibility).
     """
-    chain = ["scale=1920:1080:force_original_aspect_ratio=increase", "crop=1920:1080"]
-    if src_dur and src_dur < dur_s:
-        # Seedance S2V clips are 30fps; size covers all source frames.
-        # loop=-1 repeats indefinitely; -t dur_s (output option) trims to beat.
-        frames = max(1, round(src_dur * 30))
-        chain.append(f"loop=loop=-1:size={frames}")
-    else:
-        chain.append(f"tpad=stop_mode=clone:stop_duration={int(dur_s) + 1}")
-    chain.append("fps=30")
+    actual_dur = min(src_dur, WINDOW_MAX) if src_dur is not None else dur_s
+    chain = [
+        "scale=1920:1080:force_original_aspect_ratio=increase", "crop=1920:1080",
+        "fps=30",
+    ]
     vf = ",".join(chain)
     if grade:
         vf += f",{grade}"
     return [
-        "-i", src_mp4, "-t", str(dur_s), "-r", "30", "-vf", vf,
+        "-i", src_mp4, "-t", str(actual_dur), "-r", "30", "-vf", vf,
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_mp4,
     ]
 
@@ -548,3 +555,36 @@ def mux_av_cmd(video: str, audio: str, out_mp4: str) -> list[str]:
     return ["-i", video, "-i", audio, "-map", "0:v", "-map", "1:a",
             "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-ac", "2",
             "-shortest", out_mp4]
+
+
+# ---------------------------------------------------------------------------
+# Task 5 (D-008): video>=audio assertion + tail padding — mux's `-shortest`
+# must NEVER be what reconciles a video_track that came up short of the
+# narration track (that silently truncates the narration). If the xfade'd
+# video_track probes shorter than the narration, pad the video's tail
+# (tpad-clone last frame) to the narration's length BEFORE mux; `-shortest`
+# then only trims the padded track's negligible overshoot, never the audio.
+# ---------------------------------------------------------------------------
+
+def assert_video_ge_audio(video_dur: float, audio_dur: float, tol: float = 0.05) -> float | None:
+    """Return None if video_dur already covers audio_dur (within tol);
+    otherwise return the target duration (== audio_dur) the caller must pad
+    the video track to before muxing."""
+    if video_dur >= audio_dur - tol:
+        return None
+    return audio_dur
+
+
+def pad_video_to_cmd(video_mp4: str, target_dur: float, out_mp4: str) -> list[str]:
+    """Extend video_mp4's tail (clone the last frame) so the output is
+    exactly target_dur seconds — never loop/repeat the whole clip. Uses a
+    stop_duration equal to target_dur (always enough headroom regardless of
+    the input's own length) then caps the output with -t target_dur so the
+    result is exact."""
+    return [
+        "-i", video_mp4,
+        "-vf", f"tpad=stop_mode=clone:stop_duration={target_dur}",
+        "-t", str(target_dur),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        out_mp4,
+    ]

@@ -9,7 +9,12 @@ Verifies that:
 from __future__ import annotations
 
 import types
+from pathlib import Path
+
+import pytest
+
 from lib import grade
+from lib.media_source import GenerateSource, MediaRouter
 from lib.wiring import MediaSeams
 
 
@@ -154,6 +159,7 @@ def test_gen_video_empty_prefix_passthrough():
 # ===========================================================================
 
 import json as _json_mod
+import os
 import types as _types_mod
 from pathlib import Path as _Path
 from unittest.mock import MagicMock as _MagicMock
@@ -204,9 +210,10 @@ def _make_step_extract_harness(tmp_path, *, art_style="写实电影", color_grad
     cfg.style = ""
 
     seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
 
     step_fns = build_step_fns(
-        cfg, seams=seams, fixture_path=fixture_path,
+        cfg, seams=seams, router=router, fixture_path=fixture_path,
         seq="01", slug="test",
         run_ff=lambda *a, **kw: None,
         probe_ms=lambda _p: 5000,
@@ -476,3 +483,1016 @@ def test_mediaseams_synth_empty_voice_passes_none(monkeypatch):
     seams = _wiring.MediaSeams(dry=False, provider="doubao", log=lambda _m: None, voice_id="")
     seams.synth("你好", "/tmp/x.mp3")
     assert captured["voice_id"] is None
+
+
+# ===========================================================================
+# Task 3-tests: 镜头计划接入 pipeline + gen-still 消费 windows (Phase 1
+# shot-timeline). FAIL before Task 3-impl:
+#   - step_fns["镜头计划"] KeyError (no such step_fn registered yet)
+#   - ctx["windows"] never written
+#   - step_render_shots_clip called with old sb[i]["shots"]/beat shots (few),
+#     not the N expanded window shots
+# All green after Task 3-impl.
+# ===========================================================================
+
+def _make_shotplan_harness(tmp_path, *, beats, clip_len_by_index, sb=None):
+    """Build (step_fns, ctx) wired for step_shotplan / step_gen_still tests.
+
+    dry=True MediaSeams so no live API calls; cfg is a bare MagicMock with no
+    syllabus_path/cursor_path configured (so `_done_episode_dirs` fail-closes
+    to () per MF-4 — ctx also carries no "seq" key, which alone is sufficient).
+    """
+    from lib.wiring import build_step_fns, MediaSeams
+
+    fixture = {
+        "character_ref": {"prompt": "主讲人物"},
+        "beats": beats,
+    }
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(_json_mod.dumps(fixture), encoding="utf-8")
+
+    ep_dir = tmp_path / "episode"
+    ep_dir.mkdir(exist_ok=True)
+    assets_dir = ep_dir / "assets"
+    assets_dir.mkdir(exist_ok=True)
+
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=fixture_path,
+        seq="01", slug="test",
+        run_ff=lambda *a, **kw: None,
+        probe_ms=lambda _p: 5000,
+        log=lambda m: None,
+        selection=None, dry=True,
+    )
+
+    ctx = {
+        "beats": beats,
+        "clip_len_by_index": dict(clip_len_by_index),
+        "clips_by_index": {},
+        "ep": {"final": ep_dir / "final.mp4", "assets_dir": assets_dir},
+        "ref_url": None,
+        "grade_vf": None,
+    }
+    if sb is not None:
+        ctx["sb"] = sb
+    return step_fns, ctx
+
+
+def _shotplan_step():
+    return {"name": "镜头计划", "kind": "code", "agent": None,
+            "inputs": ["tts", "分镜", "config"], "artifact": None, "gate": []}
+
+
+def _gen_still_step():
+    return {"name": "gen-still", "kind": "code", "agent": None,
+            "inputs": ["tts", "config", "scratch_dir"],
+            "artifact": "stills_dir", "gate": [{"fn": "check_artifact"}]}
+
+
+_LONG_BEAT_TEXT = (
+    "跑步的呼吸节奏决定了配速能否长久维持。"
+    "很多初学者一开始就用力过猛，前五分钟很快，后面却掉速严重。"
+    "科学配速的核心是把体感强度控制在可持续区间，而不是凭一时兴奋加速。"
+    "呼吸要均匀，脚步要放松，核心保持稳定。"
+    "长期坚持这种节奏，才能把耐力真正训练出来。"
+)
+
+
+def _three_beats_one_long():
+    return [
+        {
+            "id": "b00", "visual_type": "still", "text": _LONG_BEAT_TEXT,
+            "image_prompt": "跑者清晨慢跑", "keywords": ["呼吸", "配速", "核心"],
+        },
+        {
+            "id": "b01", "visual_type": "still", "text": "短句示范。",
+            "image_prompt": "教练示范配速", "keywords": [],
+        },
+        {
+            "id": "b02", "visual_type": "multi", "text": "三种跑姿对比讲解。",
+            "shots": ["跑姿A侧面", "跑姿B侧面", "跑姿C侧面"], "keywords": ["跑姿"],
+        },
+    ]
+
+
+def test_step_shotplan_writes_ctx_windows_long_beat_multiple_distinct(tmp_path):
+    """step_shotplan(step, ctx, scratch) with 3 beats (one long still) + fake
+    clip_len_by_index → writes ctx['windows']; the long beat's window list has
+    >1 entries with distinct prompts.
+
+    FAILS before Task 3-impl: step_fns has no '镜头计划' key → KeyError.
+    """
+    beats = _three_beats_one_long()
+    clip_len_by_index = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index,
+    )
+
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    assert "windows" in ctx, "step_shotplan must write ctx['windows']"
+    windows0 = ctx["windows"][0]
+    assert len(windows0) > 1, (
+        f"long beat (clip_len=44s) must split into >1 windows, got {len(windows0)}"
+    )
+    prompts0 = [w["prompt"] for w in windows0]
+    assert len(set(prompts0)) == len(prompts0), (
+        f"all windows for one beat must have distinct prompts, got {prompts0}"
+    )
+    assert sum(w["dur"] for w in windows0) == pytest.approx(44.0, abs=1e-6), (
+        "window durations must sum to clip_len"
+    )
+
+
+def test_step_gen_still_consumes_N_windows_not_old_shots(tmp_path, monkeypatch):
+    """step_gen_still must read ctx['windows'][i] (N expanded shots), not the
+    old sb[i]['shots']/beat-native shots (which is far fewer for the long
+    beat) — assert the shots list handed to step_render_shots_clip has
+    length == len(ctx['windows'][i]) for every still/multi beat.
+
+    FAILS before Task 3-impl: step_gen_still still reads the old few-shot
+    lists (director sb or beat['shots']/beat['image_prompt']), never
+    ctx['windows'].
+    """
+    from lib import wiring as _wiring
+
+    beats = _three_beats_one_long()
+    clip_len_by_index = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index,
+    )
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    recorded_calls = []
+
+    def fake_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
+                     gen_still_fn=None, run_ff_fn=None, durs=None):
+        recorded_calls.append({"bid": bid, "shots": shots, "durs": durs})
+        Path(out_clip).write_bytes(b"\x00mp4 stub")
+
+    monkeypatch.setattr(_wiring.steps_mod, "step_render_shots_clip", fake_render)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    assert len(recorded_calls) == 3, (
+        f"expected one render call per still/multi beat, got {len(recorded_calls)}"
+    )
+    by_bid = {c["bid"]: c for c in recorded_calls}
+    for i, beat in enumerate(beats):
+        bid = beat["id"]
+        n_windows = len(ctx["windows"][i])
+        n_shots = len(by_bid[bid]["shots"])
+        assert n_shots == n_windows, (
+            f"{bid}: step_render_shots_clip got {n_shots} shots, "
+            f"expected N={n_windows} (ctx['windows'][{i}])"
+        )
+        # MR-2: durs= must be passed and match the windows' authoritative dur.
+        expected_durs = [w["dur"] for w in ctx["windows"][i]]
+        assert by_bid[bid]["durs"] == expected_durs, (
+            f"{bid}: durs= must be the windows' authoritative dur list verbatim, "
+            f"got {by_bid[bid]['durs']!r} expected {expected_durs!r}"
+        )
+
+
+def test_step_gen_still_windows_preserve_camera_fields_R5(tmp_path, monkeypatch):
+    """R-5: window dicts passed from step_shotplan through step_gen_still into
+    step_render_shots_clip must retain camera_move/camera_intensity/shot_type
+    from the director shot — not silently defaulted.
+
+    FAILS before Task 3-impl: gen-still never wires ctx['windows'] through,
+    so this never even executes the new code path (KeyError first).
+    """
+    from lib import wiring as _wiring
+
+    beats = [
+        {
+            "id": "b00", "visual_type": "still", "text": "教练讲解摆臂动作要领。",
+            "image_prompt": "摆臂特写", "keywords": ["摆臂"],
+        },
+    ]
+    clip_len_by_index = {0: 6.0}
+    sb = [{
+        "shots": [{
+            "prompt": "教练侧面演示摆臂", "with_character": True,
+            "camera_move": "横移", "camera_intensity": 1.6,
+            "shot_type": "全景", "pace": "hold",
+        }],
+        "keywords": ["摆臂"],
+    }]
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index, sb=sb,
+    )
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    recorded_calls = []
+
+    def fake_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
+                     gen_still_fn=None, run_ff_fn=None, durs=None):
+        recorded_calls.append(shots)
+        Path(out_clip).write_bytes(b"\x00mp4 stub")
+
+    monkeypatch.setattr(_wiring.steps_mod, "step_render_shots_clip", fake_render)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    assert len(recorded_calls) == 1
+    director_shot = recorded_calls[0][0]
+    assert director_shot.get("source") == "director"
+    assert director_shot["camera_move"] == "横移", (
+        f"director camera_move must survive shotplan→gen-still, got {director_shot!r}"
+    )
+    assert director_shot["camera_intensity"] == 1.6
+    assert director_shot["shot_type"] == "全景"
+
+
+def test_step_shotplan_fixture_mode_no_sb_derives_N_from_beat_own_shots(tmp_path):
+    """No regression: fixture mode (beats already carry visual_type,
+    director not run — ctx has no 'sb' key) → step_shotplan still derives N
+    windows from the beat's own shots/image_prompt (not dependent on ctx['sb']).
+    """
+    beats = _three_beats_one_long()
+    clip_len_by_index = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index,
+    )
+    assert "sb" not in ctx
+
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    assert "windows" in ctx
+    for i in range(len(beats)):
+        assert len(ctx["windows"][i]) >= 1
+
+
+# ===========================================================================
+# Task 4-tests: video beat 去 loop（S2V once + 接力）+ 单窗口封顶 (FAIL-first)
+#
+# step_gen_video must no longer render one loop/tpad-filled clip spanning the
+# whole beat. It must render the S2V window ONCE (capped at src_dur, itself
+# capped at lib.shotplan.WINDOW_MAX), then cover the beat's remaining
+# duration with relay still windows (via steps_mod.step_render_shots_clip),
+# concatenated into a single beat clip. ctx["clips_by_index"][i] stays a
+# single clip path (contract unchanged).
+#
+# FAILS before Task 4-impl: step_gen_video currently renders exactly one
+# ffcmd.video_clip_cmd call spanning the FULL clip_len (loop/tpad-filled) and
+# never calls step_render_shots_clip on the success path — so the "≥1 still
+# render call" and "S2V window capped at src_dur" assertions below fail.
+# ===========================================================================
+
+def _video_beat_step():
+    return {"name": "gen-video", "kind": "code", "agent": None,
+            "inputs": ["gen-still", "config", "scratch_dir"],
+            "artifact": "clips_dir", "gate": [{"fn": "check_artifact"}]}
+
+
+def test_step_gen_video_s2v_once_plus_relay_stills_cover_full_beat(tmp_path, monkeypatch):
+    """clip_len=30, S2V src_dur=6 → 1 video_clip render (the S2V window, ~6s)
+    + >=1 relay still render(s) whose durations sum with the S2V window to
+    clip_len (30s). ctx['clips_by_index'][i] remains a single clip path.
+    """
+    from lib import wiring as _wiring
+
+    beats = [
+        {
+            "id": "b04", "visual_type": "video",
+            "text": "教练示范配速节奏。",
+            "video_prompt": "教练慢跑示范配速", "image_prompt": "教练慢跑",
+        },
+    ]
+    clip_len_by_index = {0: 30.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index,
+    )
+
+    # probe_ms is wired via build_step_fns closure inside the harness at 5000ms;
+    # rebuild step_fns with probe_ms=6000ms (src_dur=6.0s) for this beat's S2V clip.
+    from lib.wiring import build_step_fns, MediaSeams
+    fixture_path = tmp_path / "fixture.json"
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    run_ff_calls = []
+
+    def _spy_run_ff(argv, label):
+        run_ff_calls.append({"argv": argv, "label": label})
+        # ffmpeg output path is the last argv element; touch it so any
+        # downstream copy/concat step finds a real file.
+        _Path(argv[-1]).write_bytes(b"\x00mp4 stub")
+
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=fixture_path,
+        seq="01", slug="test",
+        run_ff=_spy_run_ff,
+        probe_ms=lambda _p: 6000,
+        log=lambda m: None,
+        selection=None, dry=True,
+    )
+
+    render_calls = []
+
+    def _spy_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
+                     gen_still_fn=None, run_ff_fn=None, durs=None):
+        render_calls.append({"bid": bid, "clip_len": clip_len, "durs": durs})
+        _Path(out_clip).write_bytes(b"\x00mp4 stub")
+
+    monkeypatch.setattr(_wiring.steps_mod, "step_render_shots_clip", _spy_render)
+
+    step_fns["gen-video"](_video_beat_step(), ctx, tmp_path)
+
+    # 1 video_clip render (S2V window) — identified by the "clip-{bid}" run_ff label.
+    video_calls = [c for c in run_ff_calls if c["label"] == "clip-b04"]
+    assert len(video_calls) == 1, (
+        f"expected exactly 1 video_clip render for the S2V window, got "
+        f"{len(video_calls)}: {run_ff_calls}"
+    )
+    video_argv = " ".join(str(x) for x in video_calls[0]["argv"])
+    assert "-t 6.0" in video_argv, (
+        f"S2V window must be capped at src_dur=6.0s (not the full clip_len=30s): "
+        f"{video_argv}"
+    )
+
+    # >=1 relay still render(s) covering the beat's remaining duration.
+    assert len(render_calls) >= 1, (
+        "expected >=1 relay still render (step_render_shots_clip) to cover the "
+        "beat's remaining duration after the S2V window, got 0"
+    )
+    relay_total = sum(
+        sum(c["durs"]) if c["durs"] else c["clip_len"] for c in render_calls
+    )
+    assert relay_total == pytest.approx(30.0 - 6.0, abs=1e-6), (
+        f"relay still window(s) must cover the remaining beat duration "
+        f"(30 - 6 = 24s), got {relay_total}"
+    )
+
+    # Total S2V window + relay total == full clip_len.
+    assert 6.0 + relay_total == pytest.approx(30.0, abs=1e-6)
+
+    # Relay must be WINDOWED into distinct ~5s content windows, not rendered as
+    # ONE still held for the whole remainder (the ⑤ hold, relay edition — a
+    # regression the first Task-4 impl shipped: it passed _beat_shots (1 shot)
+    # for `rem`, producing a ~24s held still). rem=24s → >=3 windows, each
+    # capped at WINDOW_MAX. A held-still relay has len(durs)==1 and fails here.
+    from lib.shotplan import WINDOW_MAX
+    relay_durs = [d for c in render_calls if c["durs"] for d in c["durs"]]
+    assert len(relay_durs) >= 3, (
+        f"relay must be windowed into multiple ~5s content windows (rem=24s → "
+        f">=3), not held as one still; got {len(relay_durs)} window(s): {relay_durs}"
+    )
+    assert max(relay_durs) <= WINDOW_MAX + 1e-6, (
+        f"each relay window must be <= WINDOW_MAX ({WINDOW_MAX}s), got {relay_durs}"
+    )
+
+    # ctx['clips_by_index'][0] contract unchanged: a single clip path.
+    assert 0 in ctx["clips_by_index"], "clips_by_index[0] must be set"
+    assert isinstance(ctx["clips_by_index"][0], str), (
+        "clips_by_index[0] must remain a single clip path (str), not a list"
+    )
+
+
+def test_step_gen_video_s2v_failure_fallback_is_windowed(tmp_path, monkeypatch):
+    """When live S2V generation FAILS, the still fallback must be WINDOWED over
+    the full clip_len (like still/multi + the relay), NOT one image held for the
+    whole beat (~40s = the ⑤ hold on the failure path). The cached-S2V reuse
+    branch (SPIKE_S2V_CLIP) never exercises this path, so only a forced-failure
+    test catches a regression here. clip_len=40 → >=3 windows, each <= WINDOW_MAX.
+    """
+    from lib import wiring as _wiring
+    from lib.wiring import build_step_fns, MediaSeams
+    from lib.shotplan import WINDOW_MAX
+
+    monkeypatch.delenv("SPIKE_S2V_CLIP", raising=False)
+
+    beats = [
+        {
+            "id": "b04", "visual_type": "video",
+            "text": "教练在跑道上示范标准跑姿，前脚掌落地重心前移步频保持稳定，动作连贯自然。",
+            "video_prompt": "教练慢跑示范", "image_prompt": "教练慢跑定格",
+            "keywords": ["跑姿", "步频"],
+        },
+    ]
+    _, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index={0: 40.0},
+    )
+
+    # Force S2V failure so the fallback branch (wiring.py ~709-721) runs.
+    monkeypatch.setattr(
+        MediaSeams, "gen_video",
+        lambda self, prompt, ref_url, out: {"ok": False, "reason": "forced"},
+    )
+
+    fixture_path = tmp_path / "fixture.json"
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    def _spy_run_ff(argv, label):
+        _Path(argv[-1]).write_bytes(b"\x00mp4 stub")
+
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=fixture_path, seq="01", slug="test",
+        run_ff=_spy_run_ff, probe_ms=lambda _p: 6000, log=lambda m: None,
+        selection=None, dry=True,
+    )
+
+    render_calls = []
+
+    def _spy_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
+                     gen_still_fn=None, run_ff_fn=None, durs=None):
+        render_calls.append({"bid": bid, "clip_len": clip_len, "durs": durs})
+        _Path(out_clip).write_bytes(b"\x00mp4 stub")
+
+    monkeypatch.setattr(_wiring.steps_mod, "step_render_shots_clip", _spy_render)
+
+    step_fns["gen-video"](_video_beat_step(), ctx, tmp_path)
+
+    # Exactly one clip produced, and it is a single path (contract preserved).
+    assert isinstance(ctx["clips_by_index"][0], str)
+    # The fallback render must be WINDOWED, not one held still.
+    fb_durs = [d for c in render_calls if c["durs"] for d in c["durs"]]
+    assert len(fb_durs) >= 3, (
+        f"S2V-failure fallback must window the full beat into multiple ~5s "
+        f"windows (clip_len=40 → >=3), not hold one still; got {fb_durs}"
+    )
+    assert max(fb_durs) <= WINDOW_MAX + 1e-6, (
+        f"each fallback window must be <= WINDOW_MAX ({WINDOW_MAX}s), got {fb_durs}"
+    )
+    assert sum(fb_durs) == pytest.approx(40.0, abs=1e-6), (
+        f"fallback windows must cover the full clip_len (40s), got {sum(fb_durs)}"
+    )
+
+
+def test_step_chart_long_beat_followup_is_windowed(tmp_path, monkeypatch):
+    """Long chart beat (clip_len > CHART_MAX+1.5): the chart holds for
+    CHART_MAX_SECONDS, then the REMAINDER must be WINDOWED into distinct ~5s
+    content windows (⑧ '其余窗口切内容'), NOT one still held for
+    (clip_len - 12s). clip_len=40 → rem=28 → >=3 windows, each <= WINDOW_MAX.
+    """
+    from lib import wiring as _wiring
+    from lib.wiring import build_step_fns, MediaSeams, CHART_MAX_SECONDS
+    from lib.shotplan import WINDOW_MAX
+
+    beats = [{
+        "id": "c1", "visual_type": "chart",
+        "text": "查 VDOT 表反推各档训练配速，轻松跑马拉松配速阈值间歇都有对应区间，照着练效率更高更稳。",
+        "chart_title": "VDOT 训练配速参考表",
+        "chart_rows": [["轻松跑 E", "6:30"], ["阈值 T", "4:50"]],
+        "keywords": ["配速"],
+    }]
+    _, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index={0: 40.0},
+    )
+
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    def _touch_run_ff(argv, label):
+        _Path(argv[-1]).write_bytes(b"\x00mp4 stub")
+
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=tmp_path / "fixture.json",
+        seq="01", slug="test", run_ff=_touch_run_ff, probe_ms=lambda _p: 5000,
+        log=lambda m: None, selection=None, dry=True,
+    )
+
+    # Stub the heavy chart PNG render + the chart-hold clip so only the followup
+    # windowing is under test.
+    monkeypatch.setattr(_wiring.media_chart, "render_pace_table",
+                        lambda *a, **k: _Path(a[-1]).write_bytes(b"\x00png"))
+    monkeypatch.setattr(_wiring.steps_mod, "step_chart_clip",
+                        lambda png, dur, out, run_ff_fn=None: _Path(out).write_bytes(b"\x00"))
+
+    render_calls = []
+
+    def _spy_render(shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
+                     gen_still_fn=None, run_ff_fn=None, durs=None):
+        render_calls.append({"durs": durs})
+        _Path(out_clip).write_bytes(b"\x00mp4 stub")
+
+    monkeypatch.setattr(_wiring.steps_mod, "step_render_shots_clip", _spy_render)
+
+    step_fns["chart"]({"name": "chart"}, ctx, tmp_path)
+
+    fu_durs = [d for c in render_calls if c["durs"] for d in c["durs"]]
+    rem = 40.0 - CHART_MAX_SECONDS
+    assert len(fu_durs) >= 3, (
+        f"chart followup remainder must be windowed (rem={rem} → >=3 windows), "
+        f"not one held still; got {fu_durs}"
+    )
+    assert max(fu_durs) <= WINDOW_MAX + 1e-6, (
+        f"each followup window must be <= WINDOW_MAX ({WINDOW_MAX}s), got {fu_durs}"
+    )
+    assert sum(fu_durs) == pytest.approx(rem, abs=1e-6), (
+        f"followup windows must cover the post-chart remainder ({rem}s), "
+        f"got {sum(fu_durs)}"
+    )
+
+
+def test_video_clip_window_dur_never_exceeds_window_max(tmp_path, monkeypatch):
+    """单窗口封顶: any rendered window's duration must be <= WINDOW_MAX (7.0s) —
+    a long S2V src_dur (9s, > WINDOW_MAX) must NOT produce a video_clip render
+    longer than WINDOW_MAX; the remainder must be relay stills.
+    """
+    from lib import wiring as _wiring
+    from lib.shotplan import WINDOW_MAX
+    from lib.wiring import build_step_fns, MediaSeams
+
+    beats = [
+        {
+            "id": "b05", "visual_type": "video",
+            "text": "教练讲解长距离配速策略变化。",
+            "video_prompt": "教练长镜头讲解配速策略", "image_prompt": "教练讲解",
+        },
+    ]
+    clip_len_by_index = {0: 20.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index,
+    )
+
+    fixture_path = tmp_path / "fixture.json"
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    run_ff_calls = []
+
+    def _spy_run_ff(argv, label):
+        run_ff_calls.append({"argv": argv, "label": label})
+        _Path(argv[-1]).write_bytes(b"\x00mp4 stub")
+
+    # src_dur=9.0s (> WINDOW_MAX=7.0s) for this beat's S2V source.
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=fixture_path,
+        seq="01", slug="test",
+        run_ff=_spy_run_ff,
+        probe_ms=lambda _p: 9000,
+        log=lambda m: None,
+        selection=None, dry=True,
+    )
+
+    monkeypatch.setattr(
+        _wiring.steps_mod, "step_render_shots_clip",
+        lambda shots, clip_len, out_clip, bid, scratch, ref_url, grade_vf,
+               gen_still_fn=None, run_ff_fn=None, durs=None:
+            _Path(out_clip).write_bytes(b"\x00mp4 stub"),
+    )
+
+    step_fns["gen-video"](_video_beat_step(), ctx, tmp_path)
+
+    video_calls = [c for c in run_ff_calls if c["label"] == "clip-b05"]
+    assert len(video_calls) == 1
+    video_argv = " ".join(str(x) for x in video_calls[0]["argv"])
+    assert f"-t {WINDOW_MAX}" in video_argv, (
+        f"S2V window must cap at WINDOW_MAX={WINDOW_MAX}, not src_dur=9.0 or "
+        f"clip_len=20.0: {video_argv}"
+    )
+    assert "-t 9.0" not in video_argv and "-t 20.0" not in video_argv
+
+
+# ---------------------------------------------------------------------------
+# Task 5: step_assemble — video >= audio assertion + padding (D-008: mux's
+# `-shortest` must never silently truncate the narration; if the xfade'd
+# video track comes up short of the narration track, pad the video's tail).
+# ---------------------------------------------------------------------------
+
+def _make_assemble_harness(tmp_path, *, monkeypatch, probe_ms):
+    """Build (step_fns, ctx) wired for step_assemble tests.
+
+    dry=True MediaSeams (card bg gen uses the cached .spike still, $0).
+    ensure_bgm / measure_gap / step_bgm_calib are monkeypatched to short-
+    circuit the BGM ducking loop to exactly 1 round (irrelevant to the
+    video>=audio guard under test) so these tests stay isolated to the
+    padding decision, not the whole downstream pipeline.
+
+    `probe_ms` is the caller-supplied probe function (path -> int ms) that
+    drives the video_track-vs-narration duration comparison inside
+    step_assemble.
+    """
+    from lib import wiring as _wiring
+    from lib.wiring import build_step_fns, MediaSeams
+
+    fixture = {
+        "character_ref": {"prompt": "主讲人物"},
+        "beats": [
+            {"id": "b00", "visual_type": "still", "text": "第一段旁白。",
+             "image_prompt": "跑者清晨慢跑"},
+            {"id": "b01", "visual_type": "still", "text": "第二段旁白。",
+             "image_prompt": "教练示范配速"},
+        ],
+    }
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(_json_mod.dumps(fixture), encoding="utf-8")
+
+    ep_dir = tmp_path / "episode"
+    ep_dir.mkdir(exist_ok=True)
+    assets_dir = ep_dir / "assets"
+    assets_dir.mkdir(exist_ok=True)
+
+    clip0 = tmp_path / "clip0.mp4"
+    clip1 = tmp_path / "clip1.mp4"
+    mp3_0 = tmp_path / "b00.mp3"
+    mp3_1 = tmp_path / "b01.mp3"
+    for p in (clip0, clip1, mp3_0, mp3_1):
+        p.write_bytes(b"\x00stub")
+
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+    cfg.audio.bgm_duck_db = -24.0
+
+    run_ff_calls = []
+
+    def _spy_run_ff(argv, label):
+        run_ff_calls.append({"argv": argv, "label": label})
+        _Path(argv[-1]).write_bytes(b"\x00mp4 stub")
+
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=fixture_path,
+        seq="01", slug="test",
+        run_ff=_spy_run_ff,
+        probe_ms=probe_ms,
+        log=lambda m: None,
+        selection=None, dry=True,
+    )
+
+    # Short-circuit the BGM ducking calibration loop to 1 round — irrelevant
+    # to the video>=audio guard, and it needs a real measure_gap_fn.
+    monkeypatch.setattr(_wiring, "ensure_bgm",
+                        lambda assets_dir, run_ff: str(assets_dir / "bgm.mp3"))
+    monkeypatch.setattr("lib.ffprobe_util.measure_gap",
+                        lambda *a, **kw: -20.0)  # >= target_db=-24.0 → 1 round
+
+    ctx = {
+        "beats": fixture["beats"],
+        "fixture": fixture,
+        "grade_vf": None,
+        "clips_by_index": {0: str(clip0), 1: str(clip1)},
+        "clip_len_by_index": {0: 10.0, 1: 8.0},
+        "mp3s": [str(mp3_0), str(mp3_1)],
+        "ep": {"final": ep_dir / "final.mp4", "assets_dir": assets_dir},
+        "ref_url": None,
+        "start_ms": 20000,
+        "ass_path": str(tmp_path / "subs.ass"),
+    }
+    return step_fns, ctx, run_ff_calls
+
+
+def _assemble_step():
+    return {"name": "assemble", "kind": "code", "agent": None,
+            "inputs": ["gen-still", "gen-video", "tts"], "artifact": None, "gate": []}
+
+
+def test_step_assemble_pads_video_track_when_shorter_than_narration(tmp_path, monkeypatch):
+    """video_track probes 0.3s shorter than narration → step_assemble must
+    trigger a pad (tpad-clone tail) BEFORE mux, so the final mux's video
+    input duration >= the narration duration — `-shortest` must never be
+    the thing that reconciles a short video against the narration (that
+    silently truncates the narration, D-008's exact failure mode).
+    """
+    from lib import wiring as _wiring
+
+    # video.mp4 probes to 29.7s; narration.m4a probes to 30.0s (short by 0.3s,
+    # beyond the default tol=0.05 in ffcmd.assert_video_ge_audio).
+    def _probe_ms(path):
+        p = str(path)
+        if "narration" in p:
+            return 30000
+        if "video" in p:
+            return 29700
+        return 5000  # cards / other probes, irrelevant here
+
+    step_fns, ctx, run_ff_calls = _make_assemble_harness(
+        tmp_path, monkeypatch=monkeypatch, probe_ms=_probe_ms,
+    )
+
+    step_fns["assemble"](_assemble_step(), ctx, tmp_path)
+
+    pad_calls = [c for c in run_ff_calls if "tpad" in " ".join(str(x) for x in c["argv"])
+                 and c["label"] not in ("card-title", "card-end")]
+    assert pad_calls, (
+        "expected a tpad-clone padding run_ff call when video_track (29.7s) "
+        f"is short of narration (30.0s) beyond tol: calls={run_ff_calls}"
+    )
+
+    mux_calls = [c for c in run_ff_calls if c["label"] == "mux-base"]
+    assert len(mux_calls) == 1
+    mux_video_input = mux_calls[0]["argv"][1]  # ["-i", video, "-i", audio, ...]
+    assert "pad" in mux_video_input or mux_video_input != os.path.join(
+        str(tmp_path), "video.mp4"
+    ), (
+        "mux-base must consume the PADDED video track (not the original short "
+        f"video.mp4): {mux_calls[0]['argv']}"
+    )
+
+
+def test_step_assemble_no_pad_when_video_ge_audio(tmp_path, monkeypatch):
+    """Normal scenario (video_track >= narration) → no padding call, mux-base
+    consumes the original xfade'd video_track unchanged (no regression)."""
+    def _probe_ms(path):
+        p = str(path)
+        if "narration" in p:
+            return 30000
+        if "video" in p:
+            return 30100  # video >= audio (no shortfall)
+        return 5000
+
+    step_fns, ctx, run_ff_calls = _make_assemble_harness(
+        tmp_path, monkeypatch=monkeypatch, probe_ms=_probe_ms,
+    )
+
+    step_fns["assemble"](_assemble_step(), ctx, tmp_path)
+
+    pad_calls = [c for c in run_ff_calls if "tpad" in " ".join(str(x) for x in c["argv"])
+                 and c["label"] not in ("card-title", "card-end")]
+    assert not pad_calls, (
+        f"video_track (30.1s) already >= narration (30.0s) — no padding call "
+        f"expected, got: {pad_calls}"
+    )
+
+    mux_calls = [c for c in run_ff_calls if c["label"] == "mux-base"]
+    assert len(mux_calls) == 1
+    mux_video_input = mux_calls[0]["argv"][1]
+    assert mux_video_input == os.path.join(str(tmp_path), "video.mp4"), (
+        f"mux-base must consume the original video_track unchanged when no "
+        f"padding is needed: {mux_calls[0]['argv']}"
+    )
+
+
+# ===========================================================================
+# Task 3 (Phase 2 media-source-layer plan): MediaRouter wiring —
+# prepare_render / build_step_fns / call sites.
+#
+# All harness-based tests below FAIL before Task 3-impl with a hard
+# `TypeError: build_step_fns() got an unexpected keyword argument 'router'`
+# (build_step_fns doesn't accept `router` yet). They go green once Task
+# 3-impl threads `router` through build_step_fns and step_extract calls
+# `router.set_style(...)`.
+# ===========================================================================
+
+class _RouterFakeSeams:
+    """Fake seams for router call-site wiring tests. Records gen_still /
+    gen_character_ref calls; style_prefix/provider are plain settable attrs
+    like the real MediaSeams so step_extract can set/read them.
+    """
+
+    def __init__(self):
+        self.gen_still_calls: list[str] = []
+        self.gen_character_ref_calls: list[str] = []
+        self.style_prefix = ""
+        self.provider = "minimax"
+
+    def gen_still(self, prompt, ref_url, out_path):
+        self.gen_still_calls.append(prompt)
+        _Path(out_path).write_bytes(b"\x00fake-still")
+        return out_path
+
+    def gen_character_ref(self, prompt, out_path):
+        self.gen_character_ref_calls.append(prompt)
+        _Path(out_path).write_bytes(b"\x00fake-ref")
+        return out_path
+
+    def gen_video(self, prompt, ref_url, out_path):
+        return {"ok": False, "reason": "unused in Task 3 router wiring tests"}
+
+
+def _make_router_harness(tmp_path, *, beats, library=None, art_style="写实电影"):
+    """Build (step_fns, ctx, router, fake_seams) with a MediaRouter wired
+    through build_step_fns(router=...) (Task 3). `library` seeds cfg.library
+    (style -> kind), consumed by router.set_style via LibrarySource.from_config
+    once step_extract runs.
+    """
+    from lib.wiring import build_step_fns
+    from lib.media_source import MediaRouter, GenerateSource
+
+    fixture = {"character_ref": {"prompt": "主讲人物"}, "beats": beats}
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(_json_mod.dumps(fixture), encoding="utf-8")
+
+    ep_dir = tmp_path / "episode"
+    ep_dir.mkdir(exist_ok=True)
+    assets_dir = ep_dir / "assets"
+    assets_dir.mkdir(exist_ok=True)
+
+    cfg = _MagicMock()
+    cfg.syllabus_path = ""
+    cfg.cursor_path = ""
+    cfg.library = library or {}
+
+    fake_seams = _RouterFakeSeams()
+    router = MediaRouter(GenerateSource(fake_seams), cfg=cfg)
+
+    selection = _types_mod.SimpleNamespace(
+        art_style=art_style, style="", color_grade="",
+        doc_refs=None, character_ref="主讲人物",
+        seq="01", slug="test", source="", verify_status="",
+        learning_goal="", topic="",
+    )
+
+    def _spy_run_ff(argv, label):
+        # ffmpeg output path is the last argv element; touch it so any
+        # downstream copy/concat in step_render_shots_clip finds a real file.
+        _Path(argv[-1]).write_bytes(b"\x00mp4 stub")
+
+    step_fns = build_step_fns(
+        cfg, seams=fake_seams, fixture_path=fixture_path,
+        seq="01", slug="test",
+        run_ff=_spy_run_ff,
+        probe_ms=lambda _p: 5000,
+        log=lambda m: None,
+        selection=selection, dry=True,
+        router=router,
+    )
+
+    ctx = {
+        "ep": {"final": ep_dir / "final.mp4", "assets_dir": assets_dir,
+               "shotlist": ep_dir / "shotlist.json"},
+        "doc_refs": None,
+        "clips_by_index": {},
+    }
+    return step_fns, ctx, router, fake_seams
+
+
+def test_step_extract_calls_router_set_style(tmp_path, monkeypatch):
+    """step_extract must call router.set_style(selection.art_style) so the
+    router binds the episode's LibrarySource at the same time seams.style_prefix
+    is set (MR-1: router uses its constructor-injected self.cfg, not a closure).
+
+    FAILS before Task 3-impl: build_step_fns() has no `router` kwarg → TypeError.
+    """
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, _fake_seams = _make_router_harness(
+        tmp_path, beats=beats, art_style="简笔日漫",
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+
+    assert router.style == "简笔日漫", (
+        f"step_extract must call router.set_style(selection.art_style), "
+        f"got router.style={router.style!r}"
+    )
+
+
+def test_build_step_fns_call_sites_use_router_gen_still_five_times():
+    """MR-2 (grep-confirmed in the plan): exactly 5 still call sites — content
+    still, S2V-fail fallback, relay, chart degrade, chart followup — route
+    through `router.gen_still`; the 1 gen_video call site routes through
+    `router.gen_video`. `resolve_character_ref_url` (character ref) and
+    `_card_bg` (cards) must stay direct on `seams.gen_character_ref` /
+    `seams.gen_still` (D-013 — presenter ref + cards are never library-sourced).
+
+    FAILS before Task 3-impl: source has 0 'router.gen_still' call sites
+    (all 5 still read 'gen_still_fn=seams.gen_still') and 'seams.gen_video('
+    at the video call site, not 'router.gen_video('.
+    """
+    import inspect
+    from lib.wiring import build_step_fns
+    source = inspect.getsource(build_step_fns)
+
+    assert source.count("gen_still_fn=router.gen_still") == 5, (
+        f"expected exactly 5 call sites wired to router.gen_still (MR-2), got "
+        f"{source.count('gen_still_fn=router.gen_still')}"
+    )
+    assert source.count("gen_still_fn=seams.gen_still") == 0, (
+        "no still call site may still read gen_still_fn=seams.gen_still after "
+        "Task 3-impl (all 5 must route through router)"
+    )
+    assert "router.gen_video(" in source, (
+        "the gen_video call site must route through router.gen_video"
+    )
+    assert "seams.gen_video(" not in source, (
+        "seams.gen_video must no longer be called directly (routes through router)"
+    )
+    # D-013: character_ref + cards stay direct on seams (never library-sourced).
+    assert "seams.gen_character_ref" in source, (
+        "resolve_character_ref_url must keep calling seams.gen_character_ref "
+        "directly (D-013)"
+    )
+    assert "actual = seams.gen_still(prompt, card_ref, out)" in source, (
+        "_card_bg must keep calling seams.gen_still directly (D-013)"
+    )
+
+
+def test_step_gen_still_no_regression_when_library_empty(tmp_path, monkeypatch):
+    """无回归硬门: with no library bound for this episode's style, every
+    content-still window must still generate exactly once via the router's
+    transparent generate fallback, with the same prompt as before routing
+    (router pass-through == old direct seams.gen_still behavior).
+
+    FAILS before Task 3-impl: build_step_fns() has no `router` kwarg → TypeError.
+    """
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = _three_beats_one_long()
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={},  # no binding for 写实电影 → all-generate
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    assert router.library is None, (
+        "no library binding for this style → router.library must stay None"
+    )
+    ctx["clip_len_by_index"] = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    total_windows = sum(len(ctx["windows"][i]) for i in ctx["windows"])
+    assert len(fake_seams.gen_still_calls) == total_windows, (
+        f"no library bound → every window must still generate exactly once "
+        f"via router's transparent generate fallback; "
+        f"calls={len(fake_seams.gen_still_calls)} windows={total_windows}"
+    )
+    # Expected = what step_render_shots_clip hands to gen_still_fn, which is
+    # build_shot_prompt(shot, ref_url)[0] (pre-existing 空镜 disclaimer for
+    # with_character=False windows) — NOT the raw window prompt. The router
+    # forwards this value verbatim (media_source.MediaRouter.gen_still), so
+    # exact equality here proves router transparency; the disclaimer is applied
+    # identically whether gen_still_fn is router.gen_still or seams.gen_still.
+    from lib.steps import build_shot_prompt
+    all_prompts = [
+        build_shot_prompt(w, ctx["ref_url"])[0]
+        for i in sorted(ctx["windows"]) for w in ctx["windows"][i]
+    ]
+    assert fake_seams.gen_still_calls == all_prompts, (
+        "router pass-through must not alter the prompts handed to generate"
+    )
+
+
+def test_step_gen_still_routes_to_library_stub_when_bound(tmp_path, monkeypatch):
+    """D-003 (library-first): once config binds this episode's art_style to a
+    stub library, every content-still window must be served by LibrarySource
+    (stub), never falling through to generate.gen_still.
+
+    FAILS before Task 3-impl: build_step_fns() has no `router` kwarg → TypeError.
+    """
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = _three_beats_one_long()
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={"写实电影": "stub"}, art_style="写实电影",
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    assert router.library is not None, (
+        "a stub-bound style must make router.set_style build a LibrarySource"
+    )
+    ctx["clip_len_by_index"] = {0: 44.0, 1: 4.0, 2: 20.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    assert fake_seams.gen_still_calls == [], (
+        f"a library-bound style must serve every still window from the stub "
+        f"library, never calling generate.gen_still; got "
+        f"{fake_seams.gen_still_calls}"
+    )
+
+
+def test_character_ref_and_cards_stay_direct_on_seams_when_library_bound(
+        tmp_path, monkeypatch):
+    """D-013: even when the episode's style is library-bound, the presenter
+    character ref must still be generated directly via seams (never sourced
+    from the library) — resolve_character_ref_url doesn't go through router.
+
+    FAILS before Task 3-impl: build_step_fns() has no `router` kwarg → TypeError.
+    """
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={"写实电影": "stub"}, art_style="写实电影",
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+
+    assert len(fake_seams.gen_character_ref_calls) == 1, (
+        f"resolve_character_ref_url must call seams.gen_character_ref directly "
+        f"exactly once, unaffected by the style's library binding; got "
+        f"{fake_seams.gen_character_ref_calls}"
+    )

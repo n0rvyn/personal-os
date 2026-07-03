@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,10 @@ class ConfigNotFound(ConfigError):
 
 
 VALID_MEDIA_PROVIDERS = frozenset({"doubao", "minimax"})
+
+# Phase 2 media-source layer: style_name -> kind binding. Phase 4 adds "pexels",
+# Phase 6 adds "offline". "none" = pure generate (default when style unbound).
+VALID_LIBRARY_KINDS = frozenset({"none", "stub"})
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +103,9 @@ class VideoStudioConfig:
     syllabus_source_dir: str = ""
     # R2: optional host persona + channel brand (configurable, content-level)
     host: HostConfig = HostConfig()
+    # Phase 2: media-source layer — style_name -> library kind binding.
+    # Empty = all styles fall through to generate (Phase 1 legacy behaviour).
+    library: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +269,20 @@ def _validate_budget(raw: dict[str, Any]) -> BudgetConfig:
     )
 
 
+def _validate_library(raw: dict[str, Any]) -> dict[str, str]:
+    """Validate the `library` section: style_name -> kind, kind in VALID_LIBRARY_KINDS."""
+    result: dict[str, str] = {}
+    for style_name, kind in raw.items():
+        kind_str = str(kind)
+        if kind_str not in VALID_LIBRARY_KINDS:
+            raise ConfigError(
+                f"library.{style_name} kind must be one of {sorted(VALID_LIBRARY_KINDS)}, "
+                f"got: {kind_str!r}"
+            )
+        result[str(style_name)] = kind_str
+    return result
+
+
 def _validate_ffmpeg(raw: dict[str, Any]) -> FfmpegConfig:
     for key in ("ffmpeg_bin", "ffprobe_bin"):
         if key not in raw:
@@ -347,6 +368,10 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         tone=str(host_raw.get("tone", "")),
     )
 
+    # --- Phase 2: media-source layer style->kind binding (optional; empty = all-generate) ---
+    library_raw = raw.get("library") or {}
+    library = _validate_library(library_raw)
+
     return VideoStudioConfig(
         render=render,
         audio=audio,
@@ -363,6 +388,7 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         book_series=book_series,
         syllabus_source_dir=syllabus_source_dir,
         host=host,
+        library=library,
     )
 
 

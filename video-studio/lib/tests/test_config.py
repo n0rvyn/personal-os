@@ -738,6 +738,90 @@ def test_env_var_overrides_project_config(tmp_path, monkeypatch):
     assert cfg.media.provider == "minimax"
 
 
+# ---------------------------------------------------------------------------
+# library section (Phase 2 media-source layer, DP style→kind binding)
+#
+# These tests are FAIL-first (written before Task 2-impl adds `library` to
+# VideoStudioConfig / load_config).
+# ---------------------------------------------------------------------------
+
+
+def test_library_section_parsed(tmp_path):
+    """config with library: {写实: stub, 简笔日漫: none} → cfg.library reflects it."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    yaml_text += "library:\n  写实: stub\n  简笔日漫: none\n"
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert dict(cfg.library) == {"写实": "stub", "简笔日漫": "none"}
+
+
+def test_library_missing_defaults_to_empty(tmp_path):
+    """No library section → cfg.library defaults to empty (= all-generate)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    _write_config(cfg_path, _minimal_yaml(out))
+
+    cfg = load_config(str(cfg_path))
+    assert dict(cfg.library) == {}
+
+
+def test_library_cascade_deep_merge_workspace_wins(tmp_path, monkeypatch):
+    """Machine base library:{写实: none} + workspace override library:{写实: stub}
+    → deep-merged, workspace wins at leaf level (reuses _deep_merge)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    machine_out = home / "output"
+    machine_out.mkdir()
+
+    _write_yaml_file(
+        home / ".claude" / "video-studio" / "config.yaml",
+        _complete_yaml(machine_out) + "library:\n  写实: none\n",
+    )
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "CLAUDE.md").write_text("# marker\n")
+    project_out = project_root / "output"
+    project_out.mkdir()
+
+    _write_yaml_file(
+        project_root / ".video-studio" / "config.yaml",
+        textwrap.dedent(f"""
+            output_dir: {project_out}
+            character_ref: /tmp/project-char.jpg
+            library:
+              写实: stub
+        """),
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(project_root)
+    monkeypatch.delenv("VIDEO_STUDIO_CONFIG", raising=False)
+
+    cfg = load_config()
+    assert cfg.library["写实"] == "stub", (
+        "workspace-level library override must win over machine base (deep merge)"
+    )
+
+
+def test_library_invalid_kind_raises(tmp_path):
+    """library value not in VALID_LIBRARY_KINDS → ConfigError naming style+kind."""
+    from lib.config import ConfigError
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    yaml_text += "library:\n  写实: 火星\n"
+    _write_config(cfg_path, yaml_text)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(str(cfg_path))
+    assert "写实" in str(exc.value)
+    assert "火星" in str(exc.value)
+
+
 def test_budget_video_floor_exceeding_cap_raises(tmp_path):
     """R2 fix #3: floor > cap is contradictory (min > max) → ConfigError at load,
     not a silent cap violation at render time."""

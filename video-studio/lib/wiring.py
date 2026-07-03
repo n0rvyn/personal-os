@@ -38,11 +38,14 @@ from lib import cards, ffcmd, grade, media_chart, media_tts
 from lib import dispatch as dispatch_mod
 from lib import episode as episode_mod
 from lib import extract as extract_mod
+from lib import shotplan as shotplan_mod
 from lib import steps as steps_mod
 from lib.config import VideoStudioConfig
+from lib.media_source import GenerateSource, MediaRouter
 from lib.budget import apply_video_budget, apply_video_floor
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
 from lib.provenance import build_provenance, stamp_episode_provenance
+from lib.visual_ledger import VisualLedger, sig as visual_sig, _done_episode_dirs
 from lib.storyboard import parse_shotlist
 from lib.subtitle import build_ass, build_srt
 
@@ -61,6 +64,17 @@ FFMPEG_TIMEOUT_S = 1200
 # of the beat's narration plays over a content-relevant still (no camera on the chart —
 # user's call). Only splits when the beat is meaningfully longer than the cap.
 CHART_MAX_SECONDS = 12.0
+
+
+def _beat_shots(beat: dict) -> list[dict]:
+    """Fixture/no-director-mode shot list for one still/multi beat, in the
+    same shot-dict shape director-sourced shots already carry (prompt +
+    with_character) so `shotplan.plan_windows` can treat both sources
+    uniformly. No regression path for `step_shotplan` when ctx has no "sb"
+    (director not run)."""
+    if beat["visual_type"] == "multi":
+        return [{"prompt": p, "with_character": True} for p in beat.get("shots", [])]
+    return [{"prompt": beat.get("image_prompt", ""), "with_character": True}]
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +420,7 @@ def build_step_fns(
     cfg: VideoStudioConfig,
     *,
     seams: MediaSeams,
+    router: Any = None,
     fixture_path: Path,
     seq: str,
     slug: str,
@@ -425,6 +440,11 @@ def build_step_fns(
     + provenance.json land in the EPISODE dir (survives the runner's end-of-run
     cleanup_scratch).
     """
+    # router is a deterministic function of (seams, cfg); callers that don't
+    # route (most tests) get a transparent default (library-less → generate),
+    # so it need not be a required kwarg.
+    if router is None:
+        router = MediaRouter(GenerateSource(seams), cfg=cfg, log=log)
 
     def _sentinel(scratch: Path, key: str, payload: str = "ok") -> str:
         p = scratch / f"{key}.manifest.txt"
@@ -484,6 +504,7 @@ def build_step_fns(
         _art_style = (selection.art_style if selection is not None else "") or ""
         _color_grade = (selection.color_grade if selection is not None else "") or ""
         seams.style_prefix = grade.resolve_art_style(_art_style)
+        router.set_style(_art_style)
         ctx["grade_vf"] = grade.resolve_color_grade(_color_grade or None)
         log(f"[grade] art_style={_art_style!r} color_grade={_color_grade!r}")
 
@@ -601,10 +622,47 @@ def build_step_fns(
         ctx["audio_dir"] = _sentinel(Path(scratch), "audio_dir", "\n".join(mp3s))
         log(f"[tts] {len(mp3s)} beats, start_ms after body = {start_ms}")
 
-    # ---- 5: gen-still (still / multi beats → clips via storyboard shots) ----
-    def step_gen_still(step, ctx, scratch):
+    # ---- 4b: 镜头计划 (Phase-1 shot-timeline) — post-tts, pre-gen-still.
+    # Turns each still/multi beat's real clip_len + director shots into N
+    # distinct content windows (lib.shotplan.plan_windows). Pure code, no
+    # gate. Writes ctx["windows"][i] = list[window dict] for consumption by
+    # step_gen_still below. video/chart beats are untouched here (video →
+    # Task 4; chart keeps its existing CHART_MAX windowing).
+    def step_shotplan(step, ctx, scratch):
         beats = ctx["beats"]
         sb = ctx.get("sb")
+        ep_dir = ctx["ep"]["final"].parent
+        ledger = VisualLedger(ep_dir, prior_dirs=_done_episode_dirs(cfg, ctx))
+        windows: dict[int, list] = {}
+        for i, beat in enumerate(beats):
+            if beat["visual_type"] not in ("still", "multi"):
+                continue
+            if sb is not None:
+                director_shots = sb[i]["shots"]
+                keywords = sb[i].get("keywords", [])
+            else:
+                director_shots = _beat_shots(beat)
+                keywords = beat.get("keywords", [])
+            clip_len = ctx["clip_len_by_index"][i]
+            beat_windows = shotplan_mod.plan_windows(
+                beat, clip_len, director_shots, keywords, ledger,
+            )
+            for w in beat_windows:
+                ledger.record(visual_sig(w["prompt"]))
+            windows[i] = beat_windows
+        ledger.save()
+        ctx["windows"] = windows
+        # Keep the ledger in ctx so step_gen_video can window a video beat's
+        # relay tail (rem = clip_len - s2v_dur) against the same dedup set —
+        # rem is only known after S2V is probed (post-shotplan), so the relay
+        # windowing must happen there, not here.
+        ctx["visual_ledger"] = ledger
+        log(f"[镜头计划] windowed {len(windows)} still/multi beats")
+
+    # ---- 5: gen-still (still / multi beats → clips via N shot-plan windows) ----
+    def step_gen_still(step, ctx, scratch):
+        beats = ctx["beats"]
+        windows = ctx["windows"]
         ref_url = ctx["ref_url"]
         grade_vf = ctx["grade_vf"]
         scratch_s = str(scratch)
@@ -613,17 +671,14 @@ def build_step_fns(
             if beat["visual_type"] not in ("still", "multi"):
                 continue
             bid = beat["id"]
-            if sb is not None:
-                shots = sb[i]["shots"]
-            elif beat["visual_type"] == "multi":
-                shots = [{"prompt": p, "with_character": True} for p in beat["shots"]]
-            else:
-                shots = [{"prompt": beat["image_prompt"], "with_character": True}]
+            shots = windows[i]
+            durs = [w["dur"] for w in shots]
             clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
             steps_mod.step_render_shots_clip(
                 shots, ctx["clip_len_by_index"][i], clip, bid, scratch_s,
                 ref_url, grade_vf,
-                gen_still_fn=seams.gen_still, run_ff_fn=run_ff,
+                gen_still_fn=router.gen_still, run_ff_fn=run_ff,
+                durs=durs,
             )
             ctx["clips_by_index"][i] = clip
             n += 1
@@ -631,6 +686,15 @@ def build_step_fns(
         log(f"[gen-still] rendered {n} still/multi beats")
 
     # ---- 6: gen-video (S2V beats; reuse cached clip, never default-on) ----
+    #
+    # Task 4 "once + relay" contract: the S2V source plays ONCE, capped at
+    # lib.shotplan.WINDOW_MAX — never looped/tpad-cloned to fill the whole
+    # beat (the root of the POC-era hold/loop bugs). The beat's remaining
+    # duration (rem = clip_len - s2v_dur) is covered by relay still window(s)
+    # (interim prompt = the beat's own image_prompt via _beat_shots), rendered
+    # via step_render_shots_clip and hard-concatenated with the S2V window
+    # into the single beat clip. ctx["clips_by_index"][i] stays a str path
+    # (contract unchanged).
     def step_gen_video(step, ctx, scratch):
         beats = ctx["beats"]
         grade_vf = ctx["grade_vf"]
@@ -650,24 +714,81 @@ def build_step_fns(
                     shutil.copy(reuse_clip, vmp4)
                 log(f"[gen-video] {bid} reusing S2V clip {reuse_clip}")
             else:
-                res = seams.gen_video(beat["video_prompt"], ref_url, vmp4)
+                res = router.gen_video(beat["video_prompt"], ref_url, vmp4)
                 if not res.get("ok"):
-                    fb = beat.get("image_prompt", beat["text"])
+                    # S2V failed → fall back to a WINDOWED still sequence over the
+                    # whole beat (same as still/multi + the relay), NOT one image
+                    # held for the full clip_len (that reintroduces the ⑤ hold on
+                    # the failure path — the cached-S2V reuse branch never
+                    # exercises this, so it slips past structural renders).
+                    sb = ctx.get("sb")
+                    if sb is not None:
+                        fb_shots = sb[i]["shots"]
+                        fb_keywords = sb[i].get("keywords", [])
+                    else:
+                        fb_shots = _beat_shots(beat)
+                        fb_keywords = beat.get("keywords", [])
+                    ledger = ctx.get("visual_ledger")
+                    fb_windows = shotplan_mod.plan_windows(
+                        beat, clip_len, fb_shots, fb_keywords, ledger,
+                    )
+                    if ledger is not None:
+                        for w in fb_windows:
+                            ledger.record(visual_sig(w["prompt"]))
+                        ledger.save()
                     steps_mod.step_render_shots_clip(
-                        [{"prompt": fb, "with_character": True}],
-                        clip_len, clip, bid, scratch_s, ref_url, grade_vf,
-                        gen_still_fn=seams.gen_still, run_ff_fn=run_ff,
+                        fb_windows, clip_len, clip, bid, scratch_s, ref_url,
+                        grade_vf, gen_still_fn=router.gen_still, run_ff_fn=run_ff,
+                        durs=[w["dur"] for w in fb_windows],
                     )
                     ctx["clips_by_index"][i] = clip
-                    log(f"[gen-video] {bid} S2V fallback=still ({res.get('reason')})")
+                    log(f"[gen-video] {bid} S2V fallback=windowed-still ({res.get('reason')})")
                     n += 1
                     continue
                 log(f"[gen-video] {bid} S2V ok -> {vmp4}")
+
+            src_dur = probe_ms(vmp4) / 1000.0
+            s2v_dur = min(src_dur, shotplan_mod.WINDOW_MAX)
+            s2v_sub = os.path.join(scratch_s, f"clip_{i}_{bid}_s2v.mp4")
             run_ff(
-                ffcmd.video_clip_cmd(vmp4, clip_len, clip, grade_vf,
-                                     probe_ms(vmp4) / 1000.0),
+                ffcmd.video_clip_cmd(vmp4, clip_len, s2v_sub, grade_vf, src_dur),
                 f"clip-{bid}",
             )
+            rem = clip_len - s2v_dur
+            if rem > 1e-6:
+                relay_sub = os.path.join(scratch_s, f"clip_{i}_{bid}_relay.mp4")
+                # Window the relay tail into N≈rem/TARGET_WINDOW distinct content
+                # windows (same as still/multi beats) instead of one still held
+                # for the whole remainder — otherwise a long video beat re-holds
+                # a single image after the S2V window (the ⑤ hold, relay edition).
+                sb = ctx.get("sb")
+                if sb is not None:
+                    r_shots = sb[i]["shots"]
+                    r_keywords = sb[i].get("keywords", [])
+                else:
+                    r_shots = _beat_shots(beat)
+                    r_keywords = beat.get("keywords", [])
+                ledger = ctx.get("visual_ledger")
+                relay_windows = shotplan_mod.plan_windows(
+                    beat, rem, r_shots, r_keywords, ledger,
+                )
+                if ledger is not None:
+                    for w in relay_windows:
+                        ledger.record(visual_sig(w["prompt"]))
+                    ledger.save()
+                steps_mod.step_render_shots_clip(
+                    relay_windows, rem, relay_sub, bid, scratch_s,
+                    ref_url, grade_vf,
+                    gen_still_fn=router.gen_still, run_ff_fn=run_ff,
+                    durs=[w["dur"] for w in relay_windows],
+                )
+                listf = os.path.join(scratch_s, f"{bid}_beat_concat.txt")
+                with open(listf, "w") as f:
+                    f.write(f"file '{s2v_sub}'\n")
+                    f.write(f"file '{relay_sub}'\n")
+                run_ff(ffcmd.concat_cmd(listf, clip), f"{bid}-beat-concat")
+            else:
+                shutil.copy(s2v_sub, clip)
             ctx["clips_by_index"][i] = clip
             n += 1
         ctx["clips_dir"] = _sentinel(Path(scratch), "clips_dir", f"{n} video beats")
@@ -695,14 +816,27 @@ def build_step_fns(
                 # S2V/TTS. Mirrors the S2V→still fallback in step_gen_video.
                 fb = beat.get("image_prompt", beat.get("text", "")) or "跑步场景"
                 clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
-                steps_mod.step_render_shots_clip(
+                # Windowed degrade (not one held still over the whole beat) — same
+                # rule as still/multi + the S2V fallback.
+                _clen = ctx["clip_len_by_index"][i]
+                fb_windows = shotplan_mod.plan_windows(
+                    beat, _clen,
                     [{"prompt": fb, "with_character": False}],
-                    ctx["clip_len_by_index"][i], clip, bid, scratch_s,
+                    beat.get("keywords", []), ctx.get("visual_ledger"),
+                )
+                _ledger = ctx.get("visual_ledger")
+                if _ledger is not None:
+                    for w in fb_windows:
+                        _ledger.record(visual_sig(w["prompt"]))
+                    _ledger.save()
+                steps_mod.step_render_shots_clip(
+                    fb_windows, _clen, clip, bid, scratch_s,
                     ctx["ref_url"], ctx["grade_vf"],
-                    gen_still_fn=seams.gen_still, run_ff_fn=run_ff,
+                    gen_still_fn=router.gen_still, run_ff_fn=run_ff,
+                    durs=[w["dur"] for w in fb_windows],
                 )
                 ctx["clips_by_index"][i] = clip
-                log(f"[chart] {bid}: unknown chart type → fallback still clip {clip}")
+                log(f"[chart] {bid}: unknown chart type → windowed fallback still {clip}")
                 n += 1
                 continue
             if isinstance(descriptor, tuple) and descriptor[0] == "__line__":
@@ -744,11 +878,26 @@ def build_step_fns(
                     or "跑者在真实环境中从容奔跑的动态空镜"
                 )
                 after_part = os.path.join(scratch_s, f"clip_{i}_{bid}_after.mp4")
-                steps_mod.step_render_shots_clip(
+                # ⑧ "其余窗口切内容": window the post-chart remainder into distinct
+                # ~5s content windows, NOT one still held for (clip_len - 12s)
+                # — a long chart beat otherwise re-holds a single image after the
+                # 12s chart (the ⑤ hold, chart-followup edition).
+                fu_rem = clip_len - CHART_MAX_SECONDS
+                fu_windows = shotplan_mod.plan_windows(
+                    beat, fu_rem,
                     [{"prompt": fu_prompt, "with_character": False}],
-                    clip_len - CHART_MAX_SECONDS, after_part, bid, scratch_s,
+                    beat.get("keywords", []), ctx.get("visual_ledger"),
+                )
+                _ledger = ctx.get("visual_ledger")
+                if _ledger is not None:
+                    for w in fu_windows:
+                        _ledger.record(visual_sig(w["prompt"]))
+                    _ledger.save()
+                steps_mod.step_render_shots_clip(
+                    fu_windows, fu_rem, after_part, bid, scratch_s,
                     ctx["ref_url"], ctx["grade_vf"],
-                    gen_still_fn=seams.gen_still, run_ff_fn=run_ff,
+                    gen_still_fn=router.gen_still, run_ff_fn=run_ff,
+                    durs=[w["dur"] for w in fu_windows],
                 )
                 listf = os.path.join(scratch_s, f"clip_{i}_{bid}_list.txt")
                 with open(listf, "w") as lf:
@@ -856,6 +1005,21 @@ def build_step_fns(
         video_track = os.path.join(scratch_s, "video.mp4")
         run_ff(ffcmd.xfade_chain_cmd(vid_clips, clip_durs, video_track), "xfade")
 
+        # Task 5 (D-008): assert video_track >= narration; pad the video's
+        # tail (never loop) if the xfade chain came up short — `-shortest` in
+        # mux_av_cmd must only ever trim the padded track's tiny overshoot,
+        # never silently truncate the narration.
+        video_track_dur = probe_ms(video_track) / 1000.0
+        narration_dur = probe_ms(narration) / 1000.0
+        pad_target = ffcmd.assert_video_ge_audio(video_track_dur, narration_dur)
+        video_padded = pad_target is not None
+        if video_padded:
+            padded_track = os.path.join(scratch_s, "video_padded.mp4")
+            run_ff(ffcmd.pad_video_to_cmd(video_track, pad_target, padded_track), "pad-video-tail")
+            log(f"[assemble] video_track short ({video_track_dur:.2f}s < narration "
+                f"{narration_dur:.2f}s) — padded tail to {pad_target:.2f}s")
+            video_track = padded_track
+
         base_mp4 = os.path.join(scratch_s, "base.mp4")
         run_ff(ffcmd.mux_av_cmd(video_track, narration, base_mp4), "mux-base")
         log(f"[assemble] {len(vid_clips)} clips x-faded, {total_audio_ms}ms narration")
@@ -880,6 +1044,9 @@ def build_step_fns(
             json.dumps(result, indent=2), encoding="utf-8")
         (ep["final"].parent / "meta.json").write_text(
             json.dumps({"total_audio_ms": total_audio_ms,
+                        "video_track_dur": video_track_dur,
+                        "narration_dur": narration_dur,
+                        "video_padded": video_padded,
                         "beats": [{"id": b["id"], "type": b["visual_type"]}
                                   for b in beats]}, indent=2), encoding="utf-8")
         log(f"[assemble] video -> {final_mp4} "
@@ -1000,6 +1167,7 @@ def build_step_fns(
         "scratch": step_scratch,
         "extract": step_extract,
         "tts": step_tts,
+        "镜头计划": step_shotplan,
         "gen-still": step_gen_still,
         "gen-video": step_gen_video,
         "chart": step_chart,
@@ -1352,8 +1520,9 @@ def prepare_render(
     run_ff, probe_ms = make_ff_seams(cfg)
     seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log,
                        voice_id=getattr(cfg.audio, "voice_id", ""))
+    router = MediaRouter(GenerateSource(seams), cfg=cfg, log=log)
     step_fns = build_step_fns(
-        cfg, seams=seams, fixture_path=fixture_path, seq=seq, slug=slug,
+        cfg, seams=seams, router=router, fixture_path=fixture_path, seq=seq, slug=slug,
         run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection, dry=dry,
     )
     gates = {"check_artifact": episode_mod.check_artifact}

@@ -29,6 +29,8 @@ from lib.ffcmd import (
     xfade_chain_cmd,
     mux_av_cmd,
     video_clip_cmd,
+    assert_video_ge_audio,
+    pad_video_to_cmd,
 )
 
 
@@ -422,51 +424,66 @@ def test_mux_av_copies_video_and_shortest():
 
 
 # ---------------------------------------------------------------------------
-# video_clip_cmd — S2V loop-fill tests (Task 2)
+# video_clip_cmd — S2V "once + relay" contract (Task 4)
 #
-# Short src_dur < dur_s must use loop filter (not setpts slow-motion).
-# Seedance clips are 30fps; size = round(src_dur * 30) covers all source frames.
-# src_dur >= dur_s or unknown falls back to tpad-clone.
+# NEW contract (replaces the Task 2 loop-fill contract below, migrated per
+# plan MR-3): video_clip_cmd no longer loops or tpad-clones the S2V source to
+# fill the WHOLE beat. It plays the S2V source ONCE, capped at WINDOW_MAX
+# (7.0s, lib.shotplan.WINDOW_MAX) — the remainder of the beat is covered by
+# relay still windows wired in lib.wiring.step_gen_video (Task 4-impl), not by
+# looping/padding the video itself. So:
+#   - actual_dur = min(src_dur, WINDOW_MAX) when src_dur is known
+#   - src_dur unknown (None) → actual_dur = dur_s as given (no loop, no tpad
+#     fill-to-beat requirement)
+#   - loop=-1 must NEVER appear (old short-src loop-fill contract retired)
 # ---------------------------------------------------------------------------
 
-def test_video_clip_short_src_uses_loop_not_setpts():
-    """When src_dur < dur_s, clip must use loop filter, NOT setpts slow-motion."""
+from lib.shotplan import WINDOW_MAX as _WINDOW_MAX
+
+
+def test_video_clip_never_loops_when_src_shorter_than_dur_s():
+    """src_dur < dur_s must NOT use loop filter (old loop-fill contract retired).
+
+    Was `test_video_clip_short_src_uses_loop_not_setpts` (Task 2) — MR-3
+    migration: the new contract renders the S2V window ONCE, capped at
+    WINDOW_MAX; the beat's remaining duration is covered by relay still
+    windows (lib.wiring.step_gen_video), not by looping the source.
+    """
     argv = video_clip_cmd("/t/clip.mp4", 10.0, "/t/out.mp4", src_dur=5.0)
     s = _joined(argv)
-    assert "loop=" in s, f"short src must use loop filter: {s}"
-    assert "setpts" not in s, f"short src must NOT use setpts slow-motion: {s}"
+    assert "loop=" not in s, f"S2V clip must NOT loop-fill the beat: {s}"
+    assert "setpts" not in s, f"S2V clip must NOT use setpts slow-motion: {s}"
 
 
-def test_video_clip_short_src_loop_size_matches_src_frames():
-    """loop size= must equal round(src_dur * 30) to cover all 30fps source frames."""
-    argv = video_clip_cmd("/t/clip.mp4", 10.0, "/t/out.mp4", src_dur=5.0)
+def test_video_clip_caps_dur_at_window_max_when_src_dur_exceeds_it():
+    """src_dur (9.0s) exceeds WINDOW_MAX (7.0s) for a long beat (dur_s=20.0)
+    → the rendered window must be capped at WINDOW_MAX, not the full src_dur
+    and not the full beat length."""
+    argv = video_clip_cmd("/t/clip.mp4", 20.0, "/t/out.mp4", src_dur=9.0)
     s = _joined(argv)
-    # src_dur=5.0 * 30fps = 150 frames
-    assert "size=150" in s, f"loop size must be 150 for 5.0s@30fps src: {s}"
+    assert f"-t {_WINDOW_MAX}" in s, (
+        f"S2V window must cap at WINDOW_MAX={_WINDOW_MAX}: {s}"
+    )
+    assert "-t 20.0" not in s, f"must NOT play the full beat length: {s}"
+    assert "-t 9.0" not in s, f"must NOT play the full (uncapped) src_dur: {s}"
 
 
-def test_video_clip_short_src_loop_size_rounds_correctly():
-    """loop size= rounds correctly for non-integer frame count (6.133s * 30 = 184)."""
-    argv = video_clip_cmd("/t/clip.mp4", 10.0, "/t/out.mp4", src_dur=6.133333)
+def test_video_clip_uses_src_dur_when_shorter_than_window_max():
+    """src_dur (4.0s) is shorter than WINDOW_MAX (7.0s) → play the S2V source
+    once at its own (shorter) length, not stretched/looped to fill anything."""
+    argv = video_clip_cmd("/t/clip.mp4", 20.0, "/t/out.mp4", src_dur=4.0)
     s = _joined(argv)
-    # round(6.133333 * 30) = round(184.0) = 184
-    assert "size=184" in s, f"loop size must be 184 for 6.133s@30fps src: {s}"
+    assert "-t 4.0" in s, f"S2V window must use the shorter src_dur=4.0: {s}"
+    assert "loop=" not in s, f"short src must NOT loop-fill: {s}"
 
 
-def test_video_clip_long_src_uses_tpad():
-    """When src_dur >= dur_s, falls back to tpad clone (no need to fill)."""
-    argv = video_clip_cmd("/t/clip.mp4", 5.0, "/t/out.mp4", src_dur=10.0)
-    s = _joined(argv)
-    assert "tpad" in s, f"long src must use tpad: {s}"
-    assert "loop=" not in s, f"long src must NOT use loop filter: {s}"
-    assert "setpts" not in s, f"long src must NOT use setpts: {s}"
-
-
-def test_video_clip_unknown_src_dur_uses_tpad():
-    """When src_dur is not provided, falls back to tpad clone."""
+def test_video_clip_unknown_src_dur_no_loop_uses_dur_s_as_is():
+    """Was `test_video_clip_unknown_src_dur_uses_tpad` (Task 2) — MR-3
+    migration: unknown src_dur no longer implies a tpad-clone fill; it plays
+    dur_s as given, with no loop filter."""
     argv = video_clip_cmd("/t/clip.mp4", 5.0, "/t/out.mp4")
     s = _joined(argv)
-    assert "tpad" in s, f"unknown src_dur must use tpad: {s}"
+    assert "-t 5.0" in s, f"unknown src_dur must use dur_s=5.0 as-is: {s}"
     assert "loop=" not in s, f"unknown src_dur must NOT use loop filter: {s}"
 
 
@@ -953,3 +970,49 @@ def test_filtergraph_zoompan_present_with_fps30_for_all_moves():
         zp = _zoompan_str(fg)
         assert zp, f"move={move!r}: zoompan must be present (non-empty): {fg}"
         assert "fps=30" in zp, f"move={move!r}: zoompan must contain fps=30: {zp}"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: assembly video>=audio assertion + padding (D-008 — narration must
+# NEVER be truncated by mux's `-shortest`; if the xfade'd video track comes up
+# short of the narration track, pad the video's tail rather than let `-shortest`
+# silently cut the audio).
+# ---------------------------------------------------------------------------
+
+def test_assert_video_ge_audio_returns_none_when_video_ge_audio():
+    """video_dur >= audio_dur (within tol) → no padding needed → None."""
+    assert assert_video_ge_audio(30.0, 30.0) is None
+    assert assert_video_ge_audio(30.02, 30.0) is None  # within default tol=0.05
+    assert assert_video_ge_audio(31.0, 30.0) is None
+
+
+def test_assert_video_ge_audio_returns_target_when_video_short():
+    """video_dur short of audio_dur beyond tol → returns the target pad
+    duration (== audio_dur) so the caller knows how long to extend the tail."""
+    target = assert_video_ge_audio(29.7, 30.0)
+    assert target == 30.0, (
+        f"video short by 0.3s (> default tol=0.05) must return target pad "
+        f"duration == audio_dur (30.0), got {target}"
+    )
+
+
+def test_assert_video_ge_audio_respects_tol():
+    """A shortfall within tol must NOT trigger padding (avoid over-padding on
+    negligible float/frame-rounding drift)."""
+    assert assert_video_ge_audio(29.99, 30.0, tol=0.05) is None
+    assert assert_video_ge_audio(29.90, 30.0, tol=0.05) == 30.0
+
+
+def test_pad_video_to_cmd_extends_tail_to_target_dur():
+    """pad_video_to_cmd(video_mp4, target_dur, out_mp4): tpad-clone the last
+    frame so the output video is target_dur seconds long — never loop/repeat
+    the whole clip (that's the Task 4 anti-pattern this guard exists to catch
+    if it ever crept back in at the assembly stage)."""
+    argv = pad_video_to_cmd("/t/video.mp4", 30.0, "/t/video_padded.mp4")
+    joined = _joined(argv)
+    assert "/t/video.mp4" in joined
+    assert "tpad" in joined
+    assert "stop_mode=clone" in joined
+    assert "30" in joined
+    assert argv[-1] == "/t/video_padded.mp4"
+    assert "loop=-1" not in joined

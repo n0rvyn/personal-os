@@ -106,6 +106,18 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": "audio_dir",
         "gate": [{"fn": "check_artifact"}],
     },
+    # 4b — Phase-1 shot-timeline: pure-code step that turns each beat's real
+    # (post-tts) clip_len + director shots into N distinct content windows
+    # (lib/shotplan.plan_windows). No agent dispatch, no gate (gate=[] is
+    # falsy → runner.py's `if not step.get("gate"): break` skips gating).
+    {
+        "name": "镜头计划",
+        "kind": "code",
+        "agent": None,
+        "inputs": ["tts", "分镜", "config"],
+        "artifact": None,
+        "gate": [],
+    },
     # 5 — generate still images for beats (image provider: minimax or doubao)
     {
         "name": "gen-still",

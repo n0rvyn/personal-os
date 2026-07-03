@@ -104,14 +104,18 @@ def _valid_shotlist(n: int, n_video: int = 0) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def test_pipeline_step_count_15():
-    """After 分镜 insertion, load_pipeline() must return exactly 15 steps.
+    """After 分镜 insertion, load_pipeline() must return exactly 16 steps.
 
-    Pre-impl: returns 14 → FAILS (red). Green after Task 3-impl.
+    Pre-impl (Phase 4): returns 14 → FAILS (red). Green after Task 3-impl
+    (Phase 4). Phase-1 shot-timeline plan (2026-07-03) later inserts the
+    '镜头计划' pure-code step (post-tts, pre-gen-still), bringing the total
+    to 16 — see test_pipeline.py::test_load_pipeline_step_count_16, the
+    canonical assertion for that count going forward.
     """
     from lib.pipeline import load_pipeline
     steps = load_pipeline()
-    assert len(steps) == 15, (
-        f"expected 15 steps (分镜 inserted after script), got {len(steps)}"
+    assert len(steps) == 16, (
+        f"expected 16 steps (分镜 + 镜头计划 inserted), got {len(steps)}"
     )
 
 
@@ -778,6 +782,76 @@ def test_prepare_render_unknown_agent_raises(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 media-source-layer plan, Task 3: prepare_render builds MediaRouter
+# and threads it into build_step_fns (MR-1: cfg injected at construction).
+# ---------------------------------------------------------------------------
+
+def test_prepare_render_builds_router_and_passes_to_build_step_fns(tmp_path, monkeypatch):
+    """prepare_render must construct `MediaRouter(GenerateSource(seams), cfg=cfg)`
+    and pass it to build_step_fns as `router=` (MR-1: cfg is injected at
+    construction time — not an eager `from_config` call — because the
+    episode's art style isn't known until step_extract runs; the router uses
+    this constructor-injected cfg later, in `set_style`).
+
+    FAILS before Task 3-impl: build_step_fns is never called with a `router`
+    kwarg (prepare_render only passes seams=seams today).
+    """
+    monkeypatch.delenv("SPIKE_STORYBOARD_JSON", raising=False)
+    import lib.episode as ep_mod
+    from lib import wiring as wiring_mod
+    from lib.wiring import prepare_render
+    from lib.media_source import MediaRouter
+
+    captured = {}
+    real_build_step_fns = wiring_mod.build_step_fns
+
+    def _spy_build_step_fns(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return real_build_step_fns(*args, **kwargs)
+
+    monkeypatch.setattr(wiring_mod, "build_step_fns", _spy_build_step_fns)
+
+    cfg = MagicMock()
+    cfg.ffmpeg.ffmpeg_bin = "ffmpeg"
+    cfg.ffmpeg.ffprobe_bin = "ffprobe"
+    cfg.media.provider = "minimax"
+    cfg.output_dir = str(tmp_path / "output")
+    cfg.budget.video_shots_per_episode = 2
+    cfg.library = {}
+
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(json.dumps({
+        "beats": _beats_with_visual_type(3),
+        "character_ref": {"prompt": "runner"},
+        "cards": {},
+    }), encoding="utf-8")
+
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    monkeypatch.setattr(ep_mod, "make_scratch", lambda *a, **kw: scratch_dir)
+
+    prepare_render(
+        cfg,
+        fixture_path=fixture_path,
+        seq="001", slug="test",
+        dry=True, log=lambda m: None,
+        dispatch_persona_fn=lambda *a, **kw: {"ok": False},
+    )
+
+    assert "router" in captured.get("kwargs", {}), (
+        "prepare_render must pass router= into build_step_fns"
+    )
+    router = captured["kwargs"]["router"]
+    assert isinstance(router, MediaRouter), (
+        f"prepare_render must build a lib.media_source.MediaRouter, got {type(router)}"
+    )
+    assert router.cfg is cfg, (
+        "MR-1: router must be constructed with cfg=cfg (injected at construction "
+        "time, not resolved later via a closure)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task 8: --dry隔离 step_publish 副作用
 # ---------------------------------------------------------------------------
 
@@ -862,9 +936,12 @@ def test_publish_dry_skips_mark_done_and_advance(tmp_path):
         def gen_video(self, *a, **kw): raise NotImplementedError
         def synth(self, *a, **kw): raise NotImplementedError
 
+    from lib.media_source import GenerateSource, MediaRouter
+    _dummy_seams = _DummySeams()
     step_fns = build_step_fns(
         cfg,
-        seams=_DummySeams(),
+        seams=_dummy_seams,
+        router=MediaRouter(GenerateSource(_dummy_seams), cfg=cfg),
         fixture_path=tmp_path / "fixture.json",
         seq=selection.seq,
         slug=selection.slug,
@@ -943,9 +1020,12 @@ def test_step_chart_unknown_type_backfills_fallback_clip(tmp_path):
         # sub-clip → out_clip shutil.copy inside step_render_shots_clip succeeds.
         Path(argv[-1]).write_bytes(b"")
 
+    from lib.media_source import GenerateSource, MediaRouter
+    _seams = _Seams()
     step_fns = build_step_fns(
         cfg,
-        seams=_Seams(),
+        seams=_seams,
+        router=MediaRouter(GenerateSource(_seams), cfg=cfg),
         fixture_path=tmp_path / "f.json",
         seq="001",
         slug="ep",

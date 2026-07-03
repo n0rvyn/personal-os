@@ -312,8 +312,10 @@ def _run_deterministic(log) -> bool:
             final_path.write_bytes(b"FAKE")
             ctx["final_mp4"] = str(final_path)
         else:
-            # ep not yet set (scratch not reached); create a temp path
-            tmp_final = tmp_dir / "output" / "episodes" / f"{sel.seq}-{sel.slug}" / "final.mp4"
+            # ep not yet set (scratch not reached); create a temp path.
+            # Video name matches the episode dir (see episode.episode_paths).
+            ep_name = f"{sel.seq}-{sel.slug}"
+            tmp_final = tmp_dir / "output" / "episodes" / ep_name / f"{ep_name}.mp4"
             tmp_final.parent.mkdir(parents=True, exist_ok=True)
             tmp_final.write_bytes(b"FAKE")
             ctx["final_mp4"] = str(tmp_final)

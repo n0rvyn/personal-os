@@ -115,6 +115,18 @@ def test_episode_paths_seq_slug_in_dir_name(tmp_path):
         )
 
 
+def test_episode_paths_final_matches_dir_name(tmp_path):
+    """The output video's basename (stem) must equal its episode directory name,
+    so the two always carry the same formatted name — e.g.
+    episodes/002-别信.../002-别信....mp4."""
+    from lib.episode import episode_paths
+    paths = episode_paths(str(tmp_path), seq="002", slug="别信-每周只能加10")
+    final = paths["final"]
+    ep_dir = final.parent
+    assert final.suffix == ".mp4"
+    assert final.stem == ep_dir.name == "002-别信-每周只能加10"
+
+
 def test_episode_paths_returns_path_objects(tmp_path):
     """All returned values must be Path objects (not plain strings)."""
     from lib.episode import episode_paths

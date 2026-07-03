@@ -201,7 +201,7 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
 
     parser = argparse.ArgumentParser(
         prog="python -m lib.runner",
-        description="video-studio pipeline runner — fixture beats → episodes/{seq}-{slug}/final.mp4",
+        description="video-studio pipeline runner — fixture beats → episodes/{seq}-{slug}/{seq}-{slug}.mp4",
     )
     parser.add_argument("--config", required=False, default=None, help="Path to the video-studio config YAML (optional; omit to use config discovery)")
     parser.add_argument("--fixture", default="beats.long.fixture.json",

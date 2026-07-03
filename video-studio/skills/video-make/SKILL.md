@@ -1,6 +1,6 @@
 ---
 name: video-make
-description: "/video-make — 出一期跑步知识视频（Stage 1 出片）。读 config 取下一个 pending 期 → ffmpeg 合成 → 输出 episodes/{seq}-{slug}/final.mp4 + provenance。触发词：出片、出视频、/video-make。"
+description: "/video-make — 出一期跑步知识视频（Stage 1 出片）。读 config 取下一个 pending 期 → ffmpeg 合成 → 输出 episodes/{seq}-{slug}/{seq}-{slug}.mp4 + provenance（视频名 = 目录名）。触发词：出片、出视频、/video-make。"
 allowed-tools:
   - Bash
 ---
@@ -44,7 +44,7 @@ runner 内部：
 2. `check_ffmpeg_libass` 检测 libass（缺则 return 1 + 清晰中文错）
 3. `select_next` 自动取 syllabus 下一个 pending 期（无需手传 seq/slug）
 4. `prepare_render` → `run_pipeline` → ffmpeg 合成
-5. 输出 `episodes/{seq}-{slug}/final.mp4` + `provenance` 路径
+5. 输出 `episodes/{seq}-{slug}/{seq}-{slug}.mp4` + `provenance` 路径（视频名与目录同名）
 
 ## ConfigNotFound — 建内容项目 or 迁移旧配置
 
@@ -104,7 +104,7 @@ python -m lib.runner --config /path/to/specific-config.yaml
 runner 成功后打印：
 
 ```
-final.mp4  : episodes/001-intro/final.mp4
+video      : episodes/001-intro/001-intro.mp4
 provenance : episodes/001-intro/provenance.json
 ```
 

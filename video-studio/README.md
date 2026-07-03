@@ -1,6 +1,6 @@
 # video-studio
 
-personal-os fleet-member video production plugin. A Claude-driven multi-persona pipeline that takes structured training-science source docs and produces 6–10 minute landscape knowledge videos (适合微信视频号). Two skills cover the full lifecycle: `/video-plan` drafts and locks a syllabus (大纲), `/video-make` picks the next pending episode and renders it to `final.mp4`.
+personal-os fleet-member video production plugin. A Claude-driven multi-persona pipeline that takes structured training-science source docs and produces 6–10 minute landscape knowledge videos (适合微信视频号). Two skills cover the full lifecycle: `/video-plan` drafts and locks a syllabus (大纲), `/video-make` picks the next pending episode and renders it to `{seq}-{slug}.mp4` (named to match its episode directory).
 
 Backed by ffmpeg (libass build required for subtitle burning), Doubao(默认)/MiniMax dual-provider for image/video/TTS, a faithfulness gate (忠实门) that traces every script beat back to a source anchor, and a storyboard judge (分镜判官) with a hard video-budget guard.
 
@@ -66,7 +66,7 @@ export FFPROBE_BIN=~/.local/ffmpeg-libass/ffprobe
 python -m lib.runner --config ~/.video-studio/config.yaml
 ```
 
-Internally: preflight libass check → `select_next` (reads cursor + syllabus) → `prepare_render` (digest-writer script + 忠实门 + director storyboard + 分镜判官 budget gate + camera movements) → `run_pipeline` (media gen + ffmpeg composite) → `episodes/{seq}-{slug}/final.mp4` + provenance.
+Internally: preflight libass check → `select_next` (reads cursor + syllabus) → `prepare_render` (digest-writer script + 忠实门 + director storyboard + 分镜判官 budget gate + camera movements) → `run_pipeline` (media gen + ffmpeg composite) → `episodes/{seq}-{slug}/{seq}-{slug}.mp4` + provenance.
 
 ## Provider switch (Doubao / MiniMax)
 

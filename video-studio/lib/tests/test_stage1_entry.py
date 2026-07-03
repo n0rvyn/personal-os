@@ -206,15 +206,16 @@ class TestSelectNext:
         assert sel.seq == "002", f"expected seq='002', got {sel.seq!r}"
 
     def test_selection_slug_derived_from_title(self, tmp_syllabus, tmp_cursor, tmp_path):
-        """Selection.slug is a kebab-cased, ASCII-safe version of the episode title."""
+        """Selection.slug is a filesystem-safe version of the episode title that
+        preserves the original wording and case (acronyms like VDOT stay upper)."""
         from lib.syllabus import select_next
         cfg = _make_cfg_with_syllabus(tmp_syllabus, tmp_cursor, tmp_path)
         sel = select_next(cfg)
         assert sel is not None
-        # "VDOT Pace Tables" → "vdot-pace-tables" (or similar lowercase kebab)
-        assert sel.slug, "slug must be non-empty"
+        # "VDOT Pace Tables" → "VDOT-Pace-Tables" (spaces → hyphens, case kept)
+        assert sel.slug == "VDOT-Pace-Tables"
         assert " " not in sel.slug, "slug must not contain spaces"
-        assert sel.slug == sel.slug.lower(), "slug must be lowercase"
+        assert "/" not in sel.slug and "\\" not in sel.slug
 
     def test_selection_doc_refs(self, tmp_syllabus, tmp_cursor, tmp_path):
         """Selection.doc_refs matches the episode's doc_refs list."""

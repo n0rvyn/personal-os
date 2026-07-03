@@ -74,7 +74,7 @@ def episode_paths(
         assets_dir  — assets/           (downloaded images / clip frames)
         audio       — audio.mp3         (TTS-synthesized narration)
         subtitles   — subtitles.srt     (burned-in subtitle file)
-        final       — final.mp4         (rendered output video)
+        final       — {seq}-{slug}.mp4  (rendered output video; name matches ep dir)
         provenance  — provenance.json   (run metadata + asset fingerprints)
 
     Path-traversal guard: seq and slug are sanitized; any path that would
@@ -109,7 +109,9 @@ def episode_paths(
         "assets_dir": ep_dir / "assets",
         "audio": ep_dir / "audio.mp3",
         "subtitles": ep_dir / "subtitles.srt",
-        "final": ep_dir / "final.mp4",
+        # Video shares the episode directory's name so the two always match,
+        # e.g. episodes/002-别信.../002-别信....mp4 (see derive_seq_slug).
+        "final": ep_dir / f"{ep_dir_name}.mp4",
         "provenance": ep_dir / "provenance.json",
     }
 

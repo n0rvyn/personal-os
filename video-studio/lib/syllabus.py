@@ -11,13 +11,13 @@ style.
 from __future__ import annotations
 
 import copy
-import re
-import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import yaml
+
+from lib.episode import _sanitize_component
 
 
 class SyllabusError(Exception):
@@ -65,35 +65,6 @@ class Cursor:
     book: str
     module_idx: int
     episode_idx: int
-
-
-# ---------------------------------------------------------------------------
-# Internal slug helper
-# ---------------------------------------------------------------------------
-
-
-def _slugify(title: str) -> str:
-    """Return an ASCII-safe kebab-case slug from *title*.
-
-    For Latin/accented text: NFKD decompose then strip non-ASCII.
-    For CJK/non-ASCII that survives: convert to pinyin via pypinyin if
-    available; fall back to "ep" if pypinyin is not installed.
-    """
-    # Decompose and strip non-ASCII (handles accented Latin chars)
-    nfkd = unicodedata.normalize("NFKD", title)
-    ascii_text = nfkd.encode("ascii", "ignore").decode("ascii")
-
-    # For purely CJK/non-ASCII titles, convert to pinyin
-    if not ascii_text.strip():
-        try:
-            from pypinyin import lazy_pinyin  # optional dependency
-
-            ascii_text = "-".join(lazy_pinyin(title))
-        except ImportError:
-            ascii_text = "ep"
-
-    slug = re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
-    return slug or "ep"
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +231,10 @@ def derive_seq_slug(
 
     *seq*  — 1-based global episode number across all modules, zero-padded
               to 3 digits (e.g. ``"001"``).
-    *slug* — ASCII-safe kebab-case version of the episode title.
+    *slug* — filesystem-safe version of the episode title that PRESERVES CJK
+              (Chinese stays Chinese); only unsafe characters are collapsed to
+              hyphens. This same value names both the episode directory and the
+              output video, so the two always match (`{seq}-{slug}/{seq}-{slug}.mp4`).
 
     Raises ValueError if the indices are out of bounds.
     """
@@ -269,7 +243,7 @@ def derive_seq_slug(
         for e_i, episode in enumerate(module.episodes):
             if m_i == module_idx and e_i == episode_idx:
                 seq = f"{global_idx + 1:03d}"
-                slug = _slugify(episode.title)
+                slug = _sanitize_component(episode.title) or "ep"
                 return seq, slug
             global_idx += 1
     raise ValueError(

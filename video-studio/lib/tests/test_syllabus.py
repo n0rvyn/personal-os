@@ -8,7 +8,7 @@ Covers:
   - load_cursor: parse cursor YAML
   - next_pending: first pending episode from cursor position; None when all done
   - advance: mark current done + move cursor to next pending (pure-function style)
-  - derive_seq_slug: global sequence number + ASCII/kebab slug
+  - derive_seq_slug: global sequence number + CJK-preserving filesystem-safe slug
   - Edge cases: bad YAML, empty modules, no pending, cursor past end
 """
 from __future__ import annotations
@@ -355,7 +355,8 @@ def test_advance_when_all_episodes_done_after(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_derive_seq_slug_simple_ascii(tmp_path: Path) -> None:
-    """derive_seq_slug returns (seq, slug): seq is 1-based global, slug is ASCII kebab."""
+    """derive_seq_slug returns (seq, slug): seq is 1-based global; a Latin title
+    keeps its words (only unsafe chars become hyphens), case preserved."""
     s_file = tmp_path / "syllabus.yaml"
     # Build a simple 1-module 1-episode syllabus
     simple_yaml = textwrap.dedent("""\
@@ -377,7 +378,7 @@ def test_derive_seq_slug_simple_ascii(tmp_path: Path) -> None:
     ep = s.modules[0].episodes[0]
     seq, slug = derive_seq_slug(s, module_idx=0, episode_idx=0)
     assert seq == "001"
-    assert slug == "what-is-vdot"
+    assert slug == "What-Is-VDOT"
 
 
 def test_derive_seq_slug_global_sequence(tmp_path: Path) -> None:
@@ -395,14 +396,14 @@ def test_derive_seq_slug_global_sequence(tmp_path: Path) -> None:
 
 
 def test_derive_seq_slug_chinese_title(tmp_path: Path) -> None:
-    """slug for a Chinese title is non-empty ASCII-safe (e.g. romanized or transliterated)."""
+    """slug for a Chinese title PRESERVES the Chinese (no romanization/hex) while
+    staying filesystem-safe (no spaces or path separators)."""
     s_file = tmp_path / "syllabus.yaml"
     s_file.write_text(SYLLABUS_YAML)
     s = load_syllabus(s_file)
-    # 什么是VDOT → some ASCII-safe slug
+    # 什么是VDOT → Chinese kept verbatim
     _, slug = derive_seq_slug(s, module_idx=0, episode_idx=0)
-    # Must be non-empty, no spaces, no forbidden path chars
-    assert slug
+    assert slug == "什么是VDOT"
     assert " " not in slug
     assert "/" not in slug
     assert "\\" not in slug
@@ -419,63 +420,45 @@ def test_derive_seq_slug_second_episode(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _slugify CJK pinyin behavior
+# Tests: CJK-preserving naming (derive_seq_slug via episode._sanitize_component)
 # ---------------------------------------------------------------------------
 
-def test_slug_chinese_title_pinyin() -> None:
-    """CJK title produces pinyin slug (not hex) when pypinyin is available."""
-    from lib.syllabus import _slugify
-
-    pytest.importorskip("pypinyin")  # skip if pypinyin not installed
-    slug = _slugify("坡度配速")
-    # Should be hyphen-joined pinyin syllables, all lowercase ASCII
-    assert slug
-    assert all(c.isascii() for c in slug)
-    assert slug not in ("ep",)
-    # Must look like pinyin (letters and hyphens only)
-    assert re.match(r"^[a-z][a-z-]*[a-z]$", slug), f"Unexpected slug: {slug!r}"
+def test_slug_chinese_title_preserved(tmp_path: Path) -> None:
+    """A CJK title is preserved verbatim (no pinyin, no hex, no 'ep' fallback)."""
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)
+    s = load_syllabus(s_file)
+    # module 0 ep 1 title = VDOT配速表解读
+    _, slug = derive_seq_slug(s, module_idx=0, episode_idx=1)
+    assert slug == "VDOT配速表解读"
+    assert not re.search(r"[0-9a-f]{4}", slug)  # not hex-encoded
+    assert slug != "ep"
 
 
-def test_slug_chinese_title_no_hex() -> None:
-    """CJK title must not produce a hex slug regardless of pypinyin availability."""
-    from lib.syllabus import _slugify
-
-    slug = _slugify("坡度配速")
-    # Old behavior was hex: 5761523660d50901 … must not appear
-    assert not re.search(r"[0-9a-f]{4}", slug), (
-        f"Slug looks like hex-encoded CJK: {slug!r}"
-    )
-
-
-def test_slug_latin_title_unchanged() -> None:
-    """Latin title still produces normal kebab slug regardless of pypinyin."""
-    from lib.syllabus import _slugify
-
-    slug = _slugify("Running Science 101")
-    assert slug == "running-science-101"
-
-
-def test_slug_fallback_without_pypinyin(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When pypinyin is not importable, CJK slug falls back to 'ep' (not hex)."""
-    import sys
-    import importlib
-
-    # Temporarily hide pypinyin from imports
-    original = sys.modules.pop("pypinyin", None)
-    # Reload _slugify's module so the import guard fires fresh
-    import lib.syllabus as syllabus_mod
-
-    monkeypatch.setitem(sys.modules, "pypinyin", None)  # type: ignore[arg-type]
-    try:
-        slug = syllabus_mod._slugify("坡度配速")
-        assert slug == "ep", f"Expected 'ep' fallback, got {slug!r}"
-        # Must not be hex
-        assert not re.search(r"[0-9a-f]{4}", slug)
-    finally:
-        if original is not None:
-            sys.modules["pypinyin"] = original
-        else:
-            sys.modules.pop("pypinyin", None)
+def test_slug_punctuation_collapsed(tmp_path: Path) -> None:
+    """Unsafe chars (slash, punctuation, spaces) collapse to single hyphens,
+    while CJK is kept — e.g. '80/20训练？法则' → '80-20训练-法则'."""
+    s_file = tmp_path / "syllabus.yaml"
+    yaml_text = textwrap.dedent("""\
+        book: b
+        character_ref: ""
+        modules:
+          - name: m
+            style: s
+            episodes:
+              - title: 80/20训练？法则
+                doc_refs: []
+                source: X
+                verify_status: "✅"
+                learning_goal: g
+                status: pending
+    """)
+    s_file.write_text(yaml_text)
+    s = load_syllabus(s_file)
+    _, slug = derive_seq_slug(s, module_idx=0, episode_idx=0)
+    assert slug == "80-20训练-法则"
+    assert "/" not in slug
+    assert "--" not in slug  # runs collapsed
 
 
 # ---------------------------------------------------------------------------

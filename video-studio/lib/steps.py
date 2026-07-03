@@ -344,7 +344,7 @@ def step_bgm_calib(
     """BGM ducking calibration loop.
 
     Each round:
-      1. Mux final.mp4 with current bgm_volume (via mux_final_ass_cmd).
+      1. Mux the output video with current bgm_volume (via mux_final_ass_cmd).
       2. Measure the voice-BGM gap via measure_gap_fn.
       3. If gap >= target_db: done (ducking is sufficient).
       4. Otherwise halve bgm_volume and continue.

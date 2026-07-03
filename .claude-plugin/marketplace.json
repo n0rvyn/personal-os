@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.26.0"
+    "version": "0.27.0"
   },
   "plugins": [
     {
@@ -152,7 +152,7 @@
       "name": "podcast-studio",
       "source": "./podcast-studio",
       "description": "personal-os fleet-member podcast production: a Claude-driven multi-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, vendored prep orchestrator, and TTS synthesis via the personal-os fleet's tts skill. Reads paths and credentials from ~/.podcast-studio/config.yaml.",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "category": "audio",
       "tags": [
         "podcast",
@@ -167,7 +167,7 @@
       "name": "video-studio",
       "source": "./video-studio",
       "description": "教材 PDF → 结构化视频专栏 一键成片流水线（/video-plan 大纲规划 + /video-make 出片；ffmpeg 引擎 + Doubao(默认)/MiniMax 双 provider 图/视频/语音；忠实门 + 分镜判官预算治理；需 libass ffmpeg 静态构建）",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "category": "media",
       "tags": [
         "video",

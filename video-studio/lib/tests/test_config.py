@@ -858,3 +858,63 @@ def test_budget_video_floor_exceeding_cap_raises(tmp_path):
     _write_config(cfg_path, yaml_text)
     with pytest.raises(ConfigError, match="video_floor"):
         load_config(str(cfg_path))
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: character_refs (style -> ref) + host_enabled (DP-P5-002 / DP-P5-003)
+#
+# FAIL-first: written before Task 1-impl adds character_refs/host_enabled to
+# VideoStudioConfig / load_config.
+# ---------------------------------------------------------------------------
+
+
+def test_character_refs_section_parsed(tmp_path):
+    """config character_refs: {写实电影: ..., 简笔日漫: ...} → cfg.character_refs
+    reflects it (style -> ref path/prompt binding, DP-P5-002)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    yaml_text += (
+        "character_refs:\n"
+        "  写实电影: 写实主持人 prompt\n"
+        "  简笔日漫: /coach.png\n"
+    )
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert dict(cfg.character_refs) == {
+        "写实电影": "写实主持人 prompt",
+        "简笔日漫": "/coach.png",
+    }
+
+
+def test_character_refs_missing_defaults_to_empty(tmp_path):
+    """No character_refs section → cfg.character_refs defaults to empty
+    (= every style falls back to the existing per-module/series character_ref)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    _write_config(cfg_path, _minimal_yaml(out))
+
+    cfg = load_config(str(cfg_path))
+    assert dict(cfg.character_refs) == {}
+
+
+def test_host_enabled_defaults_to_true(tmp_path):
+    """No host_enabled key → cfg.host_enabled defaults to True (出镜人默认开)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    _write_config(cfg_path, _minimal_yaml(out))
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.host_enabled is True
+
+
+def test_host_enabled_explicit_false(tmp_path):
+    """host_enabled: false → cfg.host_enabled is False (关掉出镜人，纯 b-roll)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out) + "host_enabled: false\n"
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.host_enabled is False

@@ -1275,16 +1275,25 @@ class _RouterFakeSeams:
         return {"ok": False, "reason": "unused in Task 3 router wiring tests"}
 
 
-def _make_router_harness(tmp_path, *, beats, library=None, art_style="写实电影"):
+def _make_router_harness(tmp_path, *, beats, library=None, art_style="写实电影",
+                          character_refs=None, fixture_character_ref=None,
+                          host_enabled=True):
     """Build (step_fns, ctx, router, fake_seams) with a MediaRouter wired
     through build_step_fns(router=...) (Task 3). `library` seeds cfg.library
     (style -> kind), consumed by router.set_style via LibrarySource.from_config
-    once step_extract runs.
+    once step_extract runs. `character_refs` seeds cfg.character_refs (Task 1,
+    Phase 5, DP-P5-002 — style -> ref path/prompt binding); `fixture_character_ref`
+    overrides the fixture's own character_ref.prompt (fallback-path source).
+    `host_enabled` seeds cfg.host_enabled (Task 2, Phase 5, DP-P5-003 —
+    with_character/host-window gate on fetch_lib_clip_fn).
     """
     from lib.wiring import build_step_fns
     from lib.media_source import MediaRouter, GenerateSource
 
-    fixture = {"character_ref": {"prompt": "主讲人物"}, "beats": beats}
+    fixture = {
+        "character_ref": {"prompt": fixture_character_ref or "主讲人物"},
+        "beats": beats,
+    }
     fixture_path = tmp_path / "fixture.json"
     fixture_path.write_text(_json_mod.dumps(fixture), encoding="utf-8")
 
@@ -1297,6 +1306,9 @@ def _make_router_harness(tmp_path, *, beats, library=None, art_style="写实电�
     cfg.syllabus_path = ""
     cfg.cursor_path = ""
     cfg.library = library or {}
+    # MR#4: explicit real dict/bool, never rely on MagicMock auto-attr truthiness.
+    cfg.character_refs = character_refs if character_refs is not None else {}
+    cfg.host_enabled = bool(host_enabled)
 
     fake_seams = _RouterFakeSeams()
     router = MediaRouter(GenerateSource(fake_seams), cfg=cfg)
@@ -1526,6 +1538,68 @@ def test_character_ref_and_cards_stay_direct_on_seams_when_library_bound(
         f"resolve_character_ref_url must call seams.gen_character_ref directly "
         f"exactly once, unaffected by the style's library binding; got "
         f"{fake_seams.gen_character_ref_calls}"
+    )
+
+
+# ===========================================================================
+# Phase 5 Task 1-tests: config character_refs + host_enabled + per-style ref
+# resolution in step_extract (DP-P5-002). FAIL-first — written before Task
+# 1-impl adds cfg.character_refs consultation to step_extract's _ensure_ref_url
+# call sites.
+# ===========================================================================
+
+
+def test_step_extract_per_style_ref_resolves_from_config(tmp_path, monkeypatch):
+    """cfg.character_refs binds art_style='写实电影' to a per-style host prompt
+    → step_extract's _ensure_ref_url must resolve THAT prompt (not the
+    fixture's per-module character_ref).
+
+    FAILS before Task 1-impl: cfg.character_refs isn't consulted; ctx['ref_url']
+    resolves from the fixture's '主讲人物' fallback instead of the per-style ref.
+    """
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, art_style="写实电影",
+        character_refs={"写实电影": "写实主持人"},
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+
+    assert fake_seams.gen_character_ref_calls == ["写实主持人"], (
+        f"step_extract must resolve ctx['ref_url'] from "
+        f"cfg.character_refs[art_style] ('写实主持人'), not the fixture's "
+        f"per-module character_ref ('主讲人物'); got calls="
+        f"{fake_seams.gen_character_ref_calls}"
+    )
+
+
+def test_step_extract_no_per_style_ref_falls_back_to_fixture_character_ref(
+        tmp_path, monkeypatch):
+    """No per-style binding for this art_style → falls back to the fixture's
+    character_ref.prompt (Phase 4 backward-compat, MR#3: fixture-mode fallback
+    keeps the '.prompt' tail / '主讲人物' default — no silent-downgrade to a
+    unified cross-mode formula that would drop it)."""
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, art_style="简笔日漫",
+        character_refs={"写实电影": "写实主持人"},  # no binding for 简笔日漫
+        fixture_character_ref="教练阿May",
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+
+    assert fake_seams.gen_character_ref_calls == ["教练阿May"], (
+        f"no per-style ref for art_style='简笔日漫' → must fall back to the "
+        f"fixture's character_ref.prompt ('教练阿May'), unchanged from Phase 4; "
+        f"got calls={fake_seams.gen_character_ref_calls}"
     )
 
 
@@ -1946,7 +2020,12 @@ def test_step_gen_still_threads_fetch_lib_clip_fn_from_router(tmp_path, monkeypa
 
     # Invoke the threaded callable directly for one window and confirm it
     # delegates to router.fetch_library_clip with the ledger from ctx (MR#3).
-    window0 = ctx["windows"][0][0]
+    # Phase 5 Task 2: the fetch_lib_clip_fn now gates on with_character (host
+    # windows skip the library entirely and never reach router.fetch_library_
+    # clip) — force this probe window to a b-roll window (with_character=
+    # False) so the gate doesn't short-circuit before the delegation we're
+    # asserting on.
+    window0 = dict(ctx["windows"][0][0], with_character=False)
     out_path = str(tmp_path / "probe_lib_clip.mp4")
     fetch_lib_clip_fn(window0, 6.0, out_path)
 
@@ -1992,4 +2071,235 @@ def test_step_gen_still_fetch_lib_clip_fn_none_library_falls_back_to_generate(
     assert len(fake_seams.gen_still_calls) == total_windows, (
         "fetch_lib_clip_fn returning None for every window (no library bound) "
         "must fall back to generate for every window unchanged"
+    )
+
+
+# ===========================================================================
+# Phase 5 Task 2-tests: host/b-roll gate on fetch_lib_clip_fn (DP-P5-001,
+# DP-P5-003). A with_character=True (host/出镜人) window must skip the
+# library entirely (never reach router.fetch_library_clip) and generate via
+# ref_url; a with_character=False (b-roll/空镜) window is unaffected and still
+# routes to the library. host_enabled=False disables the gate — every window
+# (host or b-roll) goes through the library.
+#
+# FAILS before Task 2-impl: the fetch_lib_clip_fn lambda (wiring.py) has no
+# with_character/host_enabled gate — it unconditionally calls
+# router.fetch_library_clip for every window, so the host-window assertion
+# (must NOT call fetch_library_clip) fails.
+# ===========================================================================
+
+def test_gen_still_fetch_lib_clip_fn_with_character_gate_host_skips_library(tmp_path, monkeypatch):
+    """host_enabled=True (default) + with_character=True window → the threaded
+    fetch_lib_clip_fn must return None WITHOUT calling router.fetch_library_clip
+    at all (out-and-out short-circuit, not merely a miss)."""
+    from lib import wiring as wiring_mod
+
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={}, art_style="写实电影",
+        host_enabled=True,
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    ctx["clip_len_by_index"] = {0: 6.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    fetch_library_clip_calls: list = []
+    monkeypatch.setattr(
+        router, "fetch_library_clip",
+        lambda *a, **kw: fetch_library_clip_calls.append((a, kw)) or None,
+    )
+
+    captured_kwargs: dict = {}
+    orig_render = wiring_mod.steps_mod.step_render_shots_clip
+
+    def spy_render(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return orig_render(*args, **kwargs)
+
+    monkeypatch.setattr(wiring_mod.steps_mod, "step_render_shots_clip", spy_render)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+    fetch_lib_clip_fn = captured_kwargs["fetch_lib_clip_fn"]
+
+    host_window = {"prompt": "host shot", "with_character": True}
+    result = fetch_lib_clip_fn(host_window, 6.0, str(tmp_path / "probe.mp4"))
+
+    assert result is None, "a host window must never be served by the library"
+    assert fetch_library_clip_calls == [], (
+        "a host window (with_character=True, host_enabled=True) must short-"
+        "circuit BEFORE calling router.fetch_library_clip at all; got calls="
+        f"{fetch_library_clip_calls}"
+    )
+
+
+def test_gen_still_fetch_lib_clip_fn_with_character_gate_broll_reaches_library(
+        tmp_path, monkeypatch):
+    """A with_character=False (b-roll/空镜) window is unaffected by the gate —
+    fetch_lib_clip_fn must still delegate to router.fetch_library_clip."""
+    from lib import wiring as wiring_mod
+
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={}, art_style="写实电影",
+        host_enabled=True,
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    ctx["clip_len_by_index"] = {0: 6.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    fetch_library_clip_calls: list = []
+    monkeypatch.setattr(
+        router, "fetch_library_clip",
+        lambda *a, **kw: fetch_library_clip_calls.append((a, kw)) or None,
+    )
+
+    captured_kwargs: dict = {}
+    orig_render = wiring_mod.steps_mod.step_render_shots_clip
+
+    def spy_render(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return orig_render(*args, **kwargs)
+
+    monkeypatch.setattr(wiring_mod.steps_mod, "step_render_shots_clip", spy_render)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+    fetch_lib_clip_fn = captured_kwargs["fetch_lib_clip_fn"]
+
+    broll_window = {"prompt": "empty street", "with_character": False}
+    fetch_lib_clip_fn(broll_window, 6.0, str(tmp_path / "probe.mp4"))
+
+    assert len(fetch_library_clip_calls) == 1, (
+        "a b-roll window (with_character=False) must still reach "
+        f"router.fetch_library_clip; got calls={fetch_library_clip_calls}"
+    )
+
+
+def test_gen_still_fetch_lib_clip_fn_with_character_gate_host_enabled_false_routes_all_to_library(
+        tmp_path, monkeypatch):
+    """host_enabled=False disables the gate entirely — even a with_character=
+    True (host) window must reach router.fetch_library_clip (acceptance:
+    "关掉出镜人 → 纯 b-roll")."""
+    from lib import wiring as wiring_mod
+
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "still", "text": "t",
+              "image_prompt": "p", "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={}, art_style="写实电影",
+        host_enabled=False,
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    ctx["clip_len_by_index"] = {0: 6.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    fetch_library_clip_calls: list = []
+    monkeypatch.setattr(
+        router, "fetch_library_clip",
+        lambda *a, **kw: fetch_library_clip_calls.append((a, kw)) or None,
+    )
+
+    captured_kwargs: dict = {}
+    orig_render = wiring_mod.steps_mod.step_render_shots_clip
+
+    def spy_render(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return orig_render(*args, **kwargs)
+
+    monkeypatch.setattr(wiring_mod.steps_mod, "step_render_shots_clip", spy_render)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+    fetch_lib_clip_fn = captured_kwargs["fetch_lib_clip_fn"]
+
+    # Isolate the probe call from whatever the real pipeline run above already
+    # threaded through fetch_library_clip.
+    fetch_library_clip_calls.clear()
+
+    host_window = {"prompt": "host shot", "with_character": True}
+    fetch_lib_clip_fn(host_window, 6.0, str(tmp_path / "probe.mp4"))
+
+    assert len(fetch_library_clip_calls) == 1, (
+        "host_enabled=False must disable the gate — even a host window "
+        f"(with_character=True) must reach router.fetch_library_clip; got "
+        f"calls={fetch_library_clip_calls}"
+    )
+
+
+def test_step_gen_still_host_broll_mixed_source_routes_by_with_character(
+        tmp_path, monkeypatch):
+    """Full-pipeline mixed-source integration (D-013/D-005): one episode with
+    a host window (with_character=True) and a b-roll window (with_character=
+    False), config bound to a library ("pexels", faked here so the gate is
+    what's under test — not a real network call). The host window must
+    generate via seams.gen_still using ctx['ref_url']; the b-roll window must
+    be served by the (faked) library and never call seams.gen_still. Both
+    still share the episode's single art_style (D-005 style consistency)."""
+    monkeypatch.delenv("VIDEO_PDF", raising=False)
+    monkeypatch.delenv("SPIKE_REF_PNG", raising=False)
+    monkeypatch.delenv("SPIKE_REF_URL", raising=False)
+
+    beats = [{"id": "b00", "visual_type": "multi", "text": "t",
+              "shots": ["host shot", "broll shot"], "keywords": []}]
+    step_fns, ctx, router, fake_seams = _make_router_harness(
+        tmp_path, beats=beats, library={"写实电影": "pexels"},
+        art_style="写实电影", host_enabled=True,
+    )
+    step_fns["extract"]({"name": "extract"}, ctx, tmp_path)
+    assert router.style == "写实电影", "D-005: episode must resolve a single style"
+    ctx["clip_len_by_index"] = {0: 8.0}
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    # Force a deterministic mixed-source window set: window 0 stays the
+    # fixture default (with_character=True, host); window 1 is forced to
+    # b-roll (with_character=False).
+    ctx["windows"][0][0]["with_character"] = True
+    ctx["windows"][0][1]["with_character"] = False
+
+    # Fake the library clip hit for b-roll windows — bypass real PexelsSource
+    # network; the gate is what's under test, not PexelsSource itself.
+    lib_calls: list = []
+
+    def fake_fetch_library_clip(window, dur_s, out_path, run_ff=None,
+                                 grade=None, ledger=None):
+        lib_calls.append(window)
+        from pathlib import Path as _P
+        _P(out_path).write_bytes(b"\x00mp4 stub")
+        return out_path
+
+    monkeypatch.setattr(router, "fetch_library_clip", fake_fetch_library_clip)
+
+    gen_still_ref_calls: list = []
+    orig_gen_still = router.gen_still
+
+    def spy_gen_still(prompt, ref_url, out_path):
+        gen_still_ref_calls.append(ref_url)
+        return orig_gen_still(prompt, ref_url, out_path)
+
+    monkeypatch.setattr(router, "gen_still", spy_gen_still)
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    assert len(lib_calls) == 1 and lib_calls[0].get("with_character") is False, (
+        f"only the b-roll window (with_character=False) may reach "
+        f"router.fetch_library_clip; got lib_calls={lib_calls}"
+    )
+    assert len(fake_seams.gen_still_calls) == 1, (
+        f"the host window (with_character=True) must generate via seams."
+        f"gen_still (never library-sourced); got {fake_seams.gen_still_calls}"
+    )
+    assert gen_still_ref_calls == [ctx["ref_url"]], (
+        f"the host window's generate call must use the episode's (per-style) "
+        f"ref_url; got {gen_still_ref_calls}"
     )

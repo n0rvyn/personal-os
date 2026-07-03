@@ -106,6 +106,12 @@ class VideoStudioConfig:
     # Phase 2: media-source layer — style_name -> library kind binding.
     # Empty = all styles fall through to generate (Phase 1 legacy behaviour).
     library: dict[str, str] = field(default_factory=dict)
+    # Phase 5: per-style character ref (style_name -> ref path/prompt, DP-P5-002).
+    # Empty = every style falls back to the existing per-module/series character_ref.
+    character_refs: dict[str, str] = field(default_factory=dict)
+    # Phase 5: host (出镜人) on/off switch (DP-P5-003). False = all windows go
+    # through the b-roll library gate regardless of with_character.
+    host_enabled: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +378,13 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
     library_raw = raw.get("library") or {}
     library = _validate_library(library_raw)
 
+    # --- Phase 5: per-style character ref (optional; empty = per-module/series fallback) ---
+    character_refs_raw = raw.get("character_refs") or {}
+    character_refs = {str(k): str(v) for k, v in character_refs_raw.items()}
+
+    # --- Phase 5: host_enabled switch (optional; default True = 出镜人 on) ---
+    host_enabled = bool(raw.get("host_enabled", True))
+
     return VideoStudioConfig(
         render=render,
         audio=audio,
@@ -389,6 +402,8 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         syllabus_source_dir=syllabus_source_dir,
         host=host,
         library=library,
+        character_refs=character_refs,
+        host_enabled=host_enabled,
     )
 
 

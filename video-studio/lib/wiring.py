@@ -522,6 +522,14 @@ def build_step_fns(
                 provider=getattr(seams, "provider", "doubao"),
             )
 
+        # Phase 5 (DP-P5-002): per-style character ref takes priority over the
+        # existing per-module/series character_ref. `ps` is None when this
+        # art_style has no binding in cfg.character_refs — each mode below
+        # falls back to its own pre-existing source (per-mode, NOT a unified
+        # formula — the fixture mode's fallback keeps its '.prompt' tail /
+        # "主讲人物" default; MR#3).
+        ps = getattr(cfg, "character_refs", {}).get(_art_style)
+
         # Doc mode (Phase 6, highest priority): cursor-read seeded doc_refs into ctx.
         doc_refs = ctx.get("doc_refs")
         if doc_refs:
@@ -574,7 +582,8 @@ def build_step_fns(
                 f"(source={ctx.get('source')!r})"
             )
             # series character_ref (Phase 6: syllabus.character_ref → ctx via cursor-read)
-            _ensure_ref_url(ctx.get("character_ref"))
+            # Phase 5: per-style ref (ps) takes priority (DP-P5-002).
+            _ensure_ref_url(ps or ctx.get("character_ref"))
             return
 
         # PDF mode: VIDEO_PDF + VIDEO_PAGES set → pdftotext -layout per page.
@@ -587,7 +596,8 @@ def build_step_fns(
             ctx["page_text"] = page_text
             ctx["fulltext"] = extract_mod.join_fulltext(page_text)
             log(f"[extract] PDF -layout: pages {pages} -> {len(ctx['fulltext'])} chars")
-            _ensure_ref_url(getattr(cfg, "character_ref", ""))
+            # Phase 5: per-style ref (ps) takes priority (DP-P5-002).
+            _ensure_ref_url(ps or getattr(cfg, "character_ref", ""))
             return
         # Fixture mode (Phase 2, unchanged): load beats + ref + grade + storyboard.
         with open(fixture_path, encoding="utf-8") as f:
@@ -597,7 +607,9 @@ def build_step_fns(
         ctx["beats"] = beats
         # fixture's character_ref is a dict(.prompt); doc/PDF pass a str (str-vs-dict
         # shape handled at the call site). grade_vf already set at step_extract top.
-        _ensure_ref_url(fixture.get("character_ref", {}).get("prompt", "主讲人物"))
+        # Phase 5: per-style ref (ps) takes priority (DP-P5-002); fallback keeps
+        # the fixture's own '.prompt' tail / "主讲人物" default (MR#3).
+        _ensure_ref_url(ps or fixture.get("character_ref", {}).get("prompt", "主讲人物"))
         # ctx["sb"] is set by the 分镜 director step (wiring.make_storyboard_dispatch).
 
     # ---- 4: tts (all beats; drives the timeline) ----
@@ -676,8 +688,11 @@ def build_step_fns(
             durs = [w["dur"] for w in shots]
             clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
             ledger = ctx.get("visual_ledger")
-            fetch_lib_clip_fn = lambda w, d, o: router.fetch_library_clip(
-                w, d, o, run_ff, grade_vf, ledger,
+            host_on = getattr(cfg, "host_enabled", True)
+            fetch_lib_clip_fn = lambda w, d, o: (
+                None
+                if (host_on and w.get("with_character"))
+                else router.fetch_library_clip(w, d, o, run_ff, grade_vf, ledger)
             )
             steps_mod.step_render_shots_clip(
                 shots, ctx["clip_len_by_index"][i], clip, bid, scratch_s,

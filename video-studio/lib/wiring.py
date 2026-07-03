@@ -50,6 +50,12 @@ SPIKE = PLUGIN_ROOT / ".spike"
 
 BGM_START_VOLUME = 0.12
 MAX_CALIB_ROUNDS = 3
+# ffmpeg per-call timeout. The product targets 6–10 min videos; the final xfade chain
+# and the BGM-calibration muxes re-encode the WHOLE video, which at 1080p takes well
+# over the old 300s on a full-length episode (that cap failed the ep005 assembly). Sized
+# to comfortably cover a 10-min full-length encode with margin; per-clip encodes finish
+# in seconds and never approach it.
+FFMPEG_TIMEOUT_S = 1200
 # ⑧ (2026-07-03): a chart held fully static for a whole long-narration beat reads as
 # frozen (ep002 had one chart on screen ~50s). Cap the chart's on-screen time; the rest
 # of the beat's narration plays over a content-relevant still (no camera on the chart —
@@ -185,9 +191,9 @@ def make_ff_seams(cfg: VideoStudioConfig) -> tuple[Callable, Callable]:
     os.environ["FFPROBE_BIN"] = ffprobe_bin
     ff_prefix = [ffmpeg_bin, "-y", "-hide_banner", "-loglevel", "error"]
 
-    def run_ff(argv: list[str], label: str) -> None:
+    def run_ff(argv: list[str], label: str, timeout: int = FFMPEG_TIMEOUT_S) -> None:
         cmd = ff_prefix + argv
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if proc.returncode != 0:
             raise RuntimeError(
                 f"ffmpeg [{label}] exit={proc.returncode}\n"

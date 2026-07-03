@@ -1496,3 +1496,350 @@ def test_character_ref_and_cards_stay_direct_on_seams_when_library_bound(
         f"exactly once, unaffected by the style's library binding; got "
         f"{fake_seams.gen_character_ref_calls}"
     )
+
+
+# ===========================================================================
+# Phase-3 query-writer plan — Task 3-tests: query-writer persona +
+# make_querywriter_dispatch wiring (content-matched query + constraint).
+# FAIL before Task 3-impl:
+#   - agents/query-writer.md absent
+#   - lib.wiring has no make_querywriter_dispatch
+# All green after Task 3-impl.
+# ===========================================================================
+
+def test_query_writer_persona_md_exists_and_has_constraints():
+    """agents/query-writer.md must exist, be non-empty, and encode the hard
+    constraint (禁 office/code, 要 running/scene) per crystal D-007."""
+    md_path = _PLUGIN_ROOT_WIRING / "agents" / "query-writer.md"
+    assert md_path.is_file(), f"agents/query-writer.md must exist at {md_path}"
+    text = md_path.read_text(encoding="utf-8")
+    assert text.strip(), "agents/query-writer.md must be non-empty"
+    lower = text.lower()
+    assert "office" in lower and "code" in lower, (
+        "persona must name banned visual categories (office/code) as constraints"
+    )
+    assert "running" in lower or "runner" in lower, (
+        "persona must name the required visual category (running/runner scenes)"
+    )
+
+
+def _mk_qw_window(source, prompt, text="旁白文本", idx=0, beat_id="b00"):
+    return {
+        "beat_id": beat_id, "idx": idx, "text": text, "prompt": prompt,
+        "dur": 5.0, "source": source, "visual_type": "image",
+        "with_character": False, "pace": "normal",
+        "camera_move": "静止", "camera_intensity": 1.0, "shot_type": "",
+    }
+
+
+def _qw_step():
+    return {"name": "query-writer", "kind": "agent", "agent": "query-writer",
+            "inputs": ["镜头计划", "config"], "artifact": None, "gate": []}
+
+
+def _fake_querywriter_persona(entries, called=None):
+    def fake(agent, prompt, scratch_dir, expected, **kw):
+        if called is not None:
+            called.append((agent, prompt))
+        assert agent == "query-writer"
+        out = _Path(scratch_dir) / expected
+        out.write_text(_json_mod.dumps(entries), encoding="utf-8")
+        return {"ok": True, "artifact_path": str(out)}
+    return fake
+
+
+def test_make_querywriter_dispatch_fixture_short_circuit(tmp_path):
+    """ctx['fixture'] truthy → closure must NOT call dispatch_persona_fn
+    (MR#2: zero live claude -p in fixture render eval); windows untouched."""
+    from lib.wiring import make_querywriter_dispatch
+
+    called = []
+    fake = _fake_querywriter_persona(
+        [{"beat_i": 0, "idx": 0, "query": "runner on track"}], called)
+    interim_w = _mk_qw_window("interim", "旧-interim-prompt")
+    ctx = {
+        "fixture": {"beats": []},
+        "windows": {0: [interim_w]},
+    }
+    cfg = _MagicMock()
+
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)
+
+    assert called == [], "fixture pass-through must not invoke dispatch_persona_fn"
+    assert "query" not in ctx["windows"][0][0], (
+        "fixture pass-through must not write query"
+    )
+    assert ctx["windows"][0][0]["prompt"] == "旧-interim-prompt", (
+        "fixture pass-through must not alter interim prompt"
+    )
+
+
+def test_make_querywriter_dispatch_writes_query_overwrites_interim_keeps_director(
+        tmp_path):
+    """Success path: interim window gets ['query'] + overwritten ['prompt'];
+    director window gets ['query'] but ['prompt'] stays untouched (#3)."""
+    from lib.wiring import make_querywriter_dispatch
+
+    interim_w = _mk_qw_window("interim", "旧-interim-prompt", beat_id="b00", idx=0)
+    director_w = _mk_qw_window("director", "导演镜头-prompt", beat_id="b01", idx=0)
+    ctx = {
+        "windows": {0: [interim_w], 1: [director_w]},
+    }
+    entries = [
+        {"beat_i": 0, "idx": 0, "query": "runner coding on laptop"},  # banned
+        {"beat_i": 1, "idx": 0, "query": "sunrise road jogger"},
+    ]
+    fake = _fake_querywriter_persona(entries)
+    cfg = _MagicMock()
+
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)
+
+    w0 = ctx["windows"][0][0]
+    assert "query" in w0 and w0["query"], "interim window must get a sanitized query"
+    for banned in ("coding", "laptop"):
+        assert banned not in w0["query"], (
+            f"query must be sanitized, got {w0['query']!r}"
+        )
+    assert w0["prompt"] == w0["query"], (
+        "interim window prompt must be overwritten to the query (DP-P1-001 closure)"
+    )
+    assert w0["prompt"] != "旧-interim-prompt"
+
+    w1 = ctx["windows"][1][0]
+    assert w1.get("query") == "sunrise road jogger", (
+        "director window must also get a query"
+    )
+    assert w1["prompt"] == "导演镜头-prompt", (
+        "director window prompt must NOT be overwritten (#3 no-regression hard door)"
+    )
+
+
+def test_make_querywriter_dispatch_swallows_dispatch_failure_no_halt(tmp_path):
+    """Dispatch failure (ok=False) must not raise and must not write query;
+    interim prompt is preserved (fallback, MR#1); ctx['queries_art'] unset."""
+    from lib.wiring import make_querywriter_dispatch
+
+    interim_w = _mk_qw_window("interim", "旧-interim-prompt")
+    ctx = {"windows": {0: [interim_w]}}
+
+    def fake_fail(agent, prompt, scratch_dir, expected, **kw):
+        return {"ok": False, "reason": "boom"}
+
+    cfg = _MagicMock()
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake_fail, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)  # must not raise
+
+    assert "query" not in ctx["windows"][0][0]
+    assert ctx["windows"][0][0]["prompt"] == "旧-interim-prompt"
+    assert "queries_art" not in ctx
+
+
+def test_make_querywriter_dispatch_swallows_exception_no_raise(tmp_path):
+    """dispatch_persona_fn raising must be swallowed (try/except), not crash
+    the pipeline — same fallback contract as an ok=False result."""
+    from lib.wiring import make_querywriter_dispatch
+
+    interim_w = _mk_qw_window("interim", "旧-interim-prompt")
+    ctx = {"windows": {0: [interim_w]}}
+
+    def fake_raise(agent, prompt, scratch_dir, expected, **kw):
+        raise RuntimeError("claude -p exploded")
+
+    cfg = _MagicMock()
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake_raise, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)  # must not raise
+
+    assert "query" not in ctx["windows"][0][0]
+    assert ctx["windows"][0][0]["prompt"] == "旧-interim-prompt"
+
+
+def test_make_querywriter_dispatch_no_windows_key_no_keyerror(tmp_path):
+    """video/chart beats never populate ctx['windows'] (built elsewhere/
+    skipped) — the closure must tolerate ctx with no 'windows' key at all,
+    without raising KeyError."""
+    from lib.wiring import make_querywriter_dispatch
+
+    ctx = {}  # no "windows" key at all
+    fake = _fake_querywriter_persona([])
+    cfg = _MagicMock()
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)  # must not raise
+
+
+# ===========================================================================
+# Phase-3 query-writer plan — Task 4-tests: 生成整合端到端 — query 经 render
+# 消费 (DP-P1-001 收尾). Verifies the closure's w["prompt"]=query overwrite
+# (Task 3) actually reaches the prompt gen_still_fn receives (via
+# build_shot_prompt @ steps.py:130), and that director windows + the
+# no-query fallback path are unaffected (no-regression hard door, #3).
+#
+# FAILS before Task 4-impl only if the in-place ctx["windows"] mutation from
+# make_querywriter_dispatch does not survive into step_gen_still's render
+# call — per Task 4-impl step 1, this is expected to already hold (same ctx
+# object, in-place mutation), so this task is primarily an end-to-end
+# connectivity proof, not new source.
+# ===========================================================================
+
+def _qw_e2e_beat_and_sb():
+    """One beat, one director shot, clip_len sized so plan_windows emits
+    2 windows (1 director verbatim + 1 interim fill) — mixed coexistence."""
+    beats = [{
+        "id": "b00", "visual_type": "still",
+        "text": "教练讲解节奏控制的核心原理与工程系数换算方法。",
+        "image_prompt": "跑者清晨慢跑", "keywords": ["节奏"],
+    }]
+    sb = [{
+        "shots": [{"prompt": "导演镜头-prompt", "with_character": True}],
+        "keywords": ["节奏"],
+    }]
+    return beats, sb
+
+
+def test_querywriter_query_e2e_flows_into_gen_still_prompt(tmp_path, monkeypatch):
+    """Success path: querywriter overwrites the interim window's prompt to
+    its sanitized query, and that query — not the stale interim text — is
+    what gen_still_fn actually receives; the sibling director window keeps
+    its own director prompt untouched (no-regression, #3), proving director
+    and interim coexist correctly in one beat."""
+    from lib import wiring as _wiring
+    from lib.wiring import make_querywriter_dispatch
+
+    recorded_prompts: list[str] = []
+
+    def fake_gen_still(self, prompt, ref_url, out_path):
+        recorded_prompts.append(prompt)
+        dst = os.path.splitext(out_path)[0] + ".jpg"
+        Path(dst).write_bytes(b"\xff\xd8stub")
+        return dst
+
+    monkeypatch.setattr(_wiring.MediaSeams, "gen_still", fake_gen_still)
+
+    beats, sb = _qw_e2e_beat_and_sb()
+    clip_len_by_index = {0: 11.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index, sb=sb,
+    )
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    windows0 = ctx["windows"][0]
+    assert len(windows0) == 2, (
+        f"expected 1 director + 1 interim window (mixed), got {windows0}"
+    )
+    director_w = next(w for w in windows0 if w["source"] == "director")
+    interim_w = next(w for w in windows0 if w["source"] == "interim")
+    old_interim_prompt = interim_w["prompt"]
+    old_director_prompt = director_w["prompt"]
+
+    entries = [
+        {"beat_i": 0, "idx": director_w["idx"], "query": "sunrise road jogger"},
+        # banned tokens — sanitize_query must strip them before it lands in prompt
+        {"beat_i": 0, "idx": interim_w["idx"], "query": "runner coding on laptop"},
+    ]
+    fake_persona = _fake_querywriter_persona(entries)
+    cfg = _MagicMock()
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake_persona, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)
+
+    assert interim_w["prompt"] == interim_w["query"], (
+        "interim window prompt must be overwritten to its sanitized query"
+    )
+    assert interim_w["prompt"] != old_interim_prompt
+    for banned in ("coding", "laptop"):
+        assert banned not in interim_w["prompt"]
+    assert director_w["prompt"] == old_director_prompt, (
+        "director window prompt must NOT be touched by query-writer (#3)"
+    )
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    # build_shot_prompt appends a no-person disclaimer for with_character=False
+    # shots (interim windows) — expected, unrelated to query-writer — so match
+    # by prefix/substring rather than exact equality.
+    assert any(p.startswith(interim_w["prompt"]) for p in recorded_prompts), (
+        f"gen_still_fn must receive the overwritten interim query prompt "
+        f"{interim_w['prompt']!r}; got {recorded_prompts!r}"
+    )
+    assert not any(p.startswith(old_interim_prompt) for p in recorded_prompts), (
+        "gen_still_fn must not receive the stale pre-query interim prompt"
+    )
+    assert old_director_prompt in recorded_prompts, (
+        "gen_still_fn must still receive the untouched director prompt "
+        "(no-regression, #3)"
+    )
+
+
+def test_querywriter_query_e2e_no_query_keeps_interim_prompt_for_render(
+        tmp_path, monkeypatch):
+    """No query (fixture short-circuit / dispatch failure) → interim window
+    render must receive the original Phase-1 interim prompt, unchanged —
+    the closure never overwrote it, so render must not either."""
+    from lib import wiring as _wiring
+    from lib.wiring import make_querywriter_dispatch
+
+    recorded_prompts: list[str] = []
+
+    def fake_gen_still(self, prompt, ref_url, out_path):
+        recorded_prompts.append(prompt)
+        dst = os.path.splitext(out_path)[0] + ".jpg"
+        Path(dst).write_bytes(b"\xff\xd8stub")
+        return dst
+
+    monkeypatch.setattr(_wiring.MediaSeams, "gen_still", fake_gen_still)
+
+    beats, sb = _qw_e2e_beat_and_sb()
+    clip_len_by_index = {0: 11.0}
+    step_fns, ctx = _make_shotplan_harness(
+        tmp_path, beats=beats, clip_len_by_index=clip_len_by_index, sb=sb,
+    )
+    step_fns["镜头计划"](_shotplan_step(), ctx, tmp_path)
+
+    windows0 = ctx["windows"][0]
+    director_w = next(w for w in windows0 if w["source"] == "director")
+    interim_w = next(w for w in windows0 if w["source"] == "interim")
+    old_interim_prompt = interim_w["prompt"]
+    old_director_prompt = director_w["prompt"]
+
+    def fake_fail(agent, prompt, scratch_dir, expected, **kw):
+        return {"ok": False, "reason": "boom"}
+
+    cfg = _MagicMock()
+    dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=fake_fail, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("query-writer", _qw_step(), ctx, tmp_path)
+
+    assert interim_w["prompt"] == old_interim_prompt, (
+        "dispatch failure must not touch the interim prompt"
+    )
+
+    step_fns["gen-still"](_gen_still_step(), ctx, tmp_path)
+
+    # build_shot_prompt appends a no-person disclaimer for with_character=False
+    # shots (interim windows) — expected, unrelated to query-writer — so match
+    # by prefix rather than exact equality.
+    assert any(p.startswith(old_interim_prompt) for p in recorded_prompts), (
+        "gen_still_fn must receive the Phase-1 interim prompt unchanged when "
+        "query-writer produced no query"
+    )
+    assert old_director_prompt in recorded_prompts

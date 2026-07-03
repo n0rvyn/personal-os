@@ -82,19 +82,19 @@ def test_load_pipeline_step_count():
     )
 
 
-def test_load_pipeline_step_count_16():
-    """Phase-1 (shot-timeline): after inserting the 镜头计划 code step (post-tts,
-    pre-gen-still), the pipeline must have exactly 16 stations (15 Phase-2/3/4
-    steps + 镜头计划 = 16).
+def test_load_pipeline_step_count_17():
+    """Phase-3 query-writer plan: after inserting the query-writer agent step
+    (post-镜头计划, pre-gen-still), the pipeline must have exactly 17 stations
+    (16 Phase-1/2/3/4 steps + query-writer = 17).
 
-    Pre-impl (Task 3-impl pending): returns 15 → FAILS (red).
-    Green after Task 3-impl inserts the 镜头计划 step.
+    Pre-impl (Phase-3 Task 3-impl pending): returns 16 → FAILS (red).
+    Green after Task 3-impl inserts the query-writer step.
     """
     from lib.pipeline import load_pipeline
 
     steps = load_pipeline()
-    assert len(steps) == 16, (
-        f"expected 16 stations (Phase-1 镜头计划 inserted), got {len(steps)}"
+    assert len(steps) == 17, (
+        f"expected 17 stations (Phase-3 query-writer inserted), got {len(steps)}"
     )
 
 
@@ -281,6 +281,44 @@ def test_shotplan_step_shape_is_code_kind_no_gate():
     step = steps[idx_shotplan]
     assert step["kind"] == "code"
     assert step["agent"] is None
+    assert step["gate"] == []
+
+
+def test_query_writer_between_shotplan_and_gen_still():
+    """'query-writer' (Phase-3 content-matched query agent step) must sit
+    strictly between '镜头计划' and 'gen-still': it needs the windows
+    镜头计划 just wrote, and gen-still must be able to consume its query
+    overwrite of interim window prompts.
+
+    Pre-impl: 'query-writer' absent from the step table → ValueError from
+    _step_index → red. Green after Task 3-impl.
+    """
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    idx_shotplan = _step_index(steps, "镜头计划")
+    idx_query_writer = _step_index(steps, "query-writer")
+    idx_gen_still = _step_index(steps, "gen-still")
+
+    assert idx_shotplan < idx_query_writer < idx_gen_still, (
+        f"query-writer (idx {idx_query_writer}) must be between 镜头计划 "
+        f"(idx {idx_shotplan}) and gen-still (idx {idx_gen_still})"
+    )
+
+
+def test_query_writer_step_shape_is_agent_kind_non_gating():
+    """query-writer is an agent step but MR#1 (gate/fallback contradiction)
+    requires it be non-gating: artifact=None, gate=[] — a dispatch failure
+    must never halt the runner (closure swallows failures + falls back to
+    the interim prompt)."""
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    idx_query_writer = _step_index(steps, "query-writer")
+    step = steps[idx_query_writer]
+    assert step["kind"] == "agent"
+    assert step["agent"] == "query-writer"
+    assert step["artifact"] is None
     assert step["gate"] == []
 
 

@@ -109,13 +109,15 @@ def test_pipeline_step_count_15():
     Pre-impl (Phase 4): returns 14 → FAILS (red). Green after Task 3-impl
     (Phase 4). Phase-1 shot-timeline plan (2026-07-03) later inserts the
     '镜头计划' pure-code step (post-tts, pre-gen-still), bringing the total
-    to 16 — see test_pipeline.py::test_load_pipeline_step_count_16, the
-    canonical assertion for that count going forward.
+    to 16. Phase-3 query-writer plan (2026-07-03) then inserts the
+    'query-writer' agent step (post-镜头计划, pre-gen-still), bringing the
+    total to 17 — see test_pipeline.py::test_load_pipeline_step_count_17,
+    the canonical assertion for that count going forward.
     """
     from lib.pipeline import load_pipeline
     steps = load_pipeline()
-    assert len(steps) == 16, (
-        f"expected 16 steps (分镜 + 镜头计划 inserted), got {len(steps)}"
+    assert len(steps) == 17, (
+        f"expected 17 steps (分镜 + 镜头计划 + query-writer inserted), got {len(steps)}"
     )
 
 

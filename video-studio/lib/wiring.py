@@ -45,6 +45,7 @@ from lib.media_source import GenerateSource, MediaRouter
 from lib.budget import apply_video_budget, apply_video_floor
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
 from lib.provenance import build_provenance, stamp_episode_provenance
+from lib.query_filter import sanitize_query
 from lib.visual_ledger import VisualLedger, sig as visual_sig, _done_episode_dirs
 from lib.storyboard import parse_shotlist
 from lib.subtitle import build_ass, build_srt
@@ -1502,6 +1503,105 @@ def make_storyboard_dispatch(
     return dispatch
 
 
+def make_querywriter_dispatch(
+    cfg: VideoStudioConfig,
+    *,
+    dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
+    plugin_root: Path = PLUGIN_ROOT,
+    log: Callable[[str], None] = lambda _m: None,
+) -> Callable:
+    """The `query-writer` agent step's dispatch closure (Phase 3, D-007).
+
+    Non-gating (pipeline step carries artifact=None, gate=[]; MR#1): a
+    dispatch failure never halts the runner — it is swallowed here and the
+    windows keep their Phase-1 interim `prompt` (no-regression fallback).
+
+    - Fixture pass-through (ctx["fixture"] truthy, MR#2): zero live claude -p
+      in the fixture render eval — the closure returns immediately without
+      touching ctx["windows"].
+    - Live: read ctx["windows"] (beat_i -> [window, ...]), build one prompt
+      per window's narration `text`, dispatch "query-writer", parse the
+      `[{beat_i, idx, query}]` JSON artifact, sanitize each query, write
+      window["query"], and for interim windows (source=="interim") also
+      overwrite window["prompt"] = query (DP-P1-001 closure, #3). Director
+      windows keep their prompt untouched.
+    """
+    def dispatch(agent, step, ctx, scratch_dir):
+        if agent != "query-writer":
+            raise RuntimeError(f"unexpected agent step: {agent!r}")
+
+        # --- MR#2: fixture pass-through, zero live claude -p ---
+        if ctx.get("fixture"):
+            log("[query-writer] fixture pass-through")
+            return
+
+        windows = ctx.get("windows") or {}
+        if not windows:
+            log("[query-writer] no windows in ctx — nothing to query")
+            return
+
+        # Build one prompt entry per window (video/chart beats aren't in
+        # ctx["windows"] at all — nothing to skip explicitly, the dict
+        # simply won't have their beat_i).
+        lines = []
+        for beat_i, win_list in windows.items():
+            for idx, w in enumerate(win_list):
+                lines.append(f"beat_i={beat_i} idx={idx}: {w.get('text', '')}")
+        if not lines:
+            log("[query-writer] no window entries — nothing to query")
+            return
+
+        user_prompt = (
+            "为以下每个窗口写一条英文可拍场景查询（3–6 词，抽象→跑步代理画面），"
+            "按 JSON 数组 [{\"beat_i\":i,\"idx\":j,\"query\":\"...\"}] 输出。\n\n"
+            + "\n".join(lines)
+        )
+
+        try:
+            res = dispatch_persona_fn(
+                "query-writer", user_prompt, scratch_dir, "queries.json",
+                plugin_root=plugin_root, model="sonnet",
+            )
+        except Exception as exc:  # noqa: BLE001 — MR#1: never halt the runner
+            log(f"[query-writer] dispatch raised → fallback to interim: {exc}")
+            return
+
+        if not res.get("ok"):
+            log(f"[query-writer] dispatch failed → fallback to interim: {res.get('reason')}")
+            return
+
+        try:
+            with open(res["artifact_path"], encoding="utf-8") as f:
+                entries = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            log(f"[query-writer] could not read/parse artifact → fallback to interim: {exc}")
+            return
+
+        n_applied = 0
+        for entry in entries:
+            beat_i = entry.get("beat_i")
+            idx = entry.get("idx")
+            query = entry.get("query")
+            if beat_i is None or idx is None or not query:
+                continue
+            win_list = windows.get(beat_i)
+            if win_list is None:
+                continue
+            try:
+                w = win_list[idx]
+            except (IndexError, TypeError):
+                continue
+            q = sanitize_query(str(query))
+            w["query"] = q
+            if w.get("source") == "interim":
+                w["prompt"] = q
+            n_applied += 1
+
+        log(f"[query-writer] {n_applied} window(s) got a content-matched query")
+
+    return dispatch
+
+
 def prepare_render(
     cfg: VideoStudioConfig,
     *,
@@ -1531,12 +1631,16 @@ def prepare_render(
         cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
     storyboard_dispatch = make_storyboard_dispatch(
         cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
+    querywriter_dispatch = make_querywriter_dispatch(
+        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
 
     def dispatch(agent, step, ctx, scratch_dir):
         if agent == "digest-writer":
             return script_dispatch(agent, step, ctx, scratch_dir)
         elif agent == "director":
             return storyboard_dispatch(agent, step, ctx, scratch_dir)
+        elif agent == "query-writer":
+            return querywriter_dispatch(agent, step, ctx, scratch_dir)
         else:
             raise RuntimeError(f"unknown agent for dispatch: {agent!r}")
 

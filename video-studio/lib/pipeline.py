@@ -118,6 +118,19 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": None,
         "gate": [],
     },
+    # 4c — Phase-3 content-matched scene query per window (D-007). Non-gating
+    # (artifact=None, gate=[]; MR#1): a dispatch failure never halts the
+    # runner — the closure swallows it and windows keep their interim
+    # prompt (no-regression fallback). Fixture render evals short-circuit
+    # (MR#2) with zero live claude -p.
+    {
+        "name": "query-writer",
+        "kind": "agent",
+        "agent": "query-writer",
+        "inputs": ["镜头计划", "config"],
+        "artifact": None,
+        "gate": [],
+    },
     # 5 — generate still images for beats (image provider: minimax or doubao)
     {
         "name": "gen-still",

@@ -58,7 +58,7 @@ class MediaConfig:
 class BudgetConfig:
     video_shots_per_episode: int
     video_motion_threshold: float = 0.6
-    video_floor: int = 1
+    video_floor: int = 3
 
 
 @dataclass(frozen=True)

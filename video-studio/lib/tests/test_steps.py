@@ -704,12 +704,12 @@ def test_camera_move_threaded_to_filtergraph(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    # 横移 signature: z='1.2' fixed zoom, x='on*... horizontal pan
-    assert "z='1.2'" in vf, (
-        f"横移 camera_move must produce fixed z='1.2' in filtergraph; got: {vf}"
+    # 横移 signature: z='1.4' fixed ceiling zoom, x='min(on*... horizontal pan
+    assert "z='1.4'" in vf, (
+        f"横移 camera_move must produce fixed z='1.4' in filtergraph; got: {vf}"
     )
-    assert re.search(r"x='on\*", vf), (
-        f"横移 camera_move must produce x='on*...' pan expression; got: {vf}"
+    assert re.search(r"x='min\(on\*", vf), (
+        f"横移 camera_move must produce x='min(on*...' pan expression; got: {vf}"
     )
     # Must NOT produce push-in increment (that is 推近, not 横移)
     assert "zoom+" not in vf, (
@@ -725,11 +725,11 @@ def test_camera_move_竖摇_threaded_to_filtergraph(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "z='1.2'" in vf, (
-        f"竖摇 camera_move must produce fixed z='1.2'; got: {vf}"
+    assert "z='1.4'" in vf, (
+        f"竖摇 camera_move must produce fixed z='1.4'; got: {vf}"
     )
-    assert re.search(r"y='on\*", vf), (
-        f"竖摇 camera_move must produce y='on*...' pan-y expression; got: {vf}"
+    assert re.search(r"y='min\(on\*", vf), (
+        f"竖摇 camera_move must produce y='min(on*...' pan-y expression; got: {vf}"
     )
 
 
@@ -745,12 +745,12 @@ def test_shot_type_fallback_全景_maps_to_横移(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    # 横移 signature in the filtergraph (z='1.2' + pan-x)
-    assert "z='1.2'" in vf, (
-        f"全景 shot_type fallback must map to 横移 (z='1.2'); got: {vf}"
+    # 横移 signature in the filtergraph (z='1.4' + pan-x)
+    assert "z='1.4'" in vf, (
+        f"全景 shot_type fallback must map to 横移 (z='1.4'); got: {vf}"
     )
-    assert re.search(r"x='on\*", vf), (
-        f"全景 shot_type fallback must map to 横移 (x='on*...'); got: {vf}"
+    assert re.search(r"x='min\(on\*", vf), (
+        f"全景 shot_type fallback must map to 横移 (x='min(on*...'); got: {vf}"
     )
 
 
@@ -768,12 +768,12 @@ def test_shot_type_fallback_特写_maps_to_竖摇_or_推近(tmp_path):
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
     # Must NOT be 横移 (that's a wide-shot move, wrong for 特写)
-    has_pan_x = bool(re.search(r"x='on\*", vf))
+    has_pan_x = bool(re.search(r"x='min\(on\*", vf))
     assert not has_pan_x, (
         f"特写 fallback must NOT produce 横移 (pan-x); got: {vf}"
     )
     # Must be either 竖摇 or 推近 (both are valid for 特写/局部)
-    has_pan_y   = bool(re.search(r"y='on\*", vf))
+    has_pan_y   = bool(re.search(r"y='min\(on\*", vf))
     has_push_in = "zoom+" in vf
     assert has_pan_y or has_push_in, (
         f"特写 fallback must produce 竖摇 (y='on*) or 推近 (zoom+); got: {vf}"
@@ -810,13 +810,13 @@ def test_degenerate_short_beat_forces_静止(tmp_path):
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    # 静止 signature (Task 3 统一微推): gentle drift, cap 1.02 — NOT the
-    # director's full 推近 push-in (cap 1.1). Forcing to 静止 = gentle drift.
-    assert ",1.02)" in vf, (
-        f"Degenerate clip_len={clip_len} < 0.8 must force gentle 静止 (δ=0.02 drift, cap 1.02); got: {vf}"
+    # 静止 signature (⑤ 统一微推): gentle constant drift, cap 1.05 — NOT the
+    # director's 推近 push-in. Forcing to 静止 = gentle drift.
+    assert ",1.05)" in vf, (
+        f"Degenerate clip_len={clip_len} < 0.8 must force gentle 静止 (constant drift, cap 1.05); got: {vf}"
     )
-    assert ",1.2)" not in vf, (
-        f"Degenerate short clip must not get director's full 推近 push-in (cap 1.2); got: {vf}"
+    assert ",1.4)" not in vf, (
+        f"Degenerate short clip must not get director's 推近 push-in (ceiling 1.4); got: {vf}"
     )
 
 
@@ -828,31 +828,31 @@ def test_degenerate_short_beat_forces_静止(tmp_path):
 def test_camera_intensity_threaded_to_filtergraph(tmp_path):
     """A shot with camera_intensity scales the zoom delta in the -vf expression.
 
-    clip_len=3.0 (frames=90), 推近 at intensity=0.5 → inc=0.05/90=0.000556,
-    cap=1.05. Proves steps.py reads camera_intensity and passes it down."""
+    clip_len=3.0, 推近 at intensity=0.5 → rate 0.025/s, inc=0.025/30=0.000833,
+    cap=1.0+min(0.025*3,0.4)=1.075. Proves steps.py reads camera_intensity and passes it down."""
     shots = [{"prompt": "晨光跑道全景", "with_character": False,
               "camera_move": "推近", "camera_intensity": 0.5}]
     vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.001111" in vf and ",1.1)" in vf, (
-        f"camera_intensity=0.5 must halve the 推近 delta (inc=0.001111 cap=1.1); got: {vf}"
+    assert "zoom+0.000833" in vf and ",1.075)" in vf, (
+        f"camera_intensity=0.5 must halve the 推近 speed (inc=0.000833 cap=1.075); got: {vf}"
     )
 
 
 def test_absent_camera_intensity_defaults_to_1_0(tmp_path):
     """No camera_intensity on the shot → render uses 1.0 (current amounts).
 
-    clip_len=3.0 (frames=90), 推近 at default 1.0 → inc=0.001111, cap=1.1."""
+    clip_len=3.0, 推近 at default 1.0 → rate 0.05/s, inc=0.001667, cap=1.0+min(0.05*3,0.4)=1.15."""
     shots = [{"prompt": "晨光跑道全景", "with_character": False,
               "camera_move": "推近"}]  # NO camera_intensity
     vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.002222" in vf and ",1.2)" in vf, (
-        f"absent camera_intensity must default to 1.0 (current amounts); got: {vf}"
+    assert "zoom+0.001667" in vf and ",1.15)" in vf, (
+        f"absent camera_intensity must default to 1.0 (full speed); got: {vf}"
     )
 
 

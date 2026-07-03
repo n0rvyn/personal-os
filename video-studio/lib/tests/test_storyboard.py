@@ -115,6 +115,36 @@ def test_parse_shotlist_chart_beat_empty_type_rejected():
 
 
 # ---------------------------------------------------------------------------
+# ⑧: chart_followup_prompt preserved on chart beats, dropped elsewhere
+# ---------------------------------------------------------------------------
+
+def test_parse_shotlist_keeps_chart_followup_prompt_on_chart_beat():
+    """A chart beat's chart_followup_prompt (still shown after a long chart) is preserved."""
+    spec = {"type": "bar", "params": {"categories": ["a", "b"], "values": [1, 2]}}
+    beat = _chart_beat(chart_spec=spec, extra={"chart_followup_prompt": "两组跑者并排在跑道上"})
+    result = storyboard.parse_shotlist(_make_raw([beat]), 1)
+    assert isinstance(result, list), f"expected list, got: {result!r}"
+    assert result[0].get("chart_followup_prompt") == "两组跑者并排在跑道上"
+
+
+def test_parse_shotlist_drops_chart_followup_on_nonchart_beat():
+    """chart_followup_prompt on a non-chart beat is not forwarded (chart-only field)."""
+    beat = _still_beat()
+    beat["chart_followup_prompt"] = "stray"
+    result = storyboard.parse_shotlist(_make_raw([beat]), 1)
+    assert isinstance(result, list), f"expected list, got: {result!r}"
+    assert "chart_followup_prompt" not in result[0]
+
+
+def test_parse_shotlist_chart_followup_absent_is_omitted():
+    """No chart_followup_prompt → key absent (wiring falls back to a generic b-roll still)."""
+    spec = {"type": "zone_boundary", "params": {}}
+    result = storyboard.parse_shotlist(_make_raw([_chart_beat(chart_spec=spec)]), 1)
+    assert isinstance(result, list), f"expected list, got: {result!r}"
+    assert "chart_followup_prompt" not in result[0]
+
+
+# ---------------------------------------------------------------------------
 # Task 3-tests: color_grade on first beat preserved (DP-001 parse contract)
 # ---------------------------------------------------------------------------
 

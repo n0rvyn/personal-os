@@ -31,16 +31,23 @@ FONT_STYLE = (
 
 CAMERA_MOVES = ("推近", "拉远", "横移", "竖摇", "静止")
 
-# DP-002: column-locked zoom range — restrained, NOT vlog.
-_ZOOM_MAX = 1.2   # upper bound for all moves
-_ZOOM_MIN = 1.0   # lower bound / static level
-# Pan budget: half of the 1.2x overscan available for each axis, calculated on
-# the pre-upscaled 3840-wide frame (2x the original 1920).  After scale=3840:-2
-# the zoomed virtual frame is 3840*1.2=4608 wide, 2160*1.2=2592 tall.
-# overscan_x = 3840*(1.2-1.0) = 768 → half = 384
-# overscan_y = 2160*(1.2-1.0) = 432 → half = 216
-_PAN_X = 384.0
-_PAN_Y = 216.0
+# ⑤ (2026-07-03): reverses DP-002 克制. On an A/B the user picked ceiling 1.4 and asked
+# for constant SPEED — not "spread the whole delta over the segment" (which made long beats
+# crawl and read as frozen). So the camera moves at a fixed RATE per second until it reaches
+# the ceiling, then holds; a long still keeps the same visible speed instead of slowing.
+# Tune the rate / ceiling here.
+_ZOOM_RATE = 0.05   # zoom units per second at intensity 1.0 (= 0.4 over 8s, the A/B "C" pick)
+_ZOOM_MAX = 1.4     # zoom ceiling for all moves (A/B "C")
+_ZOOM_MIN = 1.0     # floor / no-motion level
+# 静止: a gentle CONSTANT drift, no longer the near-frozen δ=0.02 hold.
+_STATIC_RATE = 0.0035  # zoom units/sec — subtle life signal, ignores intensity
+_STATIC_MAX = 1.05
+# Pan: constant px/second on the pre-upscaled 3840-wide frame, capped at half the
+# ceiling-zoom overscan. At z=_ZOOM_MAX=1.4: overscan_x = 3840*0.4 = 1536 → half 768;
+# overscan_y = 2160*0.4 = 864 → half 432.  _PAN_RATE reaches that half-edge in 8s.
+_PAN_RATE = 96.0
+_PAN_MAX_X = 768.0
+_PAN_MAX_Y = 432.0
 
 
 def _fmt_zoom(v: float) -> str:
@@ -59,29 +66,27 @@ def _still_or_chart_filtergraph(
 ) -> str:
     """Build the -vf filtergraph for a still (or chart) segment.
 
-    camera_move selects the zoompan expression family (AR-3 / DP-002):
-      推近 — Ken Burns push-in 1.0→1.0+δ (default, backward-compat)
-      拉远 — zoom-out 1.0+δ→1.0
-      横移 — z=1.1 fixed, pan-x across overscan
-      竖摇 — z=1.1 fixed, pan-y across overscan
-      静止 — z=1.0..1.02 极缓微推(δ=0.02 hardcoded, intensity ignored)
+    camera_move selects the zoompan expression family (⑤ constant-speed model):
+      推近 — Ken Burns push-in at a fixed rate up to the ceiling
+      拉远 — zoom-out from the ceiling back to 1.0 at the same rate
+      横移 — z fixed at ceiling, pan-x at fixed rate across overscan
+      竖摇 — z fixed at ceiling, pan-y at fixed rate across overscan
+      静止 — very gentle CONSTANT drift (no longer a near-frozen δ=0.02 hold)
       (unknown/illegal) → fall back to 推近
 
-    intensity ∈ [0,1] (clamped) is the director-chosen camera-move MAGNITUDE:
-    it scales the zoom delta (δ = 0.2 * intensity) and the pan step within the
-    fixed 克制 ceiling, so the move can never exceed today's restrained max.
-    intensity=1.0 reaches the full 0.2 delta (cap=1.2); lower = gentler.
-    静止 ignores intensity — drift is hardcoded at δ=0.02.
+    Speed, not amount, is duration-independent (⑤ 2026-07-03, reverses DP-002 克制):
+    the per-frame increment is _ZOOM_RATE * intensity / 30, so the camera moves at the
+    SAME visible speed on a 4s beat and a 30s beat. Total travel is bounded by
+    _ZOOM_MAX (1.4) — a beat long enough to reach the ceiling holds there for the rest
+    (short beats simply travel less). intensity ∈ [0,1] (clamped) scales the speed;
+    intensity=0 → no motion. 静止 ignores intensity (fixed subtle drift).
 
-    DP-002: zoom range [1.0, 1.2]; pan stays within 1.2x overscan.
     d={frames} and s=1920x1080:fps=30 are NEVER changed by camera_move.
     """
     if camera_move not in CAMERA_MOVES:
         camera_move = "推近"
 
     intensity = max(0.0, min(1.0, float(intensity)))
-    delta = 0.2 * intensity  # scaled zoom range (0.2 at intensity=1.0)
-
     frames = max(int(dur_s * 30), 1)
     prefix = (
         "scale=1920:1080:force_original_aspect_ratio=increase,"
@@ -90,35 +95,42 @@ def _still_or_chart_filtergraph(
     )
     suffix = f":d={frames}:s=1920x1080:fps=30"
 
+    if camera_move == "静止":
+        # Gentle CONSTANT drift; ignores intensity (a fixed subtle life signal, no longer frozen).
+        inc = _STATIC_RATE / 30.0
+        zp = f"zoompan=z='min(zoom+{inc:.6f},{_fmt_zoom(_STATIC_MAX)})'{suffix}"
+        return prefix + zp
+
+    # Constant-speed model: move at `rate` per second (same on any beat length) until the
+    # ceiling, then hold — so a long still keeps its visible speed instead of crawling.
+    rate = _ZOOM_RATE * intensity            # zoom units per second
+    inc = rate / 30.0                         # per-frame increment (the SPEED, duration-independent)
+    cap = 1.0 + min(rate * dur_s, _ZOOM_MAX - 1.0)   # total travel bounded by the ceiling
+
     if camera_move == "推近":
-        inc = delta / frames  # total 1.0 -> 1.0+δ spread evenly over the segment
-        cap = 1.0 + delta
         zp = f"zoompan=z='min(zoom+{inc:.6f},{_fmt_zoom(cap)})'{suffix}"
     elif camera_move == "拉远":
-        start = 1.0 + delta
-        dec = delta / frames  # 1.0+δ -> 1.0 spread evenly
-        zp = f"zoompan=z='max({_fmt_zoom(start)}-on*{dec:.6f},1.0)'{suffix}"
+        zp = f"zoompan=z='max({_fmt_zoom(cap)}-on*{inc:.6f},1.0)'{suffix}"
     elif camera_move == "横移":
-        x_step = (_PAN_X * intensity) / frames
+        pan_rate = _PAN_RATE * intensity
+        step = pan_rate / 30.0
+        maxpan = min(pan_rate * dur_s, _PAN_MAX_X)
         zp = (
-            f"zoompan=z='1.2'"
-            f":x='on*{x_step:.6f}'"
+            f"zoompan=z='{_fmt_zoom(_ZOOM_MAX)}'"
+            f":x='min(on*{step:.6f},{maxpan:.6f})'"
             f":y='(ih-ih/zoom)/2'"
             f"{suffix}"
         )
-    elif camera_move == "竖摇":
-        y_step = (_PAN_Y * intensity) / frames
+    else:  # 竖摇
+        pan_rate = _PAN_RATE * intensity
+        step = pan_rate / 30.0
+        maxpan = min(pan_rate * dur_s, _PAN_MAX_Y)
         zp = (
-            f"zoompan=z='1.2'"
+            f"zoompan=z='{_fmt_zoom(_ZOOM_MAX)}'"
             f":x='(iw-iw/zoom)/2'"
-            f":y='on*{y_step:.6f}'"
+            f":y='min(on*{step:.6f},{maxpan:.6f})'"
             f"{suffix}"
         )
-    else:  # 静止 — 极缓微推(δ=0.02 硬编码极小值, intensity ignored)
-        _static_drift = 0.02
-        inc = _static_drift / frames
-        cap = 1.0 + _static_drift
-        zp = f"zoompan=z='min(zoom+{inc:.6f},{_fmt_zoom(cap)})'{suffix}"
 
     return prefix + zp
 

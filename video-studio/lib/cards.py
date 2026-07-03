@@ -56,7 +56,7 @@ DEFAULT_TITLE = {
     # bg_prompt stays style-agnostic: the art_style prefix (e.g. 简笔日漫) + the
     # episode color_grade decide the look, so the card matches the body. No baked
     # "电影感/冷蓝调/剪影" here (those fought the flat-cel anime body — R2 fix).
-    "bg_prompt": "清晨田径场跑道，一位跑步者在画面右侧轻松奔跑，左侧留白，明亮清爽",
+    "bg_prompt": "清晨田径场跑道，主讲人物在画面右侧轻松奔跑，左侧大面积留白，明亮清爽，人物完整入镜不怼脸",
 }
 DEFAULT_END = {
     "tag": "本期 3 个要点",
@@ -67,7 +67,7 @@ DEFAULT_END = {
     ],
     "footer": "关注 · 科学跑步不靠感觉      下期 · 跑姿与步频",
     # style-agnostic (see DEFAULT_TITLE note): let art_style + color_grade decide look.
-    "bg_prompt": "清晨空旷跑道向远方笔直延伸，两侧留白，明亮清爽，无人",
+    "bg_prompt": "清晨空旷跑道，主讲人物背影沿跑道向远方从容跑去，两侧留白，明亮清爽，收束全片",
 }
 
 

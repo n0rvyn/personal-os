@@ -50,6 +50,11 @@ SPIKE = PLUGIN_ROOT / ".spike"
 
 BGM_START_VOLUME = 0.12
 MAX_CALIB_ROUNDS = 3
+# ⑧ (2026-07-03): a chart held fully static for a whole long-narration beat reads as
+# frozen (ep002 had one chart on screen ~50s). Cap the chart's on-screen time; the rest
+# of the beat's narration plays over a content-relevant still (no camera on the chart —
+# user's call). Only splits when the beat is meaningfully longer than the cap.
+CHART_MAX_SECONDS = 12.0
 
 
 # ---------------------------------------------------------------------------
@@ -410,8 +415,9 @@ def build_step_fns(
     `scratch_dir` (intermediates) or the episode dir (deliverables), then sets
     ctx[step['artifact']] to a non-empty FILE path so check_artifact passes.
     Heavy data (beats/srt_beats/clip map/start_ms) flows through ctx under
-    untracked keys. final.mp4 + subtitles.srt + shotlist.json + provenance.json
-    land in the EPISODE dir (survives the runner's end-of-run cleanup_scratch).
+    untracked keys. The video ({seq}-{slug}.mp4) + subtitles.srt + shotlist.json
+    + provenance.json land in the EPISODE dir (survives the runner's end-of-run
+    cleanup_scratch).
     """
 
     def _sentinel(scratch: Path, key: str, payload: str = "ok") -> str:
@@ -720,8 +726,32 @@ def build_step_fns(
                 media_chart.render_pace_table(
                     chart_title, [tuple(r) for r in chart_rows], png)
             clip = os.path.join(scratch_s, f"clip_{i}_{bid}.mp4")
-            steps_mod.step_chart_clip(
-                png, ctx["clip_len_by_index"][i], clip, run_ff_fn=run_ff)
+            clip_len = ctx["clip_len_by_index"][i]
+            if clip_len > CHART_MAX_SECONDS + 1.5:
+                # ⑧ Long-narration chart: hold the chart for CHART_MAX_SECONDS, then cut
+                # to a content-relevant still for the remainder (keeps audio synced).
+                chart_part = os.path.join(scratch_s, f"clip_{i}_{bid}_chart.mp4")
+                steps_mod.step_chart_clip(png, CHART_MAX_SECONDS, chart_part, run_ff_fn=run_ff)
+                fu_prompt = (
+                    beat.get("chart_followup_prompt")
+                    or beat.get("image_prompt")
+                    or "跑者在真实环境中从容奔跑的动态空镜"
+                )
+                after_part = os.path.join(scratch_s, f"clip_{i}_{bid}_after.mp4")
+                steps_mod.step_render_shots_clip(
+                    [{"prompt": fu_prompt, "with_character": False}],
+                    clip_len - CHART_MAX_SECONDS, after_part, bid, scratch_s,
+                    ctx["ref_url"], ctx["grade_vf"],
+                    gen_still_fn=seams.gen_still, run_ff_fn=run_ff,
+                )
+                listf = os.path.join(scratch_s, f"clip_{i}_{bid}_list.txt")
+                with open(listf, "w") as lf:
+                    lf.write(f"file '{chart_part}'\nfile '{after_part}'\n")
+                run_ff(ffcmd.concat_cmd(listf, clip), f"{bid}-chart-concat")
+                log(f"[chart] {bid}: narration {clip_len:.0f}s → chart {CHART_MAX_SECONDS:.0f}s "
+                    f"+ 相关静图 {clip_len - CHART_MAX_SECONDS:.0f}s")
+            else:
+                steps_mod.step_chart_clip(png, clip_len, clip, run_ff_fn=run_ff)
             ctx["clips_by_index"][i] = clip
             n += 1
         ctx["charts_dir"] = _sentinel(Path(scratch), "charts_dir", f"{n} chart beats")
@@ -768,8 +798,12 @@ def build_step_fns(
                     shutil.copy(reuse, out)
                 log(f"[card] reusing bg {reuse}")
                 return out
-            actual = seams.gen_still(prompt, None, out)
-            log(f"[card] gen bg -> {actual}")
+            # ③ lock the presenter: pass the same character ref the shots use so the
+            # title/end card shows the actual host (not a generic runner). ref set
+            # upstream by _ensure_ref_url; None-safe fallback keeps old no-lock behavior.
+            card_ref = ctx.get("ref_url")
+            actual = seams.gen_still(prompt, card_ref, out)
+            log(f"[card] gen bg -> {actual} (ref={'locked' if card_ref else 'none'})")
             return actual
 
         title_bg = _card_bg("SPIKE_CARD_TITLE_BG", tcfg["bg_prompt"],
@@ -820,7 +854,7 @@ def build_step_fns(
         run_ff(ffcmd.mux_av_cmd(video_track, narration, base_mp4), "mux-base")
         log(f"[assemble] {len(vid_clips)} clips x-faded, {total_audio_ms}ms narration")
 
-        # ---- BGM + ducking calibration → final.mp4 (EPISODE dir) ----
+        # ---- BGM + ducking calibration → output video (EPISODE dir) ----
         # spike_acceptance.measure_gap lives at the plugin root (Phase 7 retires
         # the spike; this is the one remaining production→spike coupling).
         from lib.ffprobe_util import measure_gap
@@ -842,7 +876,7 @@ def build_step_fns(
             json.dumps({"total_audio_ms": total_audio_ms,
                         "beats": [{"id": b["id"], "type": b["visual_type"]}
                                   for b in beats]}, indent=2), encoding="utf-8")
-        log(f"[assemble] final.mp4 -> {final_mp4} "
+        log(f"[assemble] video -> {final_mp4} "
             f"(bgm gap {result['final_gap']:.1f}dB, {result['rounds']} rounds)")
 
     # ---- 10: provenance (stub; Phase 4 wires PDF page mapping) ----
@@ -896,11 +930,11 @@ def build_step_fns(
             log("[publish] placeholder (Phase 7 wires real publish)")
             return
 
-        # Verify final.mp4 exists before advancing cursor
+        # Verify the output video exists before advancing cursor
         final_mp4_path = ctx.get("final_mp4", "")
         if not final_mp4_path or not Path(final_mp4_path).exists():
             raise FileNotFoundError(
-                f"[publish] final.mp4 not found at {final_mp4_path!r}; "
+                f"[publish] output video not found at {final_mp4_path!r}; "
                 "cursor NOT advanced"
             )
 

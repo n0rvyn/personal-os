@@ -255,6 +255,11 @@ def parse_shotlist(out: str, n_beats: int):
                     "type": ctype.strip(),
                     "params": chart.get("params") or {},
                 }
+                # ⑧ optional follow-up still prompt: shown after the chart when the
+                # beat's narration is long (chart on screen ~12s, then this still).
+                fu = entry.get("chart_followup_prompt")
+                if isinstance(fu, str) and fu.strip():
+                    item["chart_followup_prompt"] = fu.strip()
             # non-chart beats: any stray chart field is intentionally not forwarded.
 
             norm.append(item)

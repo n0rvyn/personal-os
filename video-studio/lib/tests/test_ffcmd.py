@@ -504,14 +504,16 @@ def _zoompan_str(fg: str) -> str:
     return fg[idx:] if idx != -1 else ""
 
 
-# -- 推近 (push-in / zoom-in) — backward compat --
+# -- 推近 (push-in / zoom-in) --
 
-def test_camera_move_推近_is_backward_compat_push_in():
-    """推近 must produce the push-in formula (z=min(zoom+inc,1.2))."""
+def test_camera_move_推近_push_in_formula():
+    """推近 must produce the push-in formula z=min(zoom+inc,cap). At _MOVE_DUR=4s the
+    cap is 1.2 (constant-speed travel 0.05*4=0.2), NOT the 1.4 ceiling — see
+    test_camera_move_zoom_ceiling_1_4 for the ceiling guard."""
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近")
     zp = _zoompan_str(fg)
-    assert "z='min(zoom+" in zp, f"推近 must use min(zoom+inc,1.2) z-expr: {zp}"
-    assert "1.2" in zp, f"推近 max zoom must be 1.2: {zp}"
+    assert "z='min(zoom+" in zp, f"推近 must use min(zoom+inc,cap) z-expr: {zp}"
+    assert ",1.2)" in zp, f"推近 4s cap must be 1.2 (0.05*4 travel): {zp}"
     assert f"d={_MOVE_FRAMES}" in zp, f"推近 duration must be d={_MOVE_FRAMES}: {zp}"
     assert "s=1920x1080:fps=30" in zp, f"推近 must keep s=1920x1080:fps=30: {zp}"
 
@@ -527,12 +529,13 @@ def test_camera_move_推近_explicit_equals_no_arg_default():
 
 # -- 拉远 (zoom-out) --
 
-def test_camera_move_拉远_zoom_out_from_1_2_to_1_0():
-    """拉远 must zoom out from 1.2 → 1.0: z-expr contains 1.2 start and 1.0 floor."""
+def test_camera_move_拉远_zoom_out_to_1_0():
+    """拉远 must zoom out from cap → 1.0. At _MOVE_DUR=4s the start cap is 1.2
+    (constant-speed travel), floor 1.0."""
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="拉远")
     zp = _zoompan_str(fg)
     assert "zoompan" in zp, f"拉远 must use zoompan: {fg}"
-    assert "1.2" in zp, f"拉远 z must start at 1.2: {zp}"
+    assert "1.2" in zp, f"拉远 z must start at the 4s cap 1.2: {zp}"
     assert "1.0" in zp or "max(" in zp, f"拉远 z must have 1.0 floor (zoom-out): {zp}"
     # Must NOT be a push-in expression
     assert "min(zoom+" not in zp, f"拉远 must NOT use push-in z-expr: {zp}"
@@ -548,7 +551,7 @@ def test_camera_move_横移_fixed_z_dynamic_x():
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移")
     zp = _zoompan_str(fg)
     assert "zoompan" in zp, f"横移 must use zoompan: {fg}"
-    assert "1.2" in zp, f"横移 z must be fixed ~1.2: {zp}"
+    assert "z='1.4'" in zp, f"横移 z must be fixed at ceiling 1.4: {zp}"
     assert "x=" in zp, f"横移 must have explicit x= param: {zp}"
     # x= must be a dynamic expression, not a literal 0
     x_match = re.search(r"x='([^']*)'", zp)
@@ -584,7 +587,7 @@ def test_camera_move_竖摇_fixed_z_dynamic_y():
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="竖摇")
     zp = _zoompan_str(fg)
     assert "zoompan" in zp, f"竖摇 must use zoompan: {fg}"
-    assert "1.2" in zp, f"竖摇 z must be fixed ~1.2: {zp}"
+    assert "z='1.4'" in zp, f"竖摇 z must be fixed at ceiling 1.4: {zp}"
     assert "y=" in zp, f"竖摇 must have explicit y= param: {zp}"
     y_match = re.search(r"y='([^']*)'", zp)
     assert y_match, f"竖摇 y= must be a single-quoted expression: {zp}"
@@ -662,11 +665,12 @@ def test_camera_move_all_duration_unchanged():
             )
 
 
-def test_camera_move_dp002_zoom_max_1_2():
-    """DP-002: zoom (z=) literal values must stay within [1.0, 1.2] — no hyper-zoom.
+def test_camera_move_zoom_ceiling_1_4():
+    """⑤ ceiling: zoom (z=) literal values must stay within [1.0, 1.4] — no hyper-zoom.
 
-    Only values in the z='...' expression are zoom factors; x= and y= pan-step
-    values are in pixel units relative to the upscaled frame and are excluded.
+    Reverses DP-002's 1.2 cap to the A/B "C" pick (1.4). Only values in the z='...'
+    expression are zoom factors; x= and y= pan-step values are in pixel units relative
+    to the upscaled frame and are excluded.
     """
     import re
     moves = ["推近", "拉远", "横移", "竖摇", "静止"]
@@ -675,44 +679,39 @@ def test_camera_move_dp002_zoom_max_1_2():
         # Extract only the z='...' expression from zoompan (zoom factor, not pan step)
         z_match = re.search(r"z='([^']*)'", fg)
         z_expr = z_match.group(1) if z_match else ""
-        # Find numeric literals > 1.2 within the zoom expression
-        candidates = re.findall(r'\b(1\.[3-9][0-9]*|[2-9]\.[0-9]*)\b', z_expr)
-        bad = [v for v in candidates if float(v) > 1.2]
+        # Find numeric zoom literals and flag any > 1.4
+        candidates = re.findall(r'\b([1-9]\.[0-9]+)\b', z_expr)
+        bad = [v for v in candidates if float(v) > 1.4 + 1e-9]
         assert not bad, (
-            f"move={move!r}: zoom z-expr literal(s) {bad} exceed DP-002 max 1.2: {z_expr}"
+            f"move={move!r}: zoom z-expr literal(s) {bad} exceed ⑤ ceiling 1.4: {z_expr}"
         )
 
 
 # ---------------------------------------------------------------------------
-# camera_intensity (Phase 5 enhancement) — director-chosen move MAGNITUDE.
+# camera_intensity — director-chosen move MAGNITUDE, now the SPEED scalar (⑤).
 #
-# intensity ∈ [0,1] (clamped). intensity=1.0 reproduces the pre-intensity
-# amounts BYTE-IDENTICALLY (backward-compat); lower = gentler; code guardrails
-# so it can never exceed today's 克制 max.
+# intensity ∈ [0,1] (clamped) scales the constant zoom/pan SPEED (per second):
+# intensity=0 → no motion, 1.0 → full speed. The strings below pin the exact output
+# of the ⑤ constant-speed model (reverses DP-002); they are regression pins, NOT
+# backward-compat with the old delta-spread code.
 # ---------------------------------------------------------------------------
 
-# Reference strings captured from the pre-intensity code at dur_s=3.0 (frames=90).
-# These pin the EXACT byte-identical output for intensity=1.0 / default.
+# Reference strings from the constant-speed model at dur_s=3.0 (frames=90), intensity=1.0.
+# At 3.0s the zoom travels rate*dur = 0.05*3 = 0.15 (cap 1.15, below the 1.4 ceiling);
+# pan travels _PAN_RATE*dur = 96*3 = 288 px (below the 768/432 half-overscan caps).
 _BC_DUR = 3.0
-# Task 1-impl adds scale=3840:-2 before zoompan so zoompan integer arithmetic
-# operates on a 2x-upscaled frame, eliminating the stairstepping visible in the
-# original 1920-wide input. _BC_PREFIX updated to reflect the post-upscale format;
-# these byte-identical tests are RED until Task 1-impl is applied.
 _BC_PREFIX = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,scale=3840:-2,"
-# Pan steps recalculated for the 2x-upscaled frame (_PAN_X=192, _PAN_Y=108):
-#   横移 x_step = 192.0 / 90 = 2.133333  (was 96.0/90 = 1.066667)
-#   竖摇 y_step = 108.0 / 90 = 1.200000  (was 54.0/90 = 0.600000)
 _BC_EXPECTED = {
-    # delta=0.2*1.0=0.2; frames=90; inc=0.2/90=0.002222; cap=1.2
-    "推近": _BC_PREFIX + "zoompan=z='min(zoom+0.002222,1.2)':d=90:s=1920x1080:fps=30",
-    # start=1.2; dec=0.2/90=0.002222
-    "拉远": _BC_PREFIX + "zoompan=z='max(1.2-on*0.002222,1.0)':d=90:s=1920x1080:fps=30",
-    # z='1.2'; _PAN_X=384; x_step=(384*1.0)/90=4.266667
-    "横移": _BC_PREFIX + "zoompan=z='1.2':x='on*4.266667':y='(ih-ih/zoom)/2':d=90:s=1920x1080:fps=30",
-    # z='1.2'; _PAN_Y=216; y_step=(216*1.0)/90=2.400000
-    "竖摇": _BC_PREFIX + "zoompan=z='1.2':x='(iw-iw/zoom)/2':y='on*2.400000':d=90:s=1920x1080:fps=30",
-    # 静止: δ=0.02 hardcoded, ignores intensity; frames=90; inc=0.02/90=0.000222; cap=1.02
-    "静止": _BC_PREFIX + "zoompan=z='min(zoom+0.000222,1.02)':d=90:s=1920x1080:fps=30",
+    # rate=0.05; inc=rate/30=0.001667; cap=1.0+min(0.05*3,0.4)=1.15
+    "推近": _BC_PREFIX + "zoompan=z='min(zoom+0.001667,1.15)':d=90:s=1920x1080:fps=30",
+    # start=cap=1.15; dec=inc=0.001667; floor 1.0
+    "拉远": _BC_PREFIX + "zoompan=z='max(1.15-on*0.001667,1.0)':d=90:s=1920x1080:fps=30",
+    # z fixed at ceiling 1.4; step=_PAN_RATE/30=3.2; maxpan=min(96*3,768)=288
+    "横移": _BC_PREFIX + "zoompan=z='1.4':x='min(on*3.200000,288.000000)':y='(ih-ih/zoom)/2':d=90:s=1920x1080:fps=30",
+    # z fixed 1.4; step 3.2; maxpan=min(96*3,432)=288
+    "竖摇": _BC_PREFIX + "zoompan=z='1.4':x='(iw-iw/zoom)/2':y='min(on*3.200000,288.000000)':d=90:s=1920x1080:fps=30",
+    # 静止: constant gentle drift; inc=_STATIC_RATE/30=0.000117; cap=_STATIC_MAX=1.05; ignores intensity
+    "静止": _BC_PREFIX + "zoompan=z='min(zoom+0.000117,1.05)':d=90:s=1920x1080:fps=30",
 }
 
 
@@ -739,13 +738,13 @@ def test_intensity_explicit_1_0_is_byte_identical_for_all_moves():
         )
 
 
-def test_intensity_push_in_cap_is_bare_1_2_not_padded():
-    """Discriminating check: the 推近 cap must serialize as '1.2' (closing
-    `,1.2)`), NOT '1.2000' — the exact regression a `:.4f` format would cause."""
+def test_intensity_push_in_cap_is_bare_not_padded():
+    """Discriminating check: the 推近 cap at 3.0s must serialize as bare '1.15'
+    (closing `,1.15)`), NOT '1.1500' — the exact regression a `:.4f` format would cause."""
     fg = _still_or_chart_filtergraph(_BC_DUR, camera_move="推近", intensity=1.0)
     zp = _zoompan_str(fg)
-    assert ",1.2)" in zp, f"推近 cap must be bare '1.2', got: {zp}"
-    assert "1.2000" not in zp, f"推近 cap must NOT be padded to 1.2000: {zp}"
+    assert ",1.15)" in zp, f"推近 cap must be bare '1.15', got: {zp}"
+    assert "1.1500" not in zp, f"推近 cap must NOT be padded to 1.1500: {zp}"
 
 
 def test_intensity_half_halves_push_in_delta():
@@ -759,19 +758,19 @@ def test_intensity_half_halves_push_in_delta():
 
 
 def test_intensity_half_halves_pan_step():
-    """intensity=0.5 → 横移 pan-x step halves (384→192 px over frames, _PAN_X=384 after 2x upscale)."""
+    """intensity=0.5 → 横移 pan-x SPEED halves (constant rate _PAN_RATE=96 px/s → step/frame 3.2→1.6)."""
     full = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移", intensity=1.0))
     half = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移", intensity=0.5))
-    # frames=120: full x_step=384/120=3.2 ; half=192/120=1.6  (upscaled _PAN_X=384)
-    assert "x='on*3.200000'" in full, f"intensity=1.0 横移 step must be 3.200000: {full}"
-    assert "x='on*1.600000'" in half, f"intensity=0.5 横移 step must be 1.600000: {half}"
+    # step/frame = _PAN_RATE*intensity/30: full=96/30=3.2 ; half=48/30=1.6 (wrapped in min(...,maxpan))
+    assert "on*3.200000" in full, f"intensity=1.0 横移 step must be 3.200000: {full}"
+    assert "on*1.600000" in half, f"intensity=0.5 横移 step must be 1.600000: {half}"
 
 
 def test_intensity_half_halves_pan_y_step():
-    """intensity=0.5 → 竖摇 pan-y step halves (216→108 px over frames, _PAN_Y=216 after 2x upscale)."""
+    """intensity=0.5 → 竖摇 pan-y SPEED halves (constant rate → step/frame 3.2→1.6)."""
     half = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="竖摇", intensity=0.5))
-    # frames=120: half y_step = (216*0.5)/120 = 0.9  (upscaled _PAN_Y=216)
-    assert "y='on*0.900000'" in half, f"intensity=0.5 竖摇 step must be 0.900000: {half}"
+    # step/frame = _PAN_RATE*0.5/30 = 48/30 = 1.6 (wrapped in min(...,maxpan))
+    assert "on*1.600000" in half, f"intensity=0.5 竖摇 step must be 1.600000: {half}"
 
 
 def test_intensity_0_3_push_in_cap_is_1_06():

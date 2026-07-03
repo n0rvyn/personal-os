@@ -49,7 +49,11 @@ budget:
   # Video floor safety net: minimum真人跑步 b-roll video beats per episode. When the
   # director returns fewer, the pipeline promotes the best-candidate still beat
   # (running imagery > character > other) to video. 0 disables the floor.
-  video_floor: 1
+  # ⑥ (2026-07-03): raised 1→3 so每期有更多真视频镜头 (was feeling all-stills).
+  # NOTE: promotion needs running/character shots (score≥1); a shotlist of only
+  # notebook/desk close-ups can't reach the floor — the director must produce
+  # real running scenes (see agents/director.md b-roll mandate).
+  video_floor: 3
 
 ffmpeg:
   # Must be a libass-enabled build for subtitle burning.

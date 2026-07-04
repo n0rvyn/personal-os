@@ -289,7 +289,14 @@ def step_render_shots_clip(
                 bid, j, exc,
             )
         move = _resolve_camera_move(shot, slice_s)
-        intensity = float(shot.get("camera_intensity", 1.0))
+        # Content-still motion floor: the director tends to assign low
+        # camera_intensity (0.3–0.6), which — at the calibrated zoom rate — is
+        # near-imperceptible on flat cel-shaded anime (few edges to read the
+        # slow zoom against). Floor to 0.85 so every moving still gets a clearly
+        # visible Ken Burns (≈ the 0.4-over-8s "C" amount the user approved).
+        # 静止 shots ignore intensity (stay frozen — quick-cut safety), so this
+        # only boosts shots that already have a real camera_move.
+        intensity = max(0.85, float(shot.get("camera_intensity", 1.0)))
         run_ff_fn(
             ffcmd.still_clip_cmd(actual_png, slice_s, sub, grade_vf,
                                   camera_move=move, intensity=intensity),

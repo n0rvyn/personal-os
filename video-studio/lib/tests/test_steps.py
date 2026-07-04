@@ -947,18 +947,37 @@ def test_degenerate_short_beat_forces_静止(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_camera_intensity_threaded_to_filtergraph(tmp_path):
-    """A shot with camera_intensity scales the zoom delta in the -vf expression.
+    """A shot with camera_intensity ABOVE the motion floor flows through to -vf.
 
-    clip_len=3.0, 推近 at intensity=0.5 → rate 0.025/s, inc=0.025/30=0.000833,
-    cap=1.0+min(0.025*3,0.4)=1.075. Proves steps.py reads camera_intensity and passes it down."""
+    Content stills apply a 0.85 intensity floor (flat-anime visibility fix), so
+    threading must be proven with a value above it. clip_len=3.0, 推近 at
+    intensity=0.9 → rate 0.045/s, inc=0.045/30=0.001500,
+    cap=1.0+min(0.045*3,0.4)=1.135. Proves steps.py reads camera_intensity and passes it down."""
+    shots = [{"prompt": "晨光跑道全景", "with_character": False,
+              "camera_move": "推近", "camera_intensity": 0.9}]
+    vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
+
+    assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
+    vf = vf_values[0]
+    assert "zoom+0.001500" in vf and ",1.135)" in vf, (
+        f"camera_intensity=0.9 (above floor) must thread through (inc=0.001500 cap=1.135); got: {vf}"
+    )
+
+
+def test_camera_intensity_floored_for_flat_anime(tmp_path):
+    """A director intensity BELOW the 0.85 floor is raised to 0.85 so content
+    stills always move visibly on flat cel-shaded art.
+
+    clip_len=3.0, 推近 at intensity=0.5 → floored to 0.85 → rate 0.0425/s,
+    inc=0.0425/30=0.001417, cap=1.0+min(0.0425*3,0.4)=1.1275."""
     shots = [{"prompt": "晨光跑道全景", "with_character": False,
               "camera_move": "推近", "camera_intensity": 0.5}]
     vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.000833" in vf and ",1.075)" in vf, (
-        f"camera_intensity=0.5 must halve the 推近 speed (inc=0.000833 cap=1.075); got: {vf}"
+    assert "zoom+0.001417" in vf and ",1.1275)" in vf, (
+        f"camera_intensity=0.5 must be floored to 0.85 (inc=0.001417 cap=1.1275); got: {vf}"
     )
 
 

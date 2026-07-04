@@ -504,11 +504,18 @@ def build_step_fns(
         # paths all provision them. Late-bind happens here (before _ensure_ref_url)
         # since gen_character_ref is called from within step_extract itself.
         _art_style = (selection.art_style if selection is not None else "") or ""
+        # Resolve the style NAME once: empty module art_style → plugin default
+        # (DEFAULT_ART_STYLE=写实电影). style_prefix already maps ''→default; the
+        # library routing (set_style) and per-style host ref (character_refs)
+        # MUST use the same resolved NAME, else an empty-art_style episode (all
+        # of 季1) silently bypasses its 写实电影 library(Pexels)+host bindings and
+        # falls to paid generation. (Explicit styles like 简笔日漫 are unchanged.)
+        _style_name = _art_style or grade.DEFAULT_ART_STYLE
         _color_grade = (selection.color_grade if selection is not None else "") or ""
         seams.style_prefix = grade.resolve_art_style(_art_style)
-        router.set_style(_art_style)
+        router.set_style(_style_name)
         ctx["grade_vf"] = grade.resolve_color_grade(_color_grade or None)
-        log(f"[grade] art_style={_art_style!r} color_grade={_color_grade!r}")
+        log(f"[grade] art_style={_art_style!r}→{_style_name!r} color_grade={_color_grade!r}")
 
         def _ensure_ref_url(prompt):
             # Resolve the主讲人物 image-to-image ref. `prompt` is the character_ref
@@ -529,7 +536,7 @@ def build_step_fns(
         # falls back to its own pre-existing source (per-mode, NOT a unified
         # formula — the fixture mode's fallback keeps its '.prompt' tail /
         # "主讲人物" default; MR#3).
-        ps = getattr(cfg, "character_refs", {}).get(_art_style)
+        ps = getattr(cfg, "character_refs", {}).get(_style_name)
 
         # Doc mode (Phase 6, highest priority): cursor-read seeded doc_refs into ctx.
         doc_refs = ctx.get("doc_refs")
@@ -1197,9 +1204,18 @@ def build_step_fns(
     # int(ctx['seq']) — seq is a zero-padded STRING (syllabus.derive_seq_slug),
     # is_stale/render_memo want an int.
     def step_avoid_memo(step, ctx, scratch):
+        # No seq = fixture / no-cursor render: no episode context, so no memo.
+        # Handle explicitly so the try/except below only ever catches a GENUINE
+        # store/embed failure (not the expected no-seq case, which would else
+        # silently mask a real bug behind "empty avoid-memo").
+        seq = ctx.get("seq")
+        if seq is None:
+            ctx["avoid_memo"] = ""
+            log("[avoid-memo] no seq (fixture/no-cursor) — empty avoid-memo")
+            return
         try:
             ctx["avoid_memo"] = coveredground.render_memo(
-                coveredground.load_store(cfg.output_dir), int(ctx["seq"])
+                coveredground.load_store(cfg.output_dir), int(seq)
             )
         except Exception:  # noqa: BLE001 — fail-soft: never halt on the memo
             ctx["avoid_memo"] = ""
@@ -1215,6 +1231,13 @@ def build_step_fns(
     # episode dir) + date/seq. Wrapped defensively so a missing ep/seq can't
     # bubble either.
     def step_covered_update(step, ctx, scratch):
+        # No seq = fixture / no-cursor render: no episode to attribute anchors
+        # to. Skip explicitly so the fail-soft try/except only ever swallows a
+        # GENUINE update failure (not the expected no-seq case).
+        seq = ctx.get("seq")
+        if seq is None:
+            log("[covered-update] no seq (fixture/no-cursor) — skip")
+            return
         try:
             covered_json = ctx.get("covered_art")
             if not covered_json:
@@ -1225,7 +1248,7 @@ def build_step_fns(
                 covered_json = str(ep["final"].parent / "covered.json")
             date = ctx.get("date") or datetime.now().strftime("%Y-%m-%d")
             coveredground.update_covered_ground(
-                cfg.output_dir, covered_json, date, int(ctx["seq"])
+                cfg.output_dir, covered_json, date, int(seq)
             )
         except Exception as exc:  # noqa: BLE001 — fail-soft; never halt the run
             log(f"[covered-update] swallowed error (fail-soft): {exc}")

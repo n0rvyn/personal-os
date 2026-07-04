@@ -86,7 +86,7 @@ class LibrarySource(MediaSource):
         return None
 
     @classmethod
-    def from_config(cls, cfg: Any, style: str | None):
+    def from_config(cls, cfg: Any, style: str | None, generate=None):
         """Build a LibrarySource for `style` from `cfg.library` (style -> kind).
 
         Returns None when there is no config, or the style has no binding, or
@@ -102,6 +102,12 @@ class LibrarySource(MediaSource):
             import os
 
             return PexelsSource(api_key=os.environ.get("PEXELS_API_KEY", ""))
+        if kind == "offline":
+            return OfflinePoolSource(
+                pool_dir=Path(cfg.output_dir) / "_pool" / style,
+                style=style,
+                generate=generate,
+            )
         return cls(kind=kind, style=style)
 
 
@@ -186,6 +192,68 @@ class PexelsSource(MediaSource):
         return out_path
 
 
+class OfflinePoolSource(MediaSource):
+    """Offline generated-still pool for styles with no online library (anime, D-012/D-006).
+
+    fetch_clip: retrieve a pooled still by the window's query (content overlap),
+    reuse on hit; on miss GENERATE a style-aware still, add it to the pool
+    (reusable next episode), and clip it. Pool = INCLUSION (cross-episode reuse
+    is the point); intra-episode dedup is a per-instance `_used` set that resets
+    each episode because set_style rebuilds this source. Never touches
+    lib.visual_ledger (opposite semantics).
+    """
+
+    def __init__(self, pool_dir, style: str | None, generate):
+        from lib.offline_pool import PoolIndex
+        self.pool = PoolIndex(pool_dir)
+        self.style = style
+        self.generate = generate            # a GenerateSource (or None on non-production direct construction)
+        self._used: set[str] = set()        # intra-episode dedup (ephemeral)
+
+    def fetch(self, prompt: str, ref_url: str | None, out_path: str) -> str | None:
+        # Pool grain is a window clip (fetch_clip), like Pexels — fetch is only
+        # here to satisfy the abstract contract.
+        return None
+
+    def fetch_clip(self, window: dict, dur_s: float, out_path: str, run_ff,
+                    grade: str | None = None, ledger=None) -> str | None:
+        from lib import ffcmd
+        q = window.get("query")
+        if not q:
+            # Never search/generate b-roll off the abstract prompt (D-007 office/code drift).
+            return None
+
+        from lib.steps import _resolve_camera_move
+        move = _resolve_camera_move(window, dur_s)
+        intensity = float(window.get("camera_intensity", 1.0))
+
+        # HIT: first pooled asset with genuine overlap >= 1 not already used this episode.
+        for path, overlap in self.pool.lookup(q):
+            if overlap < 1:
+                break                        # lookup is overlap-desc; nothing better follows
+            if path in self._used:
+                continue
+            self._used.add(path)
+            run_ff(ffcmd.still_clip_cmd(path, dur_s, out_path, grade,
+                                        camera_move=move, intensity=intensity), "pool-hit")
+            return out_path
+
+        # MISS: generate a style-aware still, add to pool, clip it.
+        if self.generate is None:
+            return None                      # defensive: fall back to render's gen_still path
+        from lib.steps import build_shot_prompt
+        prompt, ref = build_shot_prompt(window, None)
+        src = str(Path(out_path).with_name(f"pool_src_{Path(out_path).stem}.png"))
+        gen = self.generate.fetch(prompt, ref, src)
+        if gen is None:
+            return None
+        pooled = self.pool.add(gen, q)
+        self._used.add(pooled)
+        run_ff(ffcmd.still_clip_cmd(pooled, dur_s, out_path, grade,
+                                    camera_move=move, intensity=intensity), "pool-miss")
+        return out_path
+
+
 class MediaRouter:
     """Routes still/video requests: library first, generate fallback (D-003).
 
@@ -204,7 +272,7 @@ class MediaRouter:
 
     def set_style(self, style: str) -> None:
         self.style = style
-        self.library = LibrarySource.from_config(self.cfg, style)
+        self.library = LibrarySource.from_config(self.cfg, style, generate=self.generate)
 
     def gen_still(self, prompt: str, ref_url: str | None, out_path: str) -> str | None:
         for src in (self.library, self.generate):

@@ -59,6 +59,15 @@ def _slug_tokens(slug: str) -> set[str]:
     return {tok for tok in _TOKEN_RE.split(slug.lower()) if tok}
 
 
+def token_overlap(query: str, slug: str) -> int:
+    """Raw token-intersection count between query and slug (no running bonus).
+
+    Distinct from rerank_candidates' scoring (which adds +1 for running words):
+    the offline-pool hit gate needs GENUINE overlap, not the biased score.
+    """
+    return len(_slug_tokens(query) & _slug_tokens(slug))
+
+
 def rerank_candidates(query: str, candidates: list) -> list:
     """L2 slug 重排：剔除违禁词候选，按 query↔slug token 重叠打分降序稳定排序。
 

@@ -14,8 +14,9 @@ Pins (per Phase 1 plan Task 3-tests):
 - agent_name not in VIDEO_AGENT_WHITELIST raises DispatchError (before
   invoking the runner).
 - expected_artifact path-traversal attempt ("../escape.json") is rejected.
-- VIDEO_AGENT_WHITELIST == frozenset({"digest-writer","director","planner","query-writer"}).
-  (query-writer added Phase 3 — content-matched scene query per window.)
+- VIDEO_AGENT_WHITELIST == frozenset({"digest-writer","director","planner","query-writer","covered-ground-distiller"}).
+  (query-writer added Phase 3 — content-matched scene query per window;
+   covered-ground-distiller added anti-homogenization phase — isolated apparatus distiller.)
 """
 from __future__ import annotations
 
@@ -36,7 +37,7 @@ if str(PLUGIN_ROOT) not in sys.path:
 # Module-level pins
 # ---------------------------------------------------------------------------
 
-EXPECTED_WHITELIST = frozenset({"digest-writer", "director", "planner", "query-writer"})
+EXPECTED_WHITELIST = frozenset({"digest-writer", "director", "planner", "query-writer", "covered-ground-distiller"})
 
 
 # ---------------------------------------------------------------------------

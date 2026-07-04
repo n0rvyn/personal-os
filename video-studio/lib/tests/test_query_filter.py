@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lib.query_filter import _BANNED_VISUAL, rerank_candidates, sanitize_query
+from lib.query_filter import _BANNED_VISUAL, rerank_candidates, sanitize_query, token_overlap
 
 
 def test_sanitize_query_strips_banned_tokens():
@@ -80,3 +80,17 @@ def test_rerank_candidates_scores_by_token_overlap():
 
 def test_rerank_candidates_empty_candidates_returns_empty():
     assert rerank_candidates("runner on track", []) == []
+
+
+def test_token_overlap_shares_runner_token():
+    overlap = token_overlap("exhausted runner late race", "female-runner-slowing-on-track")
+    assert overlap >= 1
+
+
+def test_token_overlap_no_shared_tokens_returns_zero():
+    assert token_overlap("runner track", "office-laptop-desk") == 0
+
+
+def test_token_overlap_empty_query_or_slug_returns_zero():
+    assert token_overlap("", "anything") == 0
+    assert token_overlap("x", "") == 0

@@ -11,7 +11,7 @@ style.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -40,7 +40,7 @@ class Episode:
     source: str
     verify_status: str
     learning_goal: str
-    status: str  # "pending" | "done"
+    status: str  # "pending" | "locked" | "done"
 
 
 @dataclass
@@ -53,18 +53,99 @@ class Module:
 
 
 @dataclass
+class Season:
+    """A season groups modules under a series (book → season → module → episode).
+
+    Optional per-season overrides (style / art_style / character_ref) mirror the
+    Module-level overrides; empty means fall back to the series-level default.
+    """
+    name: str
+    modules: List[Module]
+    style: str = ""
+    art_style: str = ""
+    character_ref: str = ""
+
+
+@dataclass
 class Syllabus:
+    """A series syllabus. Canonical storage is the season list; ``modules`` is a
+    read-only flattened view (``@property``) over all seasons, preserved so
+    existing read-only consumers (``visual_ledger._done_episode_dirs`` and
+    ``wiring`` publish path) keep enumerating ``syllabus.modules`` unchanged.
+
+    Backward compat: ``Syllabus(..., modules=[...])`` (a legacy caller that
+    predates seasons) is accepted via the ``modules`` InitVar and wrapped into a
+    single implicit season, so callers that construct a syllabus directly do not
+    break.
+    """
     book: str
     character_ref: str
-    modules: List[Module]
+    seasons: List[Season] = field(default_factory=list)
     color_grade: str = ""
+    # InitVar: legacy construction path ``Syllabus(modules=[...])``. Not stored as
+    # an attribute (consumed by __post_init__), so ``self.modules`` resolves to the
+    # @property below.
+    modules: InitVar[Optional[List[Module]]] = None
+
+    def __post_init__(self, modules: Optional[List[Module]]) -> None:
+        # NOTE: the `@property def modules` below shadows this InitVar's `= None`
+        # in the class namespace, so `modules`' resolved default is the PROPERTY
+        # OBJECT, not None. Guard on isinstance(list) — never `is not None` —
+        # so an empty construction (Syllabus(book, ch) / seasons=[]) does not try
+        # list(<property>) and TypeError. Only a real caller-passed list wraps.
+        if isinstance(modules, list) and not self.seasons:
+            self.seasons = [Season(name="第一季", modules=list(modules))]
+
+    @property
+    def modules(self) -> List[Module]:  # type: ignore[no-redef]
+        """Flat, read-only view of every module across all seasons (series order).
+
+        Returns references to the underlying Module objects (not copies), so
+        ``episode.status = ...`` mutations through this view reach storage. Do NOT
+        mutate the list itself (append/pop/[i]=) — it is rebuilt on each access.
+        """
+        return [m for se in self.seasons for m in se.modules]
+
+    def iter_modules(self):
+        """Yield ``(season_idx, module_idx, module)`` triples in series order."""
+        for se_i, season in enumerate(self.seasons):
+            for m_i, module in enumerate(season.modules):
+                yield (se_i, m_i, module)
 
 
 @dataclass
 class Cursor:
+    """Position pointer into a syllabus.
+
+    ``module_idx`` is a FLAT index into ``Syllabus.modules`` (the flattened
+    @property view spanning every season) — NOT season-relative. ``season_idx``
+    is a companion field naming the season that owns the current flat module;
+    it defaults to 0 (legacy cursor files carry no ``season_idx``, and every
+    legacy syllabus wraps into a single implicit season, so 0 is always right
+    for them). Traversal helpers (advance / reset_current) recompute and store
+    ``season_idx`` from the flat module; a parked cursor sets it to
+    ``len(seasons)``.
+
+    ``season_idx`` is the trailing field with a default so pre-seasons callers
+    that construct ``Cursor(book, module_idx, episode_idx)`` keep working.
+    """
     book: str
     module_idx: int
     episode_idx: int
+    season_idx: int = 0
+
+
+def _season_of_flat_module(syllabus: "Syllabus", flat_module_idx: int) -> int:
+    """Return the season index that owns *flat_module_idx* (a flat index into
+    ``syllabus.modules``). Returns ``len(seasons)`` when the flat index is past
+    the last module (parked cursor)."""
+    count = 0
+    for se_i, season in enumerate(syllabus.seasons):
+        n = len(season.modules)
+        if flat_module_idx < count + n:
+            return se_i
+        count += n
+    return len(syllabus.seasons)
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +183,21 @@ def _parse_module(raw: dict, idx: int) -> Module:
     )
 
 
+def _parse_season(raw: dict, idx: int) -> Season:
+    if "name" not in raw:
+        raise KeyError(f"Season[{idx}] missing required key: 'name'")
+    modules = [
+        _parse_module(m, i) for i, m in enumerate(raw.get("modules", []))
+    ]
+    return Season(
+        name=str(raw["name"]),
+        modules=modules,
+        style=str(raw.get("style", "")),
+        art_style=str(raw.get("art_style", "")),
+        character_ref=str(raw.get("character_ref", "")),
+    )
+
+
 # ---------------------------------------------------------------------------
 # I/O: Syllabus
 # ---------------------------------------------------------------------------
@@ -129,12 +225,20 @@ def load_syllabus(path: Path) -> Syllabus:
     if "book" not in data:
         raise KeyError("Syllabus missing required key: 'book'")
 
-    modules = [_parse_module(m, i) for i, m in enumerate(data.get("modules", []))]
+    # Dual-read: new `seasons:` shape parses directly; legacy top-level `modules:`
+    # (pre-seasons files, e.g. the running-class syllabus) is wrapped into ONE
+    # implicit season so old files load with zero edits.
+    seasons_raw = data.get("seasons")
+    if seasons_raw is not None:
+        seasons = [_parse_season(se, i) for i, se in enumerate(seasons_raw)]
+    else:
+        modules = [_parse_module(m, i) for i, m in enumerate(data.get("modules", []))]
+        seasons = [Season(name="第一季", modules=modules)]
 
     return Syllabus(
         book=str(data["book"]),
         character_ref=str(data.get("character_ref", "")),
-        modules=modules,
+        seasons=seasons,
         color_grade=str(data.get("color_grade", "")),
     )
 
@@ -146,25 +250,34 @@ def save_syllabus(syllabus: Syllabus, path: Path) -> None:
         "book": syllabus.book,
         "character_ref": syllabus.character_ref,
         "color_grade": syllabus.color_grade,
-        "modules": [
+        "seasons": [
             {
-                "name": m.name,
-                "style": m.style,
-                "art_style": m.art_style,
-                "character_ref": m.character_ref,
-                "episodes": [
+                "name": se.name,
+                "style": se.style,
+                "art_style": se.art_style,
+                "character_ref": se.character_ref,
+                "modules": [
                     {
-                        "title": ep.title,
-                        "doc_refs": ep.doc_refs,
-                        "source": ep.source,
-                        "verify_status": ep.verify_status,
-                        "learning_goal": ep.learning_goal,
-                        "status": ep.status,
+                        "name": m.name,
+                        "style": m.style,
+                        "art_style": m.art_style,
+                        "character_ref": m.character_ref,
+                        "episodes": [
+                            {
+                                "title": ep.title,
+                                "doc_refs": ep.doc_refs,
+                                "source": ep.source,
+                                "verify_status": ep.verify_status,
+                                "learning_goal": ep.learning_goal,
+                                "status": ep.status,
+                            }
+                            for ep in m.episodes
+                        ],
                     }
-                    for ep in m.episodes
+                    for m in se.modules
                 ],
             }
-            for m in syllabus.modules
+            for se in syllabus.seasons
         ],
     }
     path.write_text(
@@ -205,6 +318,8 @@ def load_cursor(path: Path) -> Cursor:
         book=str(data["book"]),
         module_idx=int(data["module_idx"]),
         episode_idx=int(data["episode_idx"]),
+        # Backward-compat: old cursor.yaml has no season_idx → default 0.
+        season_idx=int(data.get("season_idx", 0)),
     )
 
 
@@ -213,6 +328,7 @@ def save_cursor(cursor: Cursor, path: Path) -> None:
     path = Path(path)
     data = {
         "book": cursor.book,
+        "season_idx": cursor.season_idx,
         "module_idx": cursor.module_idx,
         "episode_idx": cursor.episode_idx,
     }
@@ -238,14 +354,21 @@ def derive_seq_slug(
 
     Raises ValueError if the indices are out of bounds.
     """
+    # Triple loop (season → module → episode) with an explicit FLAT module
+    # counter. ``module_idx`` is a flat index into ``syllabus.modules``, so the
+    # global seq stays continuous across season boundaries (a new season does
+    # NOT reset the counter).
     global_idx = 0
-    for m_i, module in enumerate(syllabus.modules):
-        for e_i, episode in enumerate(module.episodes):
-            if m_i == module_idx and e_i == episode_idx:
-                seq = f"{global_idx + 1:03d}"
-                slug = _sanitize_component(episode.title) or "ep"
-                return seq, slug
-            global_idx += 1
+    flat_m = 0
+    for season in syllabus.seasons:
+        for module in season.modules:
+            for e_i, episode in enumerate(module.episodes):
+                if flat_m == module_idx and e_i == episode_idx:
+                    seq = f"{global_idx + 1:03d}"
+                    slug = _sanitize_component(episode.title) or "ep"
+                    return seq, slug
+                global_idx += 1
+            flat_m += 1
     raise ValueError(
         f"Episode not found: module_idx={module_idx}, episode_idx={episode_idx}"
     )
@@ -264,27 +387,38 @@ def next_pending(
     Returns ``None`` if the cursor is past all episodes or no pending episode
     exists from the cursor position onward.
     """
-    # Compute the cursor's global flat index
+    # Compute the cursor's global flat index. Triple loop (season → module →
+    # episode) with a flat module counter; ``cursor.module_idx`` is flat, so
+    # ``cursor.season_idx`` is not needed to locate the position (it is a
+    # companion field, authoritative flat index is module_idx).
     cursor_global: Optional[int] = None
     global_idx = 0
-    for m_i, module in enumerate(syllabus.modules):
-        for e_i in range(len(module.episodes)):
-            if m_i == cursor.module_idx and e_i == cursor.episode_idx:
-                cursor_global = global_idx
-            global_idx += 1
+    flat_m = 0
+    for season in syllabus.seasons:
+        for module in season.modules:
+            for e_i in range(len(module.episodes)):
+                if flat_m == cursor.module_idx and e_i == cursor.episode_idx:
+                    cursor_global = global_idx
+                global_idx += 1
+            flat_m += 1
 
     if cursor_global is None:
         # Cursor points past all known episodes
         return None
 
-    # Walk from cursor_global onward and return the first pending episode
+    # Walk from cursor_global onward and return the first LOCKED episode.
+    # Consume gate: only `locked` episodes are selectable; a `pending` planner
+    # draft is skipped until the user locks it (Task A3).
     global_idx = 0
-    for m_i, module in enumerate(syllabus.modules):
-        for e_i, episode in enumerate(module.episodes):
-            if global_idx >= cursor_global and episode.status == "pending":
-                seq, slug = derive_seq_slug(syllabus, m_i, e_i)
-                return episode, seq, slug, module
-            global_idx += 1
+    flat_m = 0
+    for season in syllabus.seasons:
+        for module in season.modules:
+            for e_i, episode in enumerate(module.episodes):
+                if global_idx >= cursor_global and episode.status == "locked":
+                    seq, slug = derive_seq_slug(syllabus, flat_m, e_i)
+                    return episode, seq, slug, module
+                global_idx += 1
+            flat_m += 1
 
     return None
 
@@ -319,6 +453,7 @@ class Selection:
     art_style: str = ""
     color_grade: str = ""
     module_name: str = ""   # R2: owning module's name → title card '频道 · 模块' tag
+    season_name: str = ""   # A2: owning season's name (companion to module_name)
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +485,13 @@ def select_next(cfg: Any) -> Optional[Selection]:
         return None
 
     episode, seq, slug, module = result
+    # Derive the owning season's name via object identity (the returned module is
+    # a live reference into a season's module list).
+    season_name = ""
+    for season in syllabus.seasons:
+        if any(m is module for m in season.modules):
+            season_name = season.name
+            break
     return Selection(
         episode=episode,
         seq=seq,
@@ -364,6 +506,7 @@ def select_next(cfg: Any) -> Optional[Selection]:
         art_style=module.art_style,
         color_grade=syllabus.color_grade,
         module_name=module.name,
+        season_name=season_name,
     )
 
 
@@ -443,8 +586,50 @@ def promote_draft(
 
     # All validation passed — write files atomically
     save_syllabus(syllabus, syllabus_path)
-    save_cursor(Cursor(book=book, module_idx=0, episode_idx=0), cursor_path)
+    save_cursor(Cursor(book=book, module_idx=0, episode_idx=0, season_idx=0), cursor_path)
 
+    return syllabus
+
+
+# ---------------------------------------------------------------------------
+# lock — flip pending drafts to locked (the mechanical downstream of user review)
+# ---------------------------------------------------------------------------
+
+
+def lock_season(syllabus: Syllabus, season_idx: int) -> Syllabus:
+    """Flip every ``pending`` episode in the named season to ``locked`` (in place).
+
+    Season-by-season locking: only ``syllabus.seasons[season_idx]`` is affected;
+    other seasons keep their pending drafts. ``done`` and already-``locked``
+    episodes are left untouched (idempotent). Returns the same ``syllabus`` object
+    for call chaining.
+
+    Fail-soft: an out-of-range ``season_idx`` is a no-op (nothing to lock).
+    """
+    if 0 <= season_idx < len(syllabus.seasons):
+        for module in syllabus.seasons[season_idx].modules:
+            for episode in module.episodes:
+                if episode.status == "pending":
+                    episode.status = "locked"
+    return syllabus
+
+
+def lock_syllabus(syllabus_path: Path) -> Syllabus:
+    """Load *syllabus_path*, flip every ``pending`` episode to ``locked``, save.
+
+    The mechanical downstream of the planner→review→lock flow (video-plan step ④):
+    the planner writes a ``pending`` draft; after the user approves it, locking
+    flips every episode to ``locked`` so the consume gate (next_pending /
+    select_next) will pick them. ``done`` and already-``locked`` episodes are left
+    untouched (idempotent — re-locking is safe).
+
+    Returns the locked Syllabus.
+    """
+    syllabus_path = Path(syllabus_path)
+    syllabus = load_syllabus(syllabus_path)
+    for season_idx in range(len(syllabus.seasons)):
+        lock_season(syllabus, season_idx)
+    save_syllabus(syllabus, syllabus_path)
     return syllabus
 
 
@@ -481,20 +666,24 @@ def advance(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]:
                 cursor_global = global_idx
             global_idx += 1
 
-    # Find the next pending episode after cursor_global
+    # Find the next LOCKED episode after cursor_global (consume gate: only
+    # `locked` is selectable; `pending` drafts are skipped — Task A3).
     if cursor_global is not None:
         global_idx = 0
         for m_i, module in enumerate(s2.modules):
             for e_i, episode in enumerate(module.episodes):
-                if global_idx > cursor_global and episode.status == "pending":
+                if global_idx > cursor_global and episode.status == "locked":
                     c2.module_idx = m_i
                     c2.episode_idx = e_i
+                    c2.season_idx = _season_of_flat_module(s2, m_i)
                     return s2, c2
                 global_idx += 1
 
-    # No subsequent pending episode — park cursor past end
+    # No subsequent pending episode — park cursor past end (flat module AND
+    # season parked past the last valid index)
     c2.module_idx = len(s2.modules)
     c2.episode_idx = 0
+    c2.season_idx = len(s2.seasons)
     return s2, c2
 
 
@@ -505,7 +694,7 @@ def advance(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]:
 
 def reset_current(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]:
     """Rewind one done step: find the most recent done episode at or before the
-    cursor and mark it pending again, moving the cursor back to it.
+    cursor and mark it ``locked`` again, moving the cursor back to it.
 
     Pure-function style: returns new ``(Syllabus, Cursor)`` objects; the
     originals are not mutated.
@@ -513,7 +702,8 @@ def reset_current(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]
     Symmetric to :func:`advance`:
     - ``advance`` marks current episode done and moves cursor forward.
     - ``reset_current`` finds the nearest done episode at or before cursor and
-      moves cursor back to it, marking it pending.
+      moves cursor back to it, marking it ``locked`` (NOT ``pending`` — keeping
+      the lock so the rewound episode stays re-selectable; Task A3 MR-2).
 
     Special case — parked cursor: when ``advance`` finishes the very last
     episode the cursor is parked at ``module_idx = len(modules)``.  In that
@@ -550,9 +740,13 @@ def reset_current(syllabus: Syllabus, cursor: Cursor) -> Tuple[Syllabus, Cursor]
     for gi in range(start_global, -1, -1):
         m_i, e_i = flat[gi]
         if s2.modules[m_i].episodes[e_i].status == "done":
-            s2.modules[m_i].episodes[e_i].status = "pending"
+            # Rewind to `locked`, NOT `pending` — keep the lock so the rewound
+            # episode is immediately re-selectable by the consume gate (Task A3
+            # MR-2). Dropping to `pending` would strand it as an unrunnable draft.
+            s2.modules[m_i].episodes[e_i].status = "locked"
             c2.module_idx = m_i
             c2.episode_idx = e_i
+            c2.season_idx = _season_of_flat_module(s2, m_i)
             return s2, c2
 
     # No done episode found — return deep copies unchanged

@@ -111,13 +111,19 @@ def test_pipeline_step_count_15():
     '镜头计划' pure-code step (post-tts, pre-gen-still), bringing the total
     to 16. Phase-3 query-writer plan (2026-07-03) then inserts the
     'query-writer' agent step (post-镜头计划, pre-gen-still), bringing the
-    total to 17 — see test_pipeline.py::test_load_pipeline_step_count_17,
-    the canonical assertion for that count going forward.
+    total to 17. The anti-homogenization plan (Task B4, 2026-07-04) then
+    inserts the covered-ground 'distill' agent step (post-script, pre-分镜),
+    bringing the total to 18. Tasks B5/B6 (2026-07-04) then insert the
+    'avoid-memo' code step (pre-script) and the 'covered-update' code step
+    (post-distill), bringing the total to 20 — see test_pipeline.py::
+    test_load_pipeline_step_count_18, the canonical assertion for that count
+    going forward.
     """
     from lib.pipeline import load_pipeline
     steps = load_pipeline()
-    assert len(steps) == 17, (
-        f"expected 17 steps (分镜 + 镜头计划 + query-writer inserted), got {len(steps)}"
+    assert len(steps) == 20, (
+        f"expected 20 steps (分镜 + 镜头计划 + query-writer + distill + "
+        f"avoid-memo + covered-update inserted), got {len(steps)}"
     )
 
 
@@ -145,18 +151,33 @@ def test_shenjing_step_shape():
     assert "check_artifact" in gate_fns, f"gate fns: {gate_fns}"
 
 
-def test_shenjing_immediately_after_script():
-    """分镜 must appear immediately after script in the pipeline."""
+def test_shenjing_after_script_with_distill_between():
+    """分镜 follows script with the covered-ground 'distill' step immediately
+    after script, and the B6 'covered-update' code step between distill and
+    分镜 (Task B4/B6, 2026-07-04): script → distill → covered-update → 分镜, so
+    distill == script + 1, covered-update == distill + 1, 分镜 == distill + 2."""
     from lib.pipeline import load_pipeline
     steps = load_pipeline()
     names = [s["name"] for s in steps]
     assert "script" in names, "script step missing from pipeline"
+    assert "distill" in names, "distill step missing from pipeline"
+    assert "covered-update" in names, "covered-update step missing from pipeline"
     assert "分镜" in names, "分镜 step missing from pipeline"
     idx_script = names.index("script")
+    idx_distill = names.index("distill")
+    idx_update = names.index("covered-update")
     idx_shenjing = names.index("分镜")
-    assert idx_shenjing == idx_script + 1, (
-        f"分镜 at index {idx_shenjing}, script at {idx_script}; "
-        f"expected 分镜 == script+1"
+    assert idx_distill == idx_script + 1, (
+        f"distill at index {idx_distill}, script at {idx_script}; "
+        f"expected distill == script+1"
+    )
+    assert idx_update == idx_distill + 1, (
+        f"covered-update at index {idx_update}, distill at {idx_distill}; "
+        f"expected covered-update == distill+1"
+    )
+    assert idx_shenjing == idx_distill + 2, (
+        f"分镜 at index {idx_shenjing}, distill at {idx_distill}; "
+        f"expected 分镜 == distill+2 (script → distill → covered-update → 分镜)"
     )
 
 
@@ -869,13 +890,13 @@ modules:
         source: Daniels
         verify_status: "✅"
         learning_goal: Understand VDOT
-        status: pending
+        status: locked
       - title: VDOT Pace Tables
         doc_refs: ["02.md"]
         source: Daniels
         verify_status: "✅"
         learning_goal: Read pace tables
-        status: pending
+        status: locked
 """
 
 _DRY_PUBLISH_CURSOR_YAML = """\
@@ -960,9 +981,9 @@ def test_publish_dry_skips_mark_done_and_advance(tmp_path):
     scratch.mkdir()
     step_publish({}, ctx, scratch)
 
-    # Episode must still be pending (not done)
+    # Episode must still be locked (not done) — dry publish must not consume it
     syl = load_syllabus(syl_path)
-    assert syl.modules[0].episodes[0].status == "pending", (
+    assert syl.modules[0].episodes[0].status == "locked", (
         "dry publish must NOT mark episode as done"
     )
 

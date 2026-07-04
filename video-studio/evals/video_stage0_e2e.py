@@ -101,10 +101,13 @@ def _make_fixture_syllabus() -> Syllabus:
     """Return a fixture Syllabus with 2 modules × 2 episodes each.
 
     Layout (global indices):
-      ep1 (0,0) done  ✅  module 0 — doc: 01-intensity-zones.md
-      ep2 (0,1) pending ✅  module 0 — doc: 02-vdot-system.md   ← cursor starts here
-      ep3 (1,0) pending ⚠️  module 1 — doc: 07-athlete-intake.md  ← AR-2 fixture
-      ep4 (1,1) pending ✅  module 1 — doc: 03-training-load-points.md
+      ep1 (0,0) done   ✅  module 0 — doc: 01-intensity-zones.md
+      ep2 (0,1) locked ✅  module 0 — doc: 02-vdot-system.md   ← cursor starts here
+      ep3 (1,0) locked ⚠️  module 1 — doc: 07-athlete-intake.md  ← AR-2 fixture
+      ep4 (1,1) locked ✅  module 1 — doc: 03-training-load-points.md
+
+    Episodes are `locked` (not `pending`): the consume gate (next_pending /
+    select_next / advance) only picks `locked`; `pending` is an unlocked draft.
     """
     return Syllabus(
         book="test-book",
@@ -128,7 +131,7 @@ def _make_fixture_syllabus() -> Syllabus:
                         source="Daniels",
                         verify_status="✅",
                         learning_goal="理解VDOT配速系统和训练配速推导",
-                        status="pending",
+                        status="locked",
                     ),
                 ],
             ),
@@ -145,7 +148,7 @@ def _make_fixture_syllabus() -> Syllabus:
                             "工程估计/产品设定，非源直出："
                             "基于常见人口先验的冷启动VDOT估值，不是丹尼尔斯原话"
                         ),
-                        status="pending",
+                        status="locked",
                     ),
                     Episode(
                         title="训练负荷积分",
@@ -153,7 +156,7 @@ def _make_fixture_syllabus() -> Syllabus:
                         source="Daniels",
                         verify_status="✅",
                         learning_goal="了解训练积分(E/Q/L点)的计算和用途",
-                        status="pending",
+                        status="locked",
                     ),
                 ],
             ),

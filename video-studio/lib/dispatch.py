@@ -40,6 +40,7 @@ VIDEO_AGENT_WHITELIST: frozenset[str] = frozenset({
     "director",
     "planner",
     "query-writer",
+    "covered-ground-distiller",
 })
 
 

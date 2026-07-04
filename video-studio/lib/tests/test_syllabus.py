@@ -58,7 +58,7 @@ SYLLABUS_YAML = textwrap.dedent("""\
             source: Daniels
             verify_status: "✅"
             learning_goal: 学会用VDOT对应训练配速区间
-            status: pending
+            status: locked
       - name: 训练区间
         style: tutorial
         episodes:
@@ -67,13 +67,13 @@ SYLLABUS_YAML = textwrap.dedent("""\
             source: UESCA
             verify_status: "⚠️"
             learning_goal: 区分5个训练心率/配速区间
-            status: pending
+            status: locked
           - title: E跑与M跑区别
             doc_refs: ["02-training-zones.md#section-2"]
             source: UESCA
             verify_status: "✅"
             learning_goal: 掌握轻松跑与马拉松配速跑的核心差异
-            status: pending
+            status: locked
 """)
 
 CURSOR_YAML = textwrap.dedent("""\
@@ -143,7 +143,7 @@ def test_load_syllabus_basic(tmp_path: Path) -> None:
     assert ep0.title == "什么是VDOT"
     assert ep0.status == "done"
     ep1 = m0.episodes[1]
-    assert ep1.status == "pending"
+    assert ep1.status == "locked"
     assert "vdot_pace_data.json" in ep1.doc_refs
 
 
@@ -225,7 +225,7 @@ def test_next_pending_returns_first_pending_from_cursor(tmp_path: Path) -> None:
     assert result is not None
     episode, seq, slug, module = result
     assert episode.title == "VDOT配速表解读"
-    assert episode.status == "pending"
+    assert episode.status == "locked"
 
 
 def test_next_pending_skips_done_wraps_to_next_module(tmp_path: Path) -> None:
@@ -310,8 +310,8 @@ def test_advance_does_not_mutate_original(tmp_path: Path) -> None:
     s = load_syllabus(s_file)
     c = load_cursor(c_file)
     s2, c2 = advance(s, c)
-    # Original syllabus episode still pending
-    assert s.modules[0].episodes[1].status == "pending"
+    # Original syllabus episode still locked (unconsumed)
+    assert s.modules[0].episodes[1].status == "locked"
     # Original cursor unchanged
     assert c.module_idx == 0
     assert c.episode_idx == 1
@@ -331,7 +331,7 @@ def test_advance_when_all_episodes_done_after(tmp_path: Path) -> None:
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
     """)
     s_file = tmp_path / "syllabus.yaml"
     s_file.write_text(syllabus_yaml)
@@ -690,7 +690,7 @@ def test_select_next_style_from_module(tmp_path: Path) -> None:
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
     """)
     cursor_yaml = textwrap.dedent("""\
         book: running-science-v1
@@ -728,7 +728,7 @@ def test_select_next_style_empty_when_module_has_no_style(tmp_path: Path) -> Non
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
     """)
     cursor_yaml = textwrap.dedent("""\
         book: running-science-v1
@@ -781,7 +781,7 @@ def test_save_load_syllabus_roundtrip(tmp_path: Path) -> None:
     assert s2.book == s.book
     assert len(s2.modules) == len(s.modules)
     assert s2.modules[0].episodes[0].status == "done"
-    assert s2.modules[0].episodes[1].status == "pending"
+    assert s2.modules[0].episodes[1].status == "locked"
 
 
 def test_save_load_cursor_roundtrip(tmp_path: Path) -> None:
@@ -878,7 +878,7 @@ def test_select_next_art_style_from_module(tmp_path: Path) -> None:
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
     """)
     cursor_yaml = textwrap.dedent("""\
         book: running-science-v1
@@ -918,7 +918,7 @@ SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF = textwrap.dedent("""\
             source: Daniels
             verify_status: "✅"
             learning_goal: 理解VDOT作为跑者有氧能力指标的含义
-            status: pending
+            status: locked
       - name: 训练区间
         style: tutorial
         episodes:
@@ -927,7 +927,7 @@ SYLLABUS_YAML_WITH_MODULE_CHARACTER_REF = textwrap.dedent("""\
             source: UESCA
             verify_status: "✅"
             learning_goal: 区分5个训练心率区间
-            status: pending
+            status: locked
 """)
 
 
@@ -1038,7 +1038,7 @@ def test_reset_current_basic(tmp_path: Path) -> None:
     s2, c2 = reset_current(s, c)
 
     # ep0 (the most recent done) is now pending
-    assert s2.modules[0].episodes[0].status == "pending"
+    assert s2.modules[0].episodes[0].status == "locked"
     # Cursor points back to ep0
     assert c2.module_idx == 0
     assert c2.episode_idx == 0
@@ -1079,7 +1079,7 @@ def test_reset_current_advance_roundtrip(tmp_path: Path) -> None:
     orig_ep1_status = s.modules[0].episodes[1].status
     orig_module_idx = c.module_idx
     orig_episode_idx = c.episode_idx
-    assert orig_ep1_status == "pending"
+    assert orig_ep1_status == "locked"
 
     # Advance: ep1 becomes done, cursor moves to module=1, ep=0
     s2, c2 = advance(s, c)
@@ -1089,7 +1089,7 @@ def test_reset_current_advance_roundtrip(tmp_path: Path) -> None:
 
     # Reset: ep1 back to pending, cursor back to module=0, ep=1
     s3, c3 = reset_current(s2, c2)
-    assert s3.modules[0].episodes[1].status == "pending"
+    assert s3.modules[0].episodes[1].status == "locked"
     assert c3.module_idx == orig_module_idx
     assert c3.episode_idx == orig_episode_idx
 
@@ -1111,7 +1111,7 @@ def test_reset_current_parked_cursor(tmp_path: Path) -> None:
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
     """)
     cursor_yaml = textwrap.dedent("""\
         book: running-science-v1
@@ -1133,7 +1133,7 @@ def test_reset_current_parked_cursor(tmp_path: Path) -> None:
 
     # Reset: last episode back to pending, cursor NOT parked — points to last episode
     s3, c3 = reset_current(s2, c2)
-    assert s3.modules[0].episodes[0].status == "pending"
+    assert s3.modules[0].episodes[0].status == "locked"
     assert c3.module_idx == 0
     assert c3.episode_idx == 0
 
@@ -1155,13 +1155,13 @@ def test_reset_current_no_done_episodes_idempotent(tmp_path: Path) -> None:
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
               - title: VDOT配速表解读
                 doc_refs: []
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 学会用VDOT对应训练配速区间
-                status: pending
+                status: locked
     """)
     cursor_yaml = textwrap.dedent("""\
         book: running-science-v1
@@ -1178,8 +1178,8 @@ def test_reset_current_no_done_episodes_idempotent(tmp_path: Path) -> None:
     # Should not crash; no done episode to reset
     s2, c2 = reset_current(s, c)
     # All episodes remain pending
-    assert s2.modules[0].episodes[0].status == "pending"
-    assert s2.modules[0].episodes[1].status == "pending"
+    assert s2.modules[0].episodes[0].status == "locked"
+    assert s2.modules[0].episodes[1].status == "locked"
     # Cursor unchanged
     assert c2.module_idx == c.module_idx
     assert c2.episode_idx == c.episode_idx
@@ -1201,7 +1201,7 @@ def test_select_next_character_ref_both_absent_returns_empty(tmp_path: Path) -> 
                 source: Daniels
                 verify_status: "✅"
                 learning_goal: 理解VDOT含义
-                status: pending
+                status: locked
     """)
     s_file = tmp_path / "syllabus.yaml"
     s_file.write_text(syllabus_yaml)
@@ -1245,7 +1245,7 @@ def test_select_next_carries_module_name(tmp_path):
                 source: UESCA
                 verify_status: "✅"
                 learning_goal: 目标
-                status: pending
+                status: locked
     """), encoding="utf-8")
     cur.write_text("book: running-science-v1\nmodule_idx: 0\nepisode_idx: 0\n", encoding="utf-8")
 
@@ -1253,3 +1253,573 @@ def test_select_next_carries_module_name(tmp_path):
     sel = select_next(cfg)
     assert sel is not None
     assert sel.module_name == "训练科学认知刷新：破除流行神话"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Season layer + dual-read backward compat (Task A1)
+# ---------------------------------------------------------------------------
+
+# New shape: book → seasons → modules → episodes.
+# Season 0: one module with 2 episodes; Season 1: one module with 1 episode.
+SYLLABUS_YAML_SEASONS = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    color_grade: 暖金
+    seasons:
+      - name: 第一季·基础
+        style: educational
+        art_style: 简笔日漫
+        character_ref: assets/character/season0_ref.jpg
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT
+                status: done
+              - title: VDOT配速表解读
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 用VDOT对应配速
+                status: locked
+      - name: 第二季·实战
+        modules:
+          - name: 赛场策略
+            style: tutorial
+            episodes:
+              - title: 起步配速
+                doc_refs: []
+                source: UESCA
+                verify_status: "✅"
+                learning_goal: 起步保守后程发力
+                status: locked
+""")
+
+
+def test_load_syllabus_legacy_modules_wrapped_into_one_season(tmp_path: Path) -> None:
+    """Legacy top-level `modules:` (no seasons) is wrapped into exactly ONE Season,
+    with the original modules preserved verbatim; the `.modules` @property still
+    flattens for read-only enumerate consumers (visual_ledger / wiring)."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML)  # existing fixture: 2 top-level modules
+    s = load_syllabus(f)
+    # New season layer: one implicit season wrapping the legacy modules
+    assert len(s.seasons) == 1
+    assert [m.name for m in s.seasons[0].modules] == ["VDOT基础", "训练区间"]
+    assert len(s.seasons[0].modules[0].episodes) == 2
+    # .modules property still returns the flat module list, unchanged shape
+    assert len(s.modules) == 2
+    assert s.modules[0].episodes[0].status == "done"
+    assert s.modules[0].episodes[1].status == "locked"
+
+
+def test_load_syllabus_new_seasons_shape(tmp_path: Path) -> None:
+    """New `seasons:` shape parses into multiple Season objects; per-season
+    optional overrides (style/art_style/character_ref) are read."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_SEASONS)
+    s = load_syllabus(f)
+    assert len(s.seasons) == 2
+    assert s.seasons[0].name == "第一季·基础"
+    assert s.seasons[0].art_style == "简笔日漫"
+    assert s.seasons[0].character_ref == "assets/character/season0_ref.jpg"
+    assert s.seasons[1].name == "第二季·实战"
+    assert len(s.seasons[0].modules) == 1
+    assert len(s.seasons[1].modules) == 1
+    # flat .modules spans both seasons
+    assert [m.name for m in s.modules] == ["VDOT基础", "赛场策略"]
+
+
+def test_save_syllabus_emits_seasons_wrapper_roundtrip(tmp_path: Path) -> None:
+    """save_syllabus emits a top-level `seasons:` wrapper (not `modules:`), and a
+    save→load roundtrip preserves the season/module/episode structure."""
+    import yaml as _yaml
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_SEASONS)
+    s = load_syllabus(f)
+    out = tmp_path / "out_syllabus.yaml"
+    save_syllabus(s, out)
+    raw = _yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert "seasons" in raw
+    assert "modules" not in raw  # top-level modules replaced by the seasons wrapper
+    s2 = load_syllabus(out)
+    assert len(s2.seasons) == 2
+    assert s2.seasons[0].name == "第一季·基础"
+    assert s2.seasons[1].modules[0].episodes[0].title == "起步配速"
+    assert s2.modules[0].episodes[0].status == "done"
+
+
+def test_derive_seq_slug_flat_seq_stable_across_seasons(tmp_path: Path) -> None:
+    """Global seq stays flat (001, 002, 003…) across season boundaries — a new
+    season does NOT reset the counter."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML_SEASONS)
+    s = load_syllabus(f)
+    # flat modules: idx0 = season0.mod0 (2 eps), idx1 = season1.mod0 (1 ep)
+    seq0, _ = derive_seq_slug(s, module_idx=0, episode_idx=0)
+    seq1, _ = derive_seq_slug(s, module_idx=0, episode_idx=1)
+    seq2, _ = derive_seq_slug(s, module_idx=1, episode_idx=0)
+    assert seq0 == "001"
+    assert seq1 == "002"
+    assert seq2 == "003"
+
+
+def test_load_syllabus_legacy_backward_compat_zero_change(tmp_path: Path) -> None:
+    """A legacy modules-top syllabus loads with ZERO edits and exposes the same
+    two modules under seasons[0] — the running-class file keeps working."""
+    f = tmp_path / "syllabus.yaml"
+    f.write_text(SYLLABUS_YAML)
+    s = load_syllabus(f)
+    assert len(s.seasons) == 1
+    assert s.seasons[0].name  # implicit season carries a name
+    assert len(s.seasons[0].modules) == 2
+    # series-level character_ref untouched
+    assert s.character_ref == "assets/character/coach_ref.jpg"
+    # iter_modules yields (season_idx, module_idx, module) triples, flat order
+    triples = list(s.iter_modules())
+    assert [(si, mi) for si, mi, _ in triples] == [(0, 0), (0, 1)]
+
+
+# ---------------------------------------------------------------------------
+# Tests: Cursor season_idx + triple-loop traversal + cursor backward-compat (A2)
+#
+# Design contract (see plan Task A2): `module_idx` stays FLAT (index into the
+# `.modules` @property, spanning all seasons — forced by the A1 flat-seq test and
+# by out-of-scope callers wiring.py / visual_ledger that pass a flat module_idx).
+# `season_idx` is a companion field: default 0 when absent (legacy cursor), and
+# set by advance / reset_current to the season that owns the current flat module
+# (park = len(seasons)). These assertions FAIL pre-impl: Cursor has no season_idx
+# field, and advance/reset_current do not populate it.
+# ---------------------------------------------------------------------------
+
+# Old cursor: no season_idx key (the real running-class cursor.yaml shape).
+OLD_CURSOR_NO_SEASON_YAML = textwrap.dedent("""\
+    book: running-science-v1
+    module_idx: 1
+    episode_idx: 0
+""")
+
+
+def test_load_cursor_defaults_season_idx_zero(tmp_path: Path) -> None:
+    """load_cursor on an OLD cursor.yaml (no season_idx) defaults season_idx=0 —
+    the real running-class cursor loads unchanged."""
+    f = tmp_path / "cursor.yaml"
+    f.write_text(OLD_CURSOR_NO_SEASON_YAML)
+    c = load_cursor(f)
+    assert c.book == "running-science-v1"
+    assert c.module_idx == 1
+    assert c.episode_idx == 0
+    assert c.season_idx == 0  # FAILS pre-impl: Cursor has no season_idx field
+
+
+def test_load_cursor_reads_explicit_season_idx(tmp_path: Path) -> None:
+    """load_cursor reads an explicit season_idx when present."""
+    f = tmp_path / "cursor.yaml"
+    f.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        season_idx: 2
+        module_idx: 3
+        episode_idx: 1
+    """))
+    c = load_cursor(f)
+    assert c.season_idx == 2
+    assert c.module_idx == 3
+    assert c.episode_idx == 1
+
+
+def test_save_load_cursor_season_idx_roundtrip(tmp_path: Path) -> None:
+    """save_cursor emits season_idx; a save→load roundtrip preserves it."""
+    from lib.syllabus import Cursor
+    c = Cursor(book="running-science-v1", module_idx=1, episode_idx=0, season_idx=2)
+    out = tmp_path / "cursor.yaml"
+    save_cursor(c, out)
+    # season_idx is serialized into the YAML text
+    assert "season_idx" in out.read_text(encoding="utf-8")
+    c2 = load_cursor(out)
+    assert c2.season_idx == 2
+    assert c2.module_idx == 1
+    assert c2.episode_idx == 0
+
+
+def test_old_cursor_backward_compat_next_pending_unchanged(tmp_path: Path) -> None:
+    """An old cursor (no season_idx) still resolves the SAME pending episode via
+    next_pending — season_idx defaults to 0 and does not alter flat resolution."""
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)  # legacy modules-top → one implicit season
+    c_file = tmp_path / "cursor.yaml"
+    # module_idx=0, episode_idx=1 → flat position of the first pending episode
+    c_file.write_text(CURSOR_YAML)
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    assert c.season_idx == 0
+    result = next_pending(s, c)
+    assert result is not None
+    episode, seq, slug, module = result
+    assert episode.title == "VDOT配速表解读"
+    assert seq == "002"
+
+
+def test_traversal_next_pending_crosses_season_boundary(tmp_path: Path) -> None:
+    """next_pending walks the triple (season, module, episode) loop: a cursor in
+    season 0 resolves a pending episode that lives in season 1 (flat module 1)."""
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_SEASONS)  # season0: mod0(ep0 done, ep1 pending); season1: mod0(ep0 pending)
+    c_file = tmp_path / "cursor.yaml"
+    # cursor at flat module 0 / ep 0 (done) → first pending is season0 mod0 ep1
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """))
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    result = next_pending(s, c)
+    assert result is not None
+    episode, seq, slug, module = result
+    assert episode.title == "VDOT配速表解读"
+    assert seq == "002"
+
+
+def test_advance_across_season_boundary_sets_season_idx(tmp_path: Path) -> None:
+    """advance from the last pending episode of season 0 lands the cursor in
+    season 1: season_idx becomes 1, module_idx is the FLAT index (1), and the
+    flat global seq stays continuous (season 1's episode is seq 003)."""
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_SEASONS)
+    c_file = tmp_path / "cursor.yaml"
+    # cursor at flat module 0 / ep 1 (season0's last pending)
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 1
+    """))
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    s2, c2 = advance(s, c)
+    # season0 mod0 ep1 now done
+    assert s2.modules[0].episodes[1].status == "done"
+    # cursor moved into season 1 (flat module 1)
+    assert c2.season_idx == 1          # FAILS pre-impl: no season_idx populated
+    assert c2.module_idx == 1
+    assert c2.episode_idx == 0
+    # flat global seq unbroken across the season boundary
+    seq, _ = derive_seq_slug(s2, module_idx=1, episode_idx=0)
+    assert seq == "003"
+
+
+def test_advance_park_sets_season_idx_past_last_season(tmp_path: Path) -> None:
+    """advance on the very last episode parks the cursor past the end: module_idx
+    = len(modules) AND season_idx = len(seasons)."""
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: locked
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """))
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    s2, c2 = advance(s, c)
+    assert s2.modules[0].episodes[0].status == "done"
+    assert c2.module_idx == len(s2.modules)      # parked past last module (flat)
+    assert c2.season_idx == len(s2.seasons)      # FAILS pre-impl: parked past last season
+    assert next_pending(s2, c2) is None
+
+
+def test_reset_current_across_season_boundary_restores_season_idx(tmp_path: Path) -> None:
+    """advance into season 1 then reset_current rewinds the done episode back to
+    pending AND moves the cursor's season_idx back to 0."""
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_SEASONS)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 1
+    """))
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    # advance: season0 mod0 ep1 → done, cursor into season 1
+    s2, c2 = advance(s, c)
+    assert c2.season_idx == 1
+    # reset: rewind the most-recent done episode; cursor back into season 0
+    from lib.syllabus import reset_current
+    s3, c3 = reset_current(s2, c2)
+    assert s3.modules[0].episodes[1].status == "locked"
+    assert c3.season_idx == 0                     # FAILS pre-impl: season_idx not restored
+    assert c3.module_idx == 0
+    assert c3.episode_idx == 1
+
+
+def test_reset_current_parked_cursor_sets_season_idx(tmp_path: Path) -> None:
+    """reset_current from a parked cursor (season_idx=len(seasons)) restores a
+    valid in-range season_idx pointing at the rewound episode."""
+    from lib.syllabus import reset_current
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 理解VDOT含义
+                status: locked
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 0
+        episode_idx: 0
+    """))
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    s2, c2 = advance(s, c)  # parked: season_idx = len(seasons)
+    assert c2.season_idx == len(s2.seasons)
+    s3, c3 = reset_current(s2, c2)
+    assert s3.modules[0].episodes[0].status == "locked"
+    assert c3.season_idx == 0
+    assert c3.module_idx == 0
+    assert c3.episode_idx == 0
+
+
+def test_promote_draft_initializes_cursor_season_idx_zero(tmp_path: Path) -> None:
+    """promote_draft initializes the cursor with season_idx=0."""
+    from lib.syllabus import promote_draft
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(DRAFT_YAML_PLAIN)
+    syllabus_path = tmp_path / "syllabus.yaml"
+    cursor_path = tmp_path / "cursor.yaml"
+    promote_draft(draft, syllabus_path, cursor_path, book="running-science-v1")
+    c = load_cursor(cursor_path)
+    assert c.season_idx == 0
+    assert c.module_idx == 0
+    assert c.episode_idx == 0
+
+
+def test_select_next_carries_season_name(tmp_path: Path) -> None:
+    """select_next exposes the owning SEASON's name on the Selection (companion to
+    module_name), derived via the flat-module → season mapping."""
+    from types import SimpleNamespace
+    from lib.syllabus import select_next
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_SEASONS)
+    c_file = tmp_path / "cursor.yaml"
+    # cursor at flat module 1 (season 1)'s pending episode
+    c_file.write_text(textwrap.dedent("""\
+        book: running-science-v1
+        module_idx: 1
+        episode_idx: 0
+    """))
+    cfg = SimpleNamespace(syllabus_path=str(s_file), cursor_path=str(c_file))
+    sel = select_next(cfg)
+    assert sel is not None
+    assert sel.season_name == "第二季·实战"   # FAILS pre-impl: Selection has no season_name
+
+
+# ---------------------------------------------------------------------------
+# Tests: locked state + consume-gate flip (Task A3)
+#
+# Lifecycle is pending → locked → done. The consume gate (next_pending / advance /
+# select_next) only picks `locked` episodes; a `pending` planner draft is skipped
+# until the user locks it. lock_syllabus / lock_season flip pending → locked.
+# reset_current rewinds a done episode back to `locked` (keeps the lock — MR-2),
+# so a rewound episode is immediately re-selectable.
+# ---------------------------------------------------------------------------
+
+def test_next_pending_skips_pending_draft(tmp_path: Path) -> None:
+    """Consume gate is `locked`-only: a `pending` draft episode is NOT selected.
+
+    ep0=done, ep1=pending, cursor at ep1 → next_pending returns None (the pending
+    draft is skipped, not consumed)."""
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 什么是VDOT
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: g0
+                status: done
+              - title: VDOT配速表解读
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: g1
+                status: pending
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text("book: running-science-v1\nmodule_idx: 0\nepisode_idx: 1\n")
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    # The pending draft at (0,1) is skipped → nothing selectable from cursor onward
+    assert next_pending(s, c) is None
+
+
+def test_next_pending_picks_locked_over_pending(tmp_path: Path) -> None:
+    """ep0=pending (draft, skipped), ep1=locked → next_pending walks past the
+    pending draft and returns the locked episode."""
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: VDOT基础
+            style: educational
+            episodes:
+              - title: 草案期
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: g0
+                status: pending
+              - title: 已锁定期
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: g1
+                status: locked
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text("book: running-science-v1\nmodule_idx: 0\nepisode_idx: 0\n")
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+    result = next_pending(s, c)
+    assert result is not None
+    episode, seq, slug, module = result
+    assert episode.title == "已锁定期"
+    assert episode.status == "locked"
+
+
+def test_lock_syllabus_flips_all_pending_to_locked(tmp_path: Path) -> None:
+    """lock_syllabus loads a syllabus, flips every `pending` episode to `locked`,
+    leaves `done` untouched, and persists the result (fail-soft, idempotent)."""
+    from lib.syllabus import lock_syllabus
+    syllabus_yaml = textwrap.dedent("""\
+        book: running-science-v1
+        character_ref: ""
+        modules:
+          - name: 模块A
+            style: educational
+            episodes:
+              - title: 已完成
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: g0
+                status: done
+              - title: 草案一
+                doc_refs: []
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: g1
+                status: pending
+          - name: 模块B
+            style: tutorial
+            episodes:
+              - title: 草案二
+                doc_refs: []
+                source: UESCA
+                verify_status: "✅"
+                learning_goal: g2
+                status: pending
+    """)
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(syllabus_yaml)
+
+    lock_syllabus(s_file)
+
+    reloaded = load_syllabus(s_file)
+    # done stays done; both pending drafts became locked
+    assert reloaded.modules[0].episodes[0].status == "done"
+    assert reloaded.modules[0].episodes[1].status == "locked"
+    assert reloaded.modules[1].episodes[0].status == "locked"
+
+    # Idempotent: locking an already-locked syllabus is a no-op
+    lock_syllabus(s_file)
+    reloaded2 = load_syllabus(s_file)
+    assert reloaded2.modules[0].episodes[0].status == "done"
+    assert reloaded2.modules[0].episodes[1].status == "locked"
+    assert reloaded2.modules[1].episodes[0].status == "locked"
+
+
+def test_lock_season_flips_only_that_season(tmp_path: Path) -> None:
+    """lock_season(syllabus, season_idx) flips pending → locked ONLY within the
+    named season; other seasons keep their pending drafts (season-by-season lock)."""
+    from lib.syllabus import lock_season
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_SEASONS)  # season0 ep1 locked, season1 ep0 locked
+    s = load_syllabus(s_file)
+    # Make both consumable episodes pending again so the effect of lock_season is visible
+    s.seasons[0].modules[0].episodes[1].status = "pending"
+    s.seasons[1].modules[0].episodes[0].status = "pending"
+
+    lock_season(s, 0)
+
+    # Season 0's draft is now locked; Season 1's draft is untouched (still pending)
+    assert s.seasons[0].modules[0].episodes[1].status == "locked"
+    assert s.seasons[1].modules[0].episodes[0].status == "pending"
+    # done episode in season 0 is untouched
+    assert s.seasons[0].modules[0].episodes[0].status == "done"
+
+    # Now lock season 1
+    lock_season(s, 1)
+    assert s.seasons[1].modules[0].episodes[0].status == "locked"
+
+
+def test_reset_current_locked_is_reselectable(tmp_path: Path) -> None:
+    """reset_current rewinds a done episode to `locked` (not a dead `pending`), so
+    next_pending can immediately re-select it. Proves reset keeps the lock (MR-2).
+
+    ep0=done, ep1=locked, cursor at ep1 → reset rewinds ep0 to locked, cursor to
+    ep0 → next_pending from the reset cursor re-selects ep0."""
+    from lib.syllabus import reset_current
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML)  # ep0=done, ep1=locked
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(CURSOR_YAML)  # module_idx=0, episode_idx=1
+    s = load_syllabus(s_file)
+    c = load_cursor(c_file)
+
+    s2, c2 = reset_current(s, c)
+    # ep0 rewound to locked (keeps the lock — not pending)
+    assert s2.modules[0].episodes[0].status == "locked"
+    assert c2.module_idx == 0 and c2.episode_idx == 0
+
+    # locked → immediately re-selectable by the consume gate
+    result = next_pending(s2, c2)
+    assert result is not None
+    episode, seq, slug, module = result
+    assert episode.title == "什么是VDOT"
+    assert episode.status == "locked"

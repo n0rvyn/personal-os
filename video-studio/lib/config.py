@@ -31,7 +31,7 @@ VALID_MEDIA_PROVIDERS = frozenset({"doubao", "minimax"})
 
 # Phase 2 media-source layer: style_name -> kind binding. Phase 4 adds "pexels",
 # Phase 6 adds "offline". "none" = pure generate (default when style unbound).
-VALID_LIBRARY_KINDS = frozenset({"none", "stub", "pexels"})
+VALID_LIBRARY_KINDS = frozenset({"none", "stub", "pexels", "offline"})
 
 
 # ---------------------------------------------------------------------------

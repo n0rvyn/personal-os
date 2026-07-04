@@ -28,7 +28,14 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 from lib import media_source  # noqa: E402
 from lib import pexels  # noqa: E402
-from lib.media_source import GenerateSource, LibrarySource, MediaRouter, PexelsSource  # noqa: E402
+from lib.media_source import (  # noqa: E402
+    GenerateSource,
+    LibrarySource,
+    MediaRouter,
+    OfflinePoolSource,
+    PexelsSource,
+)
+from lib.offline_pool import PoolIndex  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -504,3 +511,214 @@ def test_from_config_pexels_kind_no_key_constructs_without_raising(monkeypatch):
     src = LibrarySource.from_config(_FakeCfgPexels(), "写实电影")
     assert isinstance(src, PexelsSource)
     assert src.api_key == ""
+
+
+# ---------------------------------------------------------------------------
+# OfflinePoolSource (Phase 6, D-012/D-006)
+# ---------------------------------------------------------------------------
+
+
+class FakeGenerate:
+    """Stand-in for GenerateSource: fetch(prompt, ref, out_path) writes a real
+    decodable file (PoolIndex.add copies it) and returns out_path."""
+
+    def __init__(self):
+        self.fetch_calls = []
+
+    def fetch(self, prompt, ref_url, out_path):
+        self.fetch_calls.append((prompt, ref_url, out_path))
+        Path(out_path).write_bytes(b"fake-png-bytes")
+        return out_path
+
+
+def test_offline_pool_source_empty_pool_misses_generates_and_clips(tmp_path):
+    pool_dir = tmp_path / "pool"
+    generate = FakeGenerate()
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=generate)
+    run_ff = FakeRunFf()
+    window = {"query": "runner on track", "prompt": "a runner on a track"}
+
+    result = src.fetch_clip(window, 6.0, str(tmp_path / "out.mp4"), run_ff)
+
+    assert result == str(tmp_path / "out.mp4")
+    assert len(generate.fetch_calls) == 1
+    assert len(run_ff.calls) == 1
+    cmd, label = run_ff.calls[0]
+    assert label == "pool-miss"
+    assert len(cmd) > 0
+
+
+def test_offline_pool_source_hit_reuses_pooled_asset_no_generate(tmp_path):
+    pool_dir = tmp_path / "pool"
+    seed_src = tmp_path / "seed.png"
+    seed_src.write_bytes(b"seed-bytes")
+    pool = PoolIndex(pool_dir)
+    pool.add(str(seed_src), "runner on track")
+
+    generate = FakeGenerate()
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=generate)
+    run_ff = FakeRunFf()
+    window = {"query": "runner on track", "prompt": "a runner on a track"}
+
+    result = src.fetch_clip(window, 6.0, str(tmp_path / "out.mp4"), run_ff)
+
+    assert result == str(tmp_path / "out.mp4")
+    assert generate.fetch_calls == [], "hit must not call generate"
+    assert len(run_ff.calls) == 1
+    cmd, label = run_ff.calls[0]
+    assert label == "pool-hit"
+    assert len(cmd) > 0
+
+
+def test_offline_pool_source_unrelated_pool_asset_misses(tmp_path):
+    pool_dir = tmp_path / "pool"
+    seed_src = tmp_path / "seed.png"
+    seed_src.write_bytes(b"seed-bytes")
+    pool = PoolIndex(pool_dir)
+    pool.add(str(seed_src), "cooking pasta recipe")  # unrelated query -> overlap 0
+
+    generate = FakeGenerate()
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=generate)
+    run_ff = FakeRunFf()
+    window = {"query": "runner on track", "prompt": "a runner on a track"}
+
+    result = src.fetch_clip(window, 6.0, str(tmp_path / "out.mp4"), run_ff)
+
+    assert result == str(tmp_path / "out.mp4")
+    assert len(generate.fetch_calls) == 1, "unrelated pool asset must not gate the miss"
+
+
+def test_offline_pool_source_no_query_returns_none_no_generate_no_run_ff(tmp_path):
+    pool_dir = tmp_path / "pool"
+    generate = FakeGenerate()
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=generate)
+    run_ff = FakeRunFf()
+    window = {"prompt": "a scene with no query"}
+
+    result = src.fetch_clip(window, 6.0, str(tmp_path / "out.mp4"), run_ff)
+
+    assert result is None
+    assert generate.fetch_calls == []
+    assert run_ff.calls == []
+
+
+def test_offline_pool_source_generate_none_on_miss_returns_none_no_crash(tmp_path):
+    pool_dir = tmp_path / "pool"
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=None)
+    run_ff = FakeRunFf()
+    window = {"query": "runner on track", "prompt": "a runner on a track"}
+
+    result = src.fetch_clip(window, 6.0, str(tmp_path / "out.mp4"), run_ff)
+
+    assert result is None
+    assert run_ff.calls == []
+
+
+def test_offline_pool_source_intra_episode_dedup_second_window_falls_to_miss(tmp_path):
+    pool_dir = tmp_path / "pool"
+    seed_src = tmp_path / "seed.png"
+    seed_src.write_bytes(b"seed-bytes")
+    pool = PoolIndex(pool_dir)
+    pool.add(str(seed_src), "runner on track")
+
+    generate = FakeGenerate()
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=generate)
+    run_ff = FakeRunFf()
+
+    window1 = {"query": "runner on track", "prompt": "a runner on a track"}
+    window2 = {"query": "runner on track", "prompt": "a runner on a track, second beat"}
+
+    result1 = src.fetch_clip(window1, 6.0, str(tmp_path / "out1.mp4"), run_ff)
+    result2 = src.fetch_clip(window2, 6.0, str(tmp_path / "out2.mp4"), run_ff)
+
+    assert result1 == str(tmp_path / "out1.mp4")
+    assert result2 == str(tmp_path / "out2.mp4")
+    # First window is a hit (pooled asset); second window can't reuse it
+    # (already in `_used`) so it must fall to miss/generate.
+    labels = [label for _cmd, label in run_ff.calls]
+    assert labels[0] == "pool-hit"
+    assert labels[1] == "pool-miss"
+    assert len(generate.fetch_calls) == 1, "second window must generate (dedup blocked reuse)"
+
+
+def test_offline_pool_source_ken_burns_camera_move_present_on_hit_and_miss(tmp_path):
+    pool_dir = tmp_path / "pool"
+    seed_src = tmp_path / "seed.png"
+    seed_src.write_bytes(b"seed-bytes")
+    pool = PoolIndex(pool_dir)
+    pool.add(str(seed_src), "runner on track")
+
+    generate = FakeGenerate()
+    src = OfflinePoolSource(pool_dir=pool_dir, style="简笔日漫", generate=generate)
+    run_ff = FakeRunFf()
+
+    window_hit = {"query": "runner on track", "prompt": "p", "camera_move": "推近"}
+    window_miss = {"query": "totally different topic", "prompt": "p", "camera_move": "竖摇"}
+
+    src.fetch_clip(window_hit, 6.0, str(tmp_path / "out_hit.mp4"), run_ff)
+    src.fetch_clip(window_miss, 6.0, str(tmp_path / "out_miss.mp4"), run_ff)
+
+    assert len(run_ff.calls) == 2
+    (cmd_hit, label_hit), (cmd_miss, label_miss) = run_ff.calls
+    assert label_hit == "pool-hit"
+    assert label_miss == "pool-miss"
+    # AD-7: pooled stills must get a Ken Burns camera move, NOT a static hold
+    # (the ⑤ bug this refactor exists to kill). still_clip_cmd emits a `zoompan`
+    # filter in its -vf arg only when a camera move flows through; a static clip
+    # (static_clip_cmd) has none. Assert the move actually reached ffmpeg.
+    vf_hit = cmd_hit[cmd_hit.index("-vf") + 1]
+    vf_miss = cmd_miss[cmd_miss.index("-vf") + 1]
+    assert "zoompan" in vf_hit, "hit clip must carry a Ken Burns move, not a static hold"
+    assert "zoompan" in vf_miss, "miss clip must carry a Ken Burns move, not a static hold"
+
+
+# ---------------------------------------------------------------------------
+# LibrarySource.from_config(kind="offline") + MediaRouter.set_style threading (Task 5)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCfgOffline:
+    def __init__(self, output_dir):
+        self.library = {"简笔日漫": "offline"}
+        self.output_dir = str(output_dir)
+
+
+def test_set_style_offline_kind_builds_offline_pool_source_with_router_generate(tmp_path):
+    seams = FakeSeams()
+    generate = GenerateSource(seams)
+    cfg = _FakeCfgOffline(tmp_path)
+    router = MediaRouter(generate=generate, cfg=cfg)
+
+    router.set_style("简笔日漫")
+
+    assert isinstance(router.library, OfflinePoolSource)
+    assert router.library.generate is router.generate
+
+
+class _FakeCfgPexelsStyle:
+    def __init__(self):
+        self.library = {"写实": "pexels"}
+        self.output_dir = "/tmp/unused"
+
+
+def test_set_style_pexels_kind_still_yields_pexels_source_no_regression(monkeypatch):
+    monkeypatch.setenv("PEXELS_API_KEY", "sk-test")
+    seams = FakeSeams()
+    generate = GenerateSource(seams)
+    cfg = _FakeCfgPexelsStyle()
+    router = MediaRouter(generate=generate, cfg=cfg)
+
+    router.set_style("写实")
+
+    assert isinstance(router.library, PexelsSource)
+
+
+def test_set_style_no_binding_yields_none_library_no_regression():
+    seams = FakeSeams()
+    generate = GenerateSource(seams)
+    cfg = _FakeCfgPexelsStyle()
+    router = MediaRouter(generate=generate, cfg=cfg)
+
+    router.set_style("style-with-no-binding")
+
+    assert router.library is None

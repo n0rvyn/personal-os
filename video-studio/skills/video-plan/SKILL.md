@@ -84,23 +84,30 @@ planner 会：读文档 → 按主题聚类 → 写 YAML 草案 → 简短总结
 
 **等用户点头后再执行步骤 ④。**
 
-### ④ 用户点头 → 校验 + 锁定 syllabus + 初始化游标
+### ④ 用户点头 → 校验落盘（pending 草案）+ 锁定（pending→locked）+ 初始化游标
 
-用户确认草案后，用 Bash 调 `promote_draft`（校验 → 写 `syllabus/{book}.yaml` + 初始化 `cursor.yaml`）：
+期的生命周期：`pending`（草案）→ `locked`（锁定，可被出片选中）→ `done`（已出片）。`promote_draft` 落盘的是 **pending 草案**；用户 review 点头后，再调 `lock_syllabus` 把每期翻成 `locked`，`/video-make` 的消费门只吃 `locked`（没锁的草案不会被跑）。
+
+用户确认草案后，用 Bash 先调 `promote_draft`（校验 → 写 pending 草案 + 初始化 `cursor.yaml`），紧接着调 `lock_syllabus`（pending→locked）：
 
 ```bash
 cd "${CLAUDE_PLUGIN_ROOT}"
 
 python3 -c "
 from pathlib import Path
-from lib.syllabus import promote_draft
+from lib.syllabus import promote_draft, lock_syllabus
 
+syllabus_path = Path('syllabus/<book>.yaml')
+
+# 1) 校验草案 → 写 pending syllabus + 初始化游标
 promote_draft(
     draft_path=Path('syllabus/<book>_draft.yaml'),
-    syllabus_path=Path('syllabus/<book>.yaml'),
+    syllabus_path=syllabus_path,
     cursor_path=Path('syllabus/<book>_cursor.yaml'),
     book='<book>',
 )
+# 2) 用户已 approve → 锁定：pending → locked（消费门只吃 locked）
+lock_syllabus(syllabus_path)
 print('LOCKED')
 "
 ```
@@ -108,8 +115,10 @@ print('LOCKED')
 `promote_draft` 会：
 1. 读草案 YAML（容 ```yaml fence）
 2. 校验每期含 `source`/`verify_status`/`doc_refs`（缺字段 → 命名报错，不静默）
-3. 写 `syllabus/{book}.yaml`
+3. 写 `syllabus/{book}.yaml`（期为 `pending` 草案态）
 4. 初始化 `cursor.yaml` 到 `(module_idx=0, episode_idx=0)`
+
+`lock_syllabus` 会把 syllabus 里每个 `pending` 期翻成 `locked`（`done` 不动，幂等），锁定后才会被 `/video-make` 选中出片。逐季锁定用 `lock_season(syllabus, season_idx)`。
 
 校验失败（坏草案、缺字段）→ 展示错误给用户，不落盘半截文件。
 

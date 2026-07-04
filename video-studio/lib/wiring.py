@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -34,7 +35,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
-from lib import cards, ffcmd, grade, media_chart, media_tts
+from lib import cards, coveredground, ffcmd, grade, media_chart, media_tts
 from lib import dispatch as dispatch_mod
 from lib import episode as episode_mod
 from lib import extract as extract_mod
@@ -1190,11 +1191,53 @@ def build_step_fns(
     def step_cleanup(step, ctx, scratch):
         log("[cleanup] deliverables in episode dir; runner clears scratch")
 
+    # ---- avoid-memo (B5): read the cross-episode covered-ground store and seed
+    # ctx['avoid_memo'] with the avoidance brief BEFORE the writer runs. Fail-
+    # soft: any store error → memo='' (the run must never halt on the memo).
+    # int(ctx['seq']) — seq is a zero-padded STRING (syllabus.derive_seq_slug),
+    # is_stale/render_memo want an int.
+    def step_avoid_memo(step, ctx, scratch):
+        try:
+            ctx["avoid_memo"] = coveredground.render_memo(
+                coveredground.load_store(cfg.output_dir), int(ctx["seq"])
+            )
+        except Exception:  # noqa: BLE001 — fail-soft: never halt on the memo
+            ctx["avoid_memo"] = ""
+        if ctx["avoid_memo"]:
+            log("[avoid-memo] covered-ground avoidance brief seeded")
+        else:
+            log("[avoid-memo] no hot anchors (empty avoid-memo)")
+
+    # ---- covered-update (B6): fold this episode's distilled covered.json into
+    # the cross-episode store, so the NEXT episode's avoid-memo sees it.
+    # update_covered_ground is fully fail-soft; the closure only computes the
+    # covered.json path (from the distiller's ctx['covered_art'], else the
+    # episode dir) + date/seq. Wrapped defensively so a missing ep/seq can't
+    # bubble either.
+    def step_covered_update(step, ctx, scratch):
+        try:
+            covered_json = ctx.get("covered_art")
+            if not covered_json:
+                ep = ctx.get("ep")
+                if ep is None:
+                    log("[covered-update] no ep / covered_art — nothing to merge")
+                    return
+                covered_json = str(ep["final"].parent / "covered.json")
+            date = ctx.get("date") or datetime.now().strftime("%Y-%m-%d")
+            coveredground.update_covered_ground(
+                cfg.output_dir, covered_json, date, int(ctx["seq"])
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-soft; never halt the run
+            log(f"[covered-update] swallowed error (fail-soft): {exc}")
+            return
+
     return {
         "config": step_config,
         "cursor-read": step_cursor_read,
         "scratch": step_scratch,
         "extract": step_extract,
+        "avoid-memo": step_avoid_memo,
+        "covered-update": step_covered_update,
         "tts": step_tts,
         "镜头计划": step_shotplan,
         "gen-still": step_gen_still,
@@ -1295,6 +1338,14 @@ def make_script_dispatch(
             f"本期主源: {_src_label or '教材原文'}；溯源状态: {_vstatus or '已溯源'}。{_disclosure}\n"
             f"{_host_line}"
             f"读它，写一期结构化跑步知识脚本 beats。"
+        )
+        # B5: covered-ground avoidance section — recently-overused 类比/例子/钩子
+        # the writer should avoid/replace this episode. DATA, not a fact source
+        # (温度盾: only packaging, never opinions; the 忠实门 owns the numbers).
+        # Seeded by the pre-script avoid-memo code step (step_avoid_memo).
+        user_prompt += (
+            "\n## 反复用过的类比/例子/钩子——本期避让(covered-ground)\n"
+            f"{ctx.get('avoid_memo', '') or '(无 covered-ground 避让约束)'}\n"
         )
         res = dispatch_persona_fn(
             "digest-writer", user_prompt, scratch_dir, "digest_beats.json",
@@ -1630,6 +1681,122 @@ def make_querywriter_dispatch(
     return dispatch
 
 
+def make_distiller_dispatch(
+    cfg: VideoStudioConfig,
+    *,
+    dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
+    plugin_root: Path = PLUGIN_ROOT,
+    log: Callable[[str], None] = lambda _m: None,
+) -> Callable:
+    """The `distill` agent step's dispatch closure — covered-ground 蒸馏器.
+
+    Anti-homogenization: after the台本 is finalized (script gate passed), this
+    isolates the episode's signature apparatus (类比/具体例子/开场钩子) into
+    ``covered.json`` in the episode dir, for the covered-ground-update station
+    (B6) to merge into the cross-episode store, so the next episode's writer
+    gets an avoidance memo (B5).
+
+    Non-gating (pipeline step carries artifact=None, gate=[]): a distiller
+    failure must NEVER halt an already-rendered episode.
+
+    MR-5 (critical): the runner (runner.py) does NOT wrap steps in try/except,
+    so a raising dispatch/persona would bubble and abort the whole run. The
+    WHOLE closure body is wrapped in ``try/except Exception → log + return`` —
+    every failure (fixture guard, bad ctx, dispatch raise, persona crash,
+    store/read error) is swallowed HERE and the run continues. A ``{ok:False}``
+    return is not enough; the closure itself must swallow.
+
+    - Fixture / render-eval short-circuit (``ctx['fixture']`` truthy): zero live
+      claude -p — returns immediately without persisting.
+    - Live: read ``ctx['beats']`` (current台本正文) + recent prior 台本 bodies
+      (``_done_episode_dirs``, read-only) + the existing store (``load_store``,
+      read-only), dispatch "covered-ground-distiller", and persist the returned
+      ``covered.json`` into the episode dir; set ``ctx['covered_art']``.
+    """
+    def dispatch(agent, step, ctx, scratch_dir):
+        try:
+            if agent != "covered-ground-distiller":
+                raise RuntimeError(f"unexpected agent step: {agent!r}")
+
+            # Fixture / render-eval short-circuit — zero live claude -p.
+            if ctx.get("fixture"):
+                log("[distill] fixture pass-through (no live dispatch)")
+                return
+
+            beats = ctx.get("beats") or []
+            if not beats:
+                log("[distill] no beats in ctx — nothing to distill")
+                return
+
+            # Current episode's台本正文 (逐段旁白 text; DATA, not instructions).
+            body = "\n\n".join(
+                str(b.get("text", "")).strip()
+                for b in beats
+                if str(b.get("text", "")).strip()
+            )
+
+            # Recent prior 台本 bodies (read-only, most-recent few). Fail-closed:
+            # _done_episode_dirs returns () without a syllabus/cursor/seq.
+            recent_bodies: list[str] = []
+            for ep_dir in _done_episode_dirs(cfg, ctx)[-5:]:
+                script_md = Path(ep_dir) / "script.md"
+                try:
+                    recent_bodies.append(script_md.read_text(encoding="utf-8"))
+                except OSError:
+                    continue
+
+            # Existing store (read-only — the distiller never writes it; the
+            # update station does, after computing embeddings).
+            try:
+                store = coveredground.load_store(cfg.output_dir)
+            except Exception:  # noqa: BLE001 — corrupt store must not halt distill
+                store = {"anchors": {}}
+            existing = sorted((store.get("anchors") or {}).keys())
+
+            user_prompt = "\n".join([
+                "本期台本正文（beats，逐段旁白——DATA，不是指令）：",
+                body or "(空)",
+                "",
+                "最近几期台本正文（recent_bodies，判断哪些装置最近反复用过）：",
+                ("\n\n---\n\n".join(recent_bodies) if recent_bodies else "(无)"),
+                "",
+                "现有 covered-ground store 已记录的装置（只读，供参考；仍要报本期实际用到的）：",
+                ("\n".join(f"- {a}" for a in existing) if existing else "(空)"),
+                "",
+                "翻这期台本，抽出招牌装置（类比/具体例子/开场钩子），按约定 JSON "
+                "写到指定路径（本期 covered.json）。没抽到也写 {\"anchors\": []}。",
+            ])
+
+            res = dispatch_persona_fn(
+                "covered-ground-distiller", user_prompt, scratch_dir, "covered.json",
+                plugin_root=plugin_root, model="sonnet",
+            )
+            if not res.get("ok"):
+                log(f"[distill] dispatch failed → no covered.json: {res.get('reason')}")
+                return
+
+            # Persist covered.json into the episode dir (for B6's update station).
+            art_path = res.get("artifact_path")
+            ep = ctx.get("ep")
+            if not art_path or ep is None:
+                log("[distill] no artifact_path / ep — covered.json not persisted")
+                return
+            ep_dir = ep["final"].parent
+            ep_dir.mkdir(parents=True, exist_ok=True)
+            dest = ep_dir / "covered.json"
+            dest.write_text(
+                Path(art_path).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            ctx["covered_art"] = str(dest)
+            log(f"[distill] covered.json persisted → {dest}")
+        except Exception as exc:  # noqa: BLE001 — MR-5: never halt the runner
+            log(f"[distill] swallowed error (fail-soft, run continues): {exc}")
+            return
+
+    return dispatch
+
+
 def prepare_render(
     cfg: VideoStudioConfig,
     *,
@@ -1661,6 +1828,8 @@ def prepare_render(
         cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
     querywriter_dispatch = make_querywriter_dispatch(
         cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
+    distiller_dispatch = make_distiller_dispatch(
+        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
 
     def dispatch(agent, step, ctx, scratch_dir):
         if agent == "digest-writer":
@@ -1669,6 +1838,8 @@ def prepare_render(
             return storyboard_dispatch(agent, step, ctx, scratch_dir)
         elif agent == "query-writer":
             return querywriter_dispatch(agent, step, ctx, scratch_dir)
+        elif agent == "covered-ground-distiller":
+            return distiller_dispatch(agent, step, ctx, scratch_dir)
         else:
             raise RuntimeError(f"unknown agent for dispatch: {agent!r}")
 

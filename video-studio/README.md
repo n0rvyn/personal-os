@@ -114,6 +114,34 @@ export MINIMAX_API_KEY=...
 export MINIMAX_GROUP_ID=...
 ```
 
+## Media sources (library-first, generate-fallback)
+
+Each art style can be bound to a media library in the *workspace* config
+(`<content-project>/.video-studio/config.yaml`, not checked into git —
+it's a per-project runtime setting):
+
+```yaml
+library:
+  写实电影: pexels    # online stock video (Phase 4) — needs PEXELS_API_KEY
+  简笔日漫: offline   # self-built offline pool (Phase 6) — see below
+```
+
+Library-first means: for a style with a binding, the pipeline tries the
+library before generating. A miss falls back to Doubao/MiniMax generation
+same as an unbound style.
+
+**Offline pool（简笔日漫 / anime style，无在线素材库可用）：**
+
+- `library: {简笔日漫: offline}` binds the anime style to a self-built
+  offline pool instead of an online library (there's no stock-footage
+  source for hand-drawn anime b-roll).
+- Hit: reuses a pooled still that content-matches the shot's query.
+- Miss: generates a new still via Doubao, and **adds it to the pool** —
+  later episodes can reuse it, so image-gen cost only gets paid once per
+  distinct shot across the whole content project.
+- The pool lives at `<output_dir>/_pool/<style>/` (an `index.json` plus the
+  pooled PNG assets) and accumulates as more episodes render.
+
 ## What lives where
 
 - `skills/video-plan/` — `/video-plan` skill (Stage 0 大纲规划, planner dispatch + promote_draft).

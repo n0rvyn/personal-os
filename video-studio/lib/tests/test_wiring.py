@@ -2303,3 +2303,326 @@ def test_step_gen_still_host_broll_mixed_source_routes_by_with_character(
         f"the host window's generate call must use the episode's (per-style) "
         f"ref_url; got {gen_still_ref_calls}"
     )
+
+
+# ===========================================================================
+# Anti-homogenization plan — Task B4-tests: covered-ground distiller pipeline
+# step dispatch closure (make_distiller_dispatch) + prepare_render routing.
+#
+# FAIL before Task B4-impl:
+#   - lib.wiring has no make_distiller_dispatch (ImportError)
+#   - prepare_render dispatch raises 'unknown agent for dispatch:
+#     covered-ground-distiller' (no elif branch)
+# All green after Task B4-impl.
+# ===========================================================================
+
+def _distill_step():
+    return {"name": "distill", "kind": "agent", "agent": "covered-ground-distiller",
+            "inputs": ["script", "config"], "artifact": None, "gate": []}
+
+
+def _distiller_beats():
+    return [
+        {"id": "b00", "text": "心率区间就像汽车的转速表，红线区不能久待。"},
+        {"id": "b01", "text": "周末长距离拉练最容易撞墙，配速别一上来就冲爆。"},
+    ]
+
+
+def _fake_distiller_persona(anchors, called=None):
+    def fake(agent, prompt, scratch_dir, expected, **kw):
+        if called is not None:
+            called.append((agent, prompt))
+        assert agent == "covered-ground-distiller"
+        out = _Path(scratch_dir) / expected
+        out.write_text(_json_mod.dumps({"anchors": anchors}), encoding="utf-8")
+        return {"ok": True, "artifact_path": str(out)}
+    return fake
+
+
+def _distiller_cfg(tmp_path):
+    cfg = _MagicMock()
+    cfg.output_dir = str(tmp_path)
+    return cfg
+
+
+def test_make_distiller_dispatch_fixture_short_circuit(tmp_path):
+    """ctx['fixture'] truthy → closure must NOT call dispatch_persona_fn
+    (zero live claude -p in fixture render eval) and must NOT set covered_art."""
+    from lib.wiring import make_distiller_dispatch
+
+    called = []
+    fake = _fake_distiller_persona(["心率像转速表"], called)
+    ctx = {"fixture": {"beats": []}, "beats": _distiller_beats()}
+    cfg = _distiller_cfg(tmp_path)
+
+    dispatch = make_distiller_dispatch(
+        cfg, dispatch_persona_fn=fake, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("covered-ground-distiller", _distill_step(), ctx, tmp_path)
+
+    assert called == [], "fixture pass-through must not invoke dispatch_persona_fn"
+    assert "covered_art" not in ctx, "fixture pass-through must not persist covered.json"
+
+
+def test_make_distiller_dispatch_swallows_raising_dispatch_no_bubble(tmp_path):
+    """MR-5 (critical): a RAISING dispatch_persona_fn must be swallowed by the
+    closure's whole-body try/except — the runner does NOT wrap steps, so a
+    bubble would abort an already-rendered episode. ctx must reach the dispatch
+    call (no fixture, non-empty beats) and stay unpolluted (no covered_art, no
+    new keys) after the swallow."""
+    from lib.wiring import make_distiller_dispatch
+
+    ep_dir = tmp_path / "episodes" / "001-test"
+    ctx = {
+        "beats": _distiller_beats(),
+        "ep": {"final": ep_dir / "001-test.mp4"},
+    }
+    before = set(ctx.keys())
+
+    def fake_raise(agent, prompt, scratch_dir, expected, **kw):
+        raise RuntimeError("claude -p exploded mid-distill")
+
+    cfg = _distiller_cfg(tmp_path)
+    dispatch = make_distiller_dispatch(
+        cfg, dispatch_persona_fn=fake_raise, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    # Must NOT raise — the closure swallows it (fail-soft, run continues).
+    dispatch("covered-ground-distiller", _distill_step(), ctx, tmp_path)
+
+    assert "covered_art" not in ctx, "a raising dispatch must not set covered_art"
+    assert set(ctx.keys()) == before, (
+        f"a swallowed distill failure must not pollute ctx; new keys="
+        f"{set(ctx.keys()) - before}"
+    )
+
+
+def test_make_distiller_dispatch_swallows_ok_false_no_persist(tmp_path):
+    """A dispatch that returns ok=False (persona failed cleanly) must not
+    persist covered.json and must not raise (fail-soft)."""
+    from lib.wiring import make_distiller_dispatch
+
+    ep_dir = tmp_path / "episodes" / "001-test"
+    ctx = {
+        "beats": _distiller_beats(),
+        "ep": {"final": ep_dir / "001-test.mp4"},
+    }
+
+    def fake_fail(agent, prompt, scratch_dir, expected, **kw):
+        return {"ok": False, "reason": "boom"}
+
+    cfg = _distiller_cfg(tmp_path)
+    dispatch = make_distiller_dispatch(
+        cfg, dispatch_persona_fn=fake_fail, plugin_root=_PLUGIN_ROOT_WIRING,
+        log=lambda m: None,
+    )
+    dispatch("covered-ground-distiller", _distill_step(), ctx, tmp_path)  # no raise
+
+    assert "covered_art" not in ctx
+    assert not (ep_dir / "covered.json").exists()
+
+
+def test_prepare_render_routes_distiller_to_covered_closure(tmp_path, monkeypatch):
+    """prepare_render dispatch routes 'covered-ground-distiller' → distiller
+    closure. Success path persists covered.json into the episode dir and sets
+    ctx['covered_art'].
+
+    Pre-impl: dispatch raises 'unknown agent for dispatch:
+    covered-ground-distiller' → RED. Green after Task B4-impl wires the branch.
+    """
+    monkeypatch.delenv("SPIKE_STORYBOARD_JSON", raising=False)
+    import lib.episode as ep_mod
+    from lib.wiring import prepare_render
+
+    cfg = _MagicMock()
+    cfg.ffmpeg.ffmpeg_bin = "ffmpeg"
+    cfg.ffmpeg.ffprobe_bin = "ffprobe"
+    cfg.media.provider = "minimax"
+    cfg.output_dir = str(tmp_path / "output")
+    cfg.budget.video_shots_per_episode = 2
+
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(_json_mod.dumps({"beats": [], "cards": {}}),
+                            encoding="utf-8")
+
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    monkeypatch.setattr(ep_mod, "make_scratch", lambda *a, **kw: scratch_dir)
+
+    bundle = prepare_render(
+        cfg,
+        fixture_path=fixture_path,
+        seq="001", slug="test",
+        dry=True, log=lambda m: None,
+        dispatch_persona_fn=_fake_distiller_persona(["心率区间像转速表"]),
+    )
+    dispatch = bundle["dispatch"]
+
+    ep_dir = tmp_path / "episodes" / "001-test"
+    ctx = {
+        "beats": _distiller_beats(),
+        "ep": {"final": ep_dir / "001-test.mp4"},
+    }
+    dispatch("covered-ground-distiller", _distill_step(), ctx, scratch_dir)
+
+    assert "covered_art" in ctx, (
+        "distiller dispatch must set ctx['covered_art'] via the distiller closure"
+    )
+    persisted = ep_dir / "covered.json"
+    assert persisted.exists(), "covered.json must be persisted into the episode dir"
+    got = _json_mod.loads(persisted.read_text(encoding="utf-8"))
+    assert got.get("anchors") == ["心率区间像转速表"]
+
+
+# ===========================================================================
+# Anti-homogenization plan — Task B5-tests: avoid-memo read + inject into
+# digest-writer. A pre-script CODE step (step_avoid_memo) writes
+# render_memo(load_store(output_dir), int(ctx['seq'])) into ctx['avoid_memo'];
+# make_script_dispatch appends it as a named section of the writer's
+# user_prompt.
+#
+# FAIL before Task B5-impl:
+#   - build_step_fns return dict has no 'avoid-memo' key (KeyError / None)
+#   - make_script_dispatch user_prompt lacks the covered-ground section
+# All green after Task B5-impl.
+#
+# MR-5 (critical): the make_script_dispatch injection tests MUST use a DOC-MODE
+# ctx (has 'fulltext', NO 'beats'). The fixture short-circuit (wiring.py ~1253
+# `if ctx.get("beats")`) returns BEFORE the user_prompt is built — a beats-
+# carrying ctx would make the spy see nothing = false-green.
+# ===========================================================================
+
+def _avoid_memo_step_fns(tmp_path, output_dir):
+    """Build step_fns wired with a REAL cfg.output_dir (so step_avoid_memo can
+    load a real store), returning (step_fns, cfg)."""
+    from lib.wiring import build_step_fns, MediaSeams
+
+    fixture_path = tmp_path / "avoid_fixture.json"
+    fixture_path.write_text(_json_mod.dumps({"beats": []}), encoding="utf-8")
+
+    selection = _types_mod.SimpleNamespace(
+        art_style="", style="", color_grade="", doc_refs=None,
+        character_ref="", seq="005", slug="test",
+        source="", verify_status="", learning_goal="", topic="",
+    )
+    cfg = _MagicMock()
+    cfg.output_dir = str(output_dir)
+    cfg.style = ""
+
+    seams = MediaSeams(dry=True, provider="minimax", log=lambda m: None)
+    router = MediaRouter(GenerateSource(seams), cfg=cfg)
+
+    step_fns = build_step_fns(
+        cfg, seams=seams, router=router, fixture_path=fixture_path,
+        seq="005", slug="test",
+        run_ff=lambda *a, **kw: None, probe_ms=lambda _p: 5000,
+        log=lambda m: None, selection=selection, dry=True,
+    )
+    return step_fns, cfg
+
+
+def test_step_avoid_memo_hot_store_nonempty(tmp_path):
+    """A hot store (an anchor used within the recent seq window) → non-empty
+    ctx['avoid_memo'] naming that anchor. int(ctx['seq']) is used — seq is a
+    zero-padded STRING ('005')."""
+    from lib import coveredground
+
+    out = tmp_path / "out"
+    out.mkdir()
+    store = {"anchors": {}}
+    coveredground.update_store(
+        store, ["心率像转速表"], "2026-07-01",
+        {"date": "2026-07-01", "seq": 4},
+    )
+    coveredground.write_store(str(out), store)
+
+    step_fns, _cfg = _avoid_memo_step_fns(tmp_path, out)
+    ctx = {"seq": "005"}
+    step_fns["avoid-memo"]({"name": "avoid-memo"}, ctx, tmp_path)
+
+    assert ctx["avoid_memo"], "hot store must produce a non-empty avoid_memo"
+    assert "心率像转速表" in ctx["avoid_memo"], ctx["avoid_memo"]
+
+
+def test_step_avoid_memo_empty_store_is_empty(tmp_path):
+    """No store file → load_store returns empty → render_memo '' → avoid_memo=''."""
+    out = tmp_path / "out"
+    out.mkdir()
+
+    step_fns, _cfg = _avoid_memo_step_fns(tmp_path, out)
+    ctx = {"seq": "005"}
+    step_fns["avoid-memo"]({"name": "avoid-memo"}, ctx, tmp_path)
+
+    assert ctx["avoid_memo"] == "", (
+        f"empty store must yield avoid_memo='', got {ctx['avoid_memo']!r}"
+    )
+
+
+def test_step_avoid_memo_store_raises_returns_empty(tmp_path, monkeypatch):
+    """load_store raising → step swallows → avoid_memo='' and no raise
+    (fail-soft)."""
+    import lib.coveredground as _cg
+
+    out = tmp_path / "out"
+    out.mkdir()
+    step_fns, _cfg = _avoid_memo_step_fns(tmp_path, out)
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("store read exploded")
+
+    monkeypatch.setattr(_cg, "load_store", _boom)
+
+    ctx = {"seq": "005"}
+    step_fns["avoid-memo"]({"name": "avoid-memo"}, ctx, tmp_path)  # no raise
+    assert ctx["avoid_memo"] == ""
+
+
+def _script_dispatch_capture(tmp_path, ctx):
+    """Dispatch make_script_dispatch against a DOC-MODE ctx with a spy persona
+    that captures the built user_prompt then stops (ok=False) — returns the
+    captured prompt."""
+    from lib.wiring import make_script_dispatch
+
+    captured = {}
+
+    def spy(agent, prompt, scratch_dir, expected, **kw):
+        captured["prompt"] = prompt
+        return {"ok": False, "reason": "stop-after-capture"}
+
+    cfg = _MagicMock()
+    cfg.host = None  # no fixed-host line
+
+    dispatch = make_script_dispatch(cfg, dispatch_persona_fn=spy, log=lambda m: None)
+    dispatch("digest-writer", {"name": "script"}, ctx, tmp_path)
+    return captured
+
+
+def test_make_script_dispatch_memo_inject_named_section(tmp_path):
+    """DOC MODE (fulltext, NO beats) → make_script_dispatch builds user_prompt
+    and appends the covered-ground avoid section carrying the memo text."""
+    ctx = {
+        "fulltext": "跑步教材原文……",
+        "avoid_memo": "- 心率像转速表（累计 3 次，最近 2026-07-01）",
+    }
+    captured = _script_dispatch_capture(tmp_path, ctx)
+
+    assert "prompt" in captured, (
+        "doc mode must reach dispatch_persona_fn — fixture short-circuit would "
+        "return before building user_prompt (false-green)"
+    )
+    prompt = captured["prompt"]
+    assert "## 反复用过的类比/例子/钩子——本期避让(covered-ground)" in prompt, prompt
+    assert "心率像转速表" in prompt, prompt
+
+
+def test_make_script_dispatch_memo_inject_empty_placeholder(tmp_path):
+    """Empty avoid_memo → the named section still appears with the placeholder
+    '(无 covered-ground 避让约束)'."""
+    ctx = {"fulltext": "跑步教材原文……", "avoid_memo": ""}
+    captured = _script_dispatch_capture(tmp_path, ctx)
+
+    assert "prompt" in captured
+    prompt = captured["prompt"]
+    assert "## 反复用过的类比/例子/钩子——本期避让(covered-ground)" in prompt, prompt
+    assert "(无 covered-ground 避让约束)" in prompt, prompt

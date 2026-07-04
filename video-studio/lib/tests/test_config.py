@@ -844,6 +844,43 @@ def test_library_section_accepts_pexels_binding(tmp_path):
     assert dict(cfg.library) == {"写实电影": "pexels"}
 
 
+# ---------------------------------------------------------------------------
+# Phase 6: "offline" library kind (local offline pool for anime/简笔日漫 style)
+# ---------------------------------------------------------------------------
+
+
+def test_valid_library_kinds_includes_offline():
+    from lib.config import VALID_LIBRARY_KINDS
+    assert "offline" in VALID_LIBRARY_KINDS
+
+
+def test_library_section_accepts_offline_binding(tmp_path):
+    """library: {简笔日漫: offline} is a legal binding (Phase 6 offline pool)."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    yaml_text += "library:\n  简笔日漫: offline\n"
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert dict(cfg.library) == {"简笔日漫": "offline"}
+
+
+def test_library_offline_binding_alongside_other_styles(tmp_path):
+    """Task 7: full load_config path (not just _validate_library) binds 简笔日漫
+    to "offline" even when other styles are also bound in the same config —
+    the anime offline-pool binding must resolve correctly as a workspace
+    override, not just in isolation."""
+    out = _make_out_dir(tmp_path)
+    cfg_path = tmp_path / "video-studio.yaml"
+    yaml_text = _minimal_yaml(out)
+    yaml_text += "library:\n  写实: stub\n  简笔日漫: offline\n"
+    _write_config(cfg_path, yaml_text)
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.library["简笔日漫"] == "offline"
+
+
 def test_budget_video_floor_exceeding_cap_raises(tmp_path):
     """R2 fix #3: floor > cap is contradictory (min > max) → ConfigError at load,
     not a silent cap violation at render time."""

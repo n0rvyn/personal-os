@@ -64,7 +64,7 @@ SYLLABUS_YAML = textwrap.dedent("""\
             source: Daniels
             verify_status: "✅"
             learning_goal: Read and use VDOT pace tables
-            status: pending
+            status: locked
       - name: Training Zones
         style: educational
         episodes:
@@ -73,13 +73,13 @@ SYLLABUS_YAML = textwrap.dedent("""\
             source: Daniels
             verify_status: "✅"
             learning_goal: Understand the seven training zones
-            status: pending
+            status: locked
           - title: Easy Run Zone
             doc_refs: ["03-training-zones.md#easy"]
             source: Daniels
             verify_status: "✅"
             learning_goal: Run in the easy zone
-            status: pending
+            status: locked
 """)
 
 # Cursor pointing at module_idx=0, episode_idx=1 (the first pending ep, "VDOT Pace Tables")

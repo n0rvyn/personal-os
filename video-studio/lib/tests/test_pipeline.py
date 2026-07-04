@@ -82,19 +82,21 @@ def test_load_pipeline_step_count():
     )
 
 
-def test_load_pipeline_step_count_17():
-    """Phase-3 query-writer plan: after inserting the query-writer agent step
-    (post-镜头计划, pre-gen-still), the pipeline must have exactly 17 stations
-    (16 Phase-1/2/3/4 steps + query-writer = 17).
+def test_load_pipeline_step_count_18():
+    """Anti-homogenization plan: after inserting the covered-ground steps the
+    pipeline grows from the 17 Phase-1/2/3/4 stations to 20:
+      - B4: `distill` agent step (post-script, pre-分镜) → 18
+      - B5: `avoid-memo` code step (pre-script) → 19
+      - B6: `covered-update` code step (post-distill) → 20
 
-    Pre-impl (Phase-3 Task 3-impl pending): returns 16 → FAILS (red).
-    Green after Task 3-impl inserts the query-writer step.
+    Green after Task B4/B5/B6-impl insert all three steps.
     """
     from lib.pipeline import load_pipeline
 
     steps = load_pipeline()
-    assert len(steps) == 17, (
-        f"expected 17 stations (Phase-3 query-writer inserted), got {len(steps)}"
+    assert len(steps) == 20, (
+        f"expected 20 stations (covered-ground distill + avoid-memo + "
+        f"covered-update inserted), got {len(steps)}"
     )
 
 
@@ -320,6 +322,58 @@ def test_query_writer_step_shape_is_agent_kind_non_gating():
     assert step["agent"] == "query-writer"
     assert step["artifact"] is None
     assert step["gate"] == []
+
+
+def test_distill_immediately_after_script_before_shotlist():
+    """'distill' (covered-ground 蒸馏器 agent step) must sit strictly between
+    'script' and '分镜': it distills the just-finalized台本 (script gate passed)
+    into covered.json before the director step runs. Adjacency to script is
+    intentional (the距离-1 insertion point per Task B4).
+
+    Pre-impl: 'distill' absent from the step table → ValueError from
+    _step_index → red. Green after Task B4-impl.
+    """
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    idx_script = _step_index(steps, "script")
+    idx_distill = _step_index(steps, "distill")
+    idx_shotlist = _step_index(steps, "分镜")
+
+    assert idx_distill == idx_script + 1, (
+        f"distill (idx {idx_distill}) must immediately follow script "
+        f"(idx {idx_script})"
+    )
+    assert idx_script < idx_distill < idx_shotlist, (
+        f"distill (idx {idx_distill}) must be between script (idx {idx_script}) "
+        f"and 分镜 (idx {idx_shotlist})"
+    )
+
+
+def test_distill_step_shape_is_agent_kind_non_gating():
+    """distill is an agent step but non-gating (fail-soft): agent=
+    covered-ground-distiller, inputs=['script','config'], artifact=None,
+    gate=[] — a distiller failure must never halt an already-rendered episode
+    (the closure swallows every failure, MR-5)."""
+    from lib.pipeline import load_pipeline
+
+    steps = load_pipeline()
+    idx_distill = _step_index(steps, "distill")
+    step = steps[idx_distill]
+    assert step["kind"] == "agent"
+    assert step["agent"] == "covered-ground-distiller"
+    assert step["inputs"] == ["script", "config"]
+    assert step["artifact"] is None
+    assert step["gate"] == []
+
+
+def test_distill_step_keeps_pipeline_valid():
+    """Inserting the distill step must not break validate_pipeline (non-empty
+    agent string, gate is a valid empty list)."""
+    from lib.pipeline import load_pipeline, validate_pipeline
+
+    steps = load_pipeline()
+    validate_pipeline(steps)  # must not raise
 
 
 def test_step_order_gen_still_before_subtitle():

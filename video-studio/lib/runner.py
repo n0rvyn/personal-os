@@ -249,7 +249,7 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
     syllabus_configured = bool(getattr(config, "syllabus_path", ""))
 
     if selection is None and syllabus_configured:
-        print("无 pending 期/大纲跑完", file=sys.stderr)
+        print("无 locked 期/未锁定/大纲跑完", file=sys.stderr)
         return 0
 
     # Determine seq/slug: from selection (syllabus mode) or CLI args (Phase-2 mode).

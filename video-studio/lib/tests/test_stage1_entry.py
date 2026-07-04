@@ -61,7 +61,7 @@ modules:
         source: Daniels
         verify_status: "✅"
         learning_goal: Read and use VDOT pace tables
-        status: pending
+        status: locked
   - name: Training Zones
     style: educational
     episodes:
@@ -70,7 +70,7 @@ modules:
         source: Daniels
         verify_status: "✅"
         learning_goal: Understand the seven training zones
-        status: pending
+        status: locked
 """
 
 CURSOR_YAML = """\

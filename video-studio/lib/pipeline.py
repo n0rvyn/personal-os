@@ -70,6 +70,20 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": None,
         "gate": None,
     },
+    # 3a2 — avoid-memo (anti-homogenization, B5): pure-code step that reads the
+    # cross-episode covered-ground store and writes the avoidance memo into
+    # ctx['avoid_memo'] BEFORE the writer runs, so make_script_dispatch can hand
+    # the writer "这些类比/例子/钩子最近用滥了，避开". Non-gating (artifact=None,
+    # gate=[] is falsy → runner skips gating); step_avoid_memo is fail-soft
+    # (store error → memo='').
+    {
+        "name": "avoid-memo",
+        "kind": "code",
+        "agent": None,
+        "inputs": ["config"],
+        "artifact": None,
+        "gate": [],
+    },
     # 3b — script: digest-writer → beats, gated by the 忠实门 (verify_anchors)
     # inside the dispatch closure. retry=1: a faithfulness miss re-dispatches the
     # writer once (runner re-runs THIS step on gate miss); double-miss → halt.
@@ -82,6 +96,35 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": "script_ledger",
         "gate": [{"fn": "check_artifact"}],
         "retry": 1,
+    },
+    # 3b2 — distill: covered-ground 蒸馏器 (anti-homogenization). Runs on the
+    # just-finalized台本 (script gate passed) to extract this episode's
+    # signature apparatus (类比/例子/钩子) into covered.json for the next
+    # episode's avoidance memo. Non-gating (artifact=None, gate=[]; gate=[] is
+    # falsy → runner skips gating, mirroring query-writer): a distiller failure
+    # must NEVER halt an already-rendered episode — the dispatch closure wraps
+    # its whole body in try/except (MR-5, runner does not wrap steps).
+    {
+        "name": "distill",
+        "kind": "agent",
+        "agent": "covered-ground-distiller",
+        "inputs": ["script", "config"],
+        "artifact": None,
+        "gate": [],
+    },
+    # 3b3 — covered-update (anti-homogenization, B6): pure-code station that
+    # folds the just-distilled covered.json anchors into the cross-episode
+    # store (<output_dir>/covered-ground.yaml), so the NEXT episode's avoid-memo
+    # sees them. Non-gating (artifact=None, gate=[]); update_covered_ground is
+    # fully fail-soft (whole body try/except → stderr) — a store write failure
+    # must never halt an already-rendered episode.
+    {
+        "name": "covered-update",
+        "kind": "code",
+        "agent": None,
+        "inputs": ["distill", "config"],
+        "artifact": None,
+        "gate": [],
     },
     # 3c — 分镜: director → shotlist.json, gated by check_artifact.
     # retry=1: bad JSON → no artifact → gate fail → re-dispatch director once;

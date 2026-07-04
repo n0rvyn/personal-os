@@ -1016,7 +1016,11 @@ def build_step_fns(
         end_clip = os.path.join(scratch_s, "clip_end.mp4")
         title_len = cards.TITLE_DUR + ffcmd.DISSOLVE_FADE
         end_len = cards.END_DUR + ffcmd.DISSOLVE_FADE
-        run_ff(ffcmd.still_card_cmd(title_bg, title_len, title_ass, title_clip, grade_vf), "card-title")
+        # Title card is STATIC (intensity=0.0): its background is a portrait of
+        # the host, and a full push-in (the default intensity=1.0) pans the face/
+        # body so the figure appears to "drift" inside the right panel — jarring.
+        # User: 起始画面不运镜. End card keeps the gentle default push-in.
+        run_ff(ffcmd.still_card_cmd(title_bg, title_len, title_ass, title_clip, grade_vf, intensity=0.0), "card-title")
         run_ff(ffcmd.still_card_cmd(end_bg, end_len, end_ass, end_clip, grade_vf), "card-end")
 
         sil_title = os.path.join(scratch_s, "card_sil_title.mp3")
@@ -1354,6 +1358,8 @@ def make_script_dispatch(
                 + (f"，欢迎来到{_ch}" if _ch else "")
                 + "」式问候，且问候必须和钩子合一（问候后立刻抛反差/悬念，不许干念"
                   "「今天我们讲 X」）；结尾最后一个 beat 用主播签名收尾（暖收束+一句留客），"
+                  "但结尾签名不要照搬开头的自我介绍原话（如「我是X，欢迎来到Y」），"
+                  "换一种收束说法，避免结尾听起来像开头那段又重播了一遍；"
                   "整期贯穿该口吻。\n"
             )
         user_prompt = (

@@ -951,16 +951,16 @@ def test_camera_intensity_threaded_to_filtergraph(tmp_path):
 
     Content stills apply a 0.85 intensity floor (flat-anime visibility fix), so
     threading must be proven with a value above it. clip_len=3.0, 推近 at
-    intensity=0.9 → rate 0.045/s, inc=0.045/30=0.001500,
-    cap=1.0+min(0.045*3,0.4)=1.135. Proves steps.py reads camera_intensity and passes it down."""
+    intensity=0.9 → rate 0.072/s, inc=0.072/30=0.002400,
+    cap=1.0+min(0.072*3,0.4)=1.216. Proves steps.py reads camera_intensity and passes it down."""
     shots = [{"prompt": "晨光跑道全景", "with_character": False,
               "camera_move": "推近", "camera_intensity": 0.9}]
     vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.001500" in vf and ",1.135)" in vf, (
-        f"camera_intensity=0.9 (above floor) must thread through (inc=0.001500 cap=1.135); got: {vf}"
+    assert "zoom+0.002400" in vf and ",1.216)" in vf, (
+        f"camera_intensity=0.9 (above floor) must thread through (inc=0.002400 cap=1.216); got: {vf}"
     )
 
 
@@ -968,30 +968,30 @@ def test_camera_intensity_floored_for_flat_anime(tmp_path):
     """A director intensity BELOW the 0.85 floor is raised to 0.85 so content
     stills always move visibly on flat cel-shaded art.
 
-    clip_len=3.0, 推近 at intensity=0.5 → floored to 0.85 → rate 0.0425/s,
-    inc=0.0425/30=0.001417, cap=1.0+min(0.0425*3,0.4)=1.1275."""
+    clip_len=3.0, 推近 at intensity=0.5 → floored to 0.85 → rate 0.068/s,
+    inc=0.068/30=0.002267, cap=1.0+min(0.068*3,0.4)=1.204."""
     shots = [{"prompt": "晨光跑道全景", "with_character": False,
               "camera_move": "推近", "camera_intensity": 0.5}]
     vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.001417" in vf and ",1.1275)" in vf, (
-        f"camera_intensity=0.5 must be floored to 0.85 (inc=0.001417 cap=1.1275); got: {vf}"
+    assert "zoom+0.002267" in vf and ",1.204)" in vf, (
+        f"camera_intensity=0.5 must be floored to 0.85 (inc=0.002267 cap=1.204); got: {vf}"
     )
 
 
 def test_absent_camera_intensity_defaults_to_1_0(tmp_path):
     """No camera_intensity on the shot → render uses 1.0 (current amounts).
 
-    clip_len=3.0, 推近 at default 1.0 → rate 0.05/s, inc=0.001667, cap=1.0+min(0.05*3,0.4)=1.15."""
+    clip_len=3.0, 推近 at default 1.0 → rate 0.08/s, inc=0.002667, cap=1.0+min(0.08*3,0.4)=1.24."""
     shots = [{"prompt": "晨光跑道全景", "with_character": False,
               "camera_move": "推近"}]  # NO camera_intensity
     vf_values = _capture_vf_args(tmp_path, shots, clip_len=3.0)
 
     assert vf_values, "step_render_shots_clip must call run_ff_fn with -vf"
     vf = vf_values[0]
-    assert "zoom+0.001667" in vf and ",1.15)" in vf, (
+    assert "zoom+0.002667" in vf and ",1.24)" in vf, (
         f"absent camera_intensity must default to 1.0 (full speed); got: {vf}"
     )
 

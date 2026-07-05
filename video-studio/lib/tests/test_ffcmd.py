@@ -525,12 +525,12 @@ def _zoompan_str(fg: str) -> str:
 
 def test_camera_move_推近_push_in_formula():
     """推近 must produce the push-in formula z=min(zoom+inc,cap). At _MOVE_DUR=4s the
-    cap is 1.2 (constant-speed travel 0.05*4=0.2), NOT the 1.4 ceiling — see
+    cap is 1.32 (constant-speed travel 0.08*4=0.32), NOT the 1.4 ceiling — see
     test_camera_move_zoom_ceiling_1_4 for the ceiling guard."""
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近")
     zp = _zoompan_str(fg)
     assert "z='min(zoom+" in zp, f"推近 must use min(zoom+inc,cap) z-expr: {zp}"
-    assert ",1.2)" in zp, f"推近 4s cap must be 1.2 (0.05*4 travel): {zp}"
+    assert ",1.32)" in zp, f"推近 4s cap must be 1.32 (0.08*4 travel): {zp}"
     assert f"d={_MOVE_FRAMES}" in zp, f"推近 duration must be d={_MOVE_FRAMES}: {zp}"
     assert "s=1920x1080:fps=30" in zp, f"推近 must keep s=1920x1080:fps=30: {zp}"
 
@@ -547,12 +547,12 @@ def test_camera_move_推近_explicit_equals_no_arg_default():
 # -- 拉远 (zoom-out) --
 
 def test_camera_move_拉远_zoom_out_to_1_0():
-    """拉远 must zoom out from cap → 1.0. At _MOVE_DUR=4s the start cap is 1.2
+    """拉远 must zoom out from cap → 1.0. At _MOVE_DUR=4s the start cap is 1.32
     (constant-speed travel), floor 1.0."""
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="拉远")
     zp = _zoompan_str(fg)
     assert "zoompan" in zp, f"拉远 must use zoompan: {fg}"
-    assert "1.2" in zp, f"拉远 z must start at the 4s cap 1.2: {zp}"
+    assert "1.32" in zp, f"拉远 z must start at the 4s cap 1.32: {zp}"
     assert "1.0" in zp or "max(" in zp, f"拉远 z must have 1.0 floor (zoom-out): {zp}"
     # Must NOT be a push-in expression
     assert "min(zoom+" not in zp, f"拉远 must NOT use push-in z-expr: {zp}"
@@ -658,7 +658,7 @@ def test_camera_move_illegal_falls_back_to_推近():
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="飞天")
     zp = _zoompan_str(fg)
     assert "z='min(zoom+" in zp, f"illegal move must fall back to 推近 z-expr: {zp}"
-    assert "1.2" in zp, f"illegal fallback must use 推近 max zoom 1.2: {zp}"
+    assert "1.32" in zp, f"illegal fallback must use 推近 max zoom 1.32: {zp}"
 
 
 def test_camera_move_empty_string_falls_back_to_推近():
@@ -714,20 +714,21 @@ def test_camera_move_zoom_ceiling_1_4():
 # ---------------------------------------------------------------------------
 
 # Reference strings from the constant-speed model at dur_s=3.0 (frames=90), intensity=1.0.
-# At 3.0s the zoom travels rate*dur = 0.05*3 = 0.15 (cap 1.15, below the 1.4 ceiling);
-# pan travels _PAN_RATE*dur = 96*3 = 288 px (below the 768/432 half-overscan caps).
+# 2026-07-05: _ZOOM_RATE 0.05→0.08, _PAN_RATE 96→140 (DP-002 speed-up).
+# At 3.0s the zoom travels rate*dur = 0.08*3 = 0.24 (cap 1.24, below the 1.4 ceiling);
+# pan travels _PAN_RATE*dur = 140*3 = 420 px (below the 768/432 half-overscan caps).
 _BC_DUR = 3.0
 _BC_PREFIX = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,scale=3840:-2,"
 _BC_EXPECTED = {
-    # rate=0.05; inc=rate/30=0.001667; cap=1.0+min(0.05*3,0.4)=1.15
-    "推近": _BC_PREFIX + "zoompan=z='min(zoom+0.001667,1.15)':d=90:s=1920x1080:fps=30",
-    # start=cap=1.15; dec=inc=0.001667; floor 1.0
-    "拉远": _BC_PREFIX + "zoompan=z='max(1.15-on*0.001667,1.0)':d=90:s=1920x1080:fps=30",
-    # z fixed at ceiling 1.4; step=_PAN_RATE/30=3.2; maxpan=min(96*3,768)=288
-    "横移": _BC_PREFIX + "zoompan=z='1.4':x='min(on*3.200000,288.000000)':y='(ih-ih/zoom)/2':d=90:s=1920x1080:fps=30",
-    # z fixed 1.4; step 3.2; maxpan=min(96*3,432)=288
-    "竖摇": _BC_PREFIX + "zoompan=z='1.4':x='(iw-iw/zoom)/2':y='min(on*3.200000,288.000000)':d=90:s=1920x1080:fps=30",
-    # 静止: constant gentle drift; inc=_STATIC_RATE/30=0.000117; cap=_STATIC_MAX=1.05; ignores intensity
+    # rate=0.08; inc=rate/30=0.002667; cap=1.0+min(0.08*3,0.4)=1.24
+    "推近": _BC_PREFIX + "zoompan=z='min(zoom+0.002667,1.24)':d=90:s=1920x1080:fps=30",
+    # start=cap=1.24; dec=inc=0.002667; floor 1.0
+    "拉远": _BC_PREFIX + "zoompan=z='max(1.24-on*0.002667,1.0)':d=90:s=1920x1080:fps=30",
+    # z fixed at ceiling 1.4; step=_PAN_RATE/30=4.666667; maxpan=min(140*3,768)=420
+    "横移": _BC_PREFIX + "zoompan=z='1.4':x='min(on*4.666667,420.000000)':y='(ih-ih/zoom)/2':d=90:s=1920x1080:fps=30",
+    # z fixed 1.4; step 4.666667; maxpan=min(140*3,432)=420
+    "竖摇": _BC_PREFIX + "zoompan=z='1.4':x='(iw-iw/zoom)/2':y='min(on*4.666667,420.000000)':d=90:s=1920x1080:fps=30",
+    # 静止: constant gentle drift; inc=_STATIC_RATE/30=0.000117; cap=_STATIC_MAX=1.05; ignores intensity (unaffected)
     "静止": _BC_PREFIX + "zoompan=z='min(zoom+0.000117,1.05)':d=90:s=1920x1080:fps=30",
 }
 
@@ -756,47 +757,47 @@ def test_intensity_explicit_1_0_is_byte_identical_for_all_moves():
 
 
 def test_intensity_push_in_cap_is_bare_not_padded():
-    """Discriminating check: the 推近 cap at 3.0s must serialize as bare '1.15'
-    (closing `,1.15)`), NOT '1.1500' — the exact regression a `:.4f` format would cause."""
+    """Discriminating check: the 推近 cap at 3.0s must serialize as bare '1.24'
+    (closing `,1.24)`), NOT '1.2400' — the exact regression a `:.4f` format would cause."""
     fg = _still_or_chart_filtergraph(_BC_DUR, camera_move="推近", intensity=1.0)
     zp = _zoompan_str(fg)
-    assert ",1.15)" in zp, f"推近 cap must be bare '1.15', got: {zp}"
-    assert "1.1500" not in zp, f"推近 cap must NOT be padded to 1.1500: {zp}"
+    assert ",1.24)" in zp, f"推近 cap must be bare '1.24', got: {zp}"
+    assert "1.2400" not in zp, f"推近 cap must NOT be padded to 1.2400: {zp}"
 
 
 def test_intensity_half_halves_push_in_delta():
-    """intensity=0.5 → 推近 cap halves to 1.1 (delta 0.2→0.1) and inc halves."""
+    """intensity=0.5 → 推近 cap halves to 1.16 (delta 0.32→0.16) and inc halves."""
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近", intensity=0.5)
     zp = _zoompan_str(fg)
-    # frames=120; delta=0.2*0.5=0.1; inc=0.1/120=0.000833; cap=1.1
-    assert "zoompan=z='min(zoom+0.000833,1.1)'" in zp, (
-        f"intensity=0.5 推近 must use inc=0.000833 cap=1.1: {zp}"
+    # frames=120; delta=0.32*0.5=0.16; inc=0.16/120=0.001333; cap=1.16
+    assert "zoompan=z='min(zoom+0.001333,1.16)'" in zp, (
+        f"intensity=0.5 推近 must use inc=0.001333 cap=1.16: {zp}"
     )
 
 
 def test_intensity_half_halves_pan_step():
-    """intensity=0.5 → 横移 pan-x SPEED halves (constant rate _PAN_RATE=96 px/s → step/frame 3.2→1.6)."""
+    """intensity=0.5 → 横移 pan-x SPEED halves (constant rate _PAN_RATE=140 px/s → step/frame 4.666667→2.333333)."""
     full = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移", intensity=1.0))
     half = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="横移", intensity=0.5))
-    # step/frame = _PAN_RATE*intensity/30: full=96/30=3.2 ; half=48/30=1.6 (wrapped in min(...,maxpan))
-    assert "on*3.200000" in full, f"intensity=1.0 横移 step must be 3.200000: {full}"
-    assert "on*1.600000" in half, f"intensity=0.5 横移 step must be 1.600000: {half}"
+    # step/frame = _PAN_RATE*intensity/30: full=140/30=4.666667 ; half=70/30=2.333333 (wrapped in min(...,maxpan))
+    assert "on*4.666667" in full, f"intensity=1.0 横移 step must be 4.666667: {full}"
+    assert "on*2.333333" in half, f"intensity=0.5 横移 step must be 2.333333: {half}"
 
 
 def test_intensity_half_halves_pan_y_step():
-    """intensity=0.5 → 竖摇 pan-y SPEED halves (constant rate → step/frame 3.2→1.6)."""
+    """intensity=0.5 → 竖摇 pan-y SPEED halves (constant rate → step/frame 4.666667→2.333333)."""
     half = _zoompan_str(_still_or_chart_filtergraph(_MOVE_DUR, camera_move="竖摇", intensity=0.5))
-    # step/frame = _PAN_RATE*0.5/30 = 48/30 = 1.6 (wrapped in min(...,maxpan))
-    assert "on*1.600000" in half, f"intensity=0.5 竖摇 step must be 1.600000: {half}"
+    # step/frame = _PAN_RATE*0.5/30 = 70/30 = 2.333333 (wrapped in min(...,maxpan))
+    assert "on*2.333333" in half, f"intensity=0.5 竖摇 step must be 2.333333: {half}"
 
 
 def test_intensity_0_3_push_in_cap_is_1_06():
-    """intensity=0.3 → 推近 cap = 1.0 + 0.2*0.3 = 1.06 (float noise rounded out)."""
+    """intensity=0.3 → 推近 cap = 1.0 + 0.32*0.3 = 1.096 (float noise rounded out)."""
     fg = _still_or_chart_filtergraph(_MOVE_DUR, camera_move="推近", intensity=0.3)
     zp = _zoompan_str(fg)
-    assert ",1.06)" in zp, f"intensity=0.3 推近 cap must be 1.06: {zp}"
-    # must NOT leak float noise like 1.0600000000000001
-    assert "1.0600" not in zp and "1.06000" not in zp, f"cap must be clean 1.06: {zp}"
+    assert ",1.096)" in zp, f"intensity=0.3 推近 cap must be 1.096: {zp}"
+    # must NOT leak float noise like 1.0960000000000001
+    assert "1.09600" not in zp, f"cap must be clean 1.096: {zp}"
 
 
 def test_intensity_clamp_above_1_treated_as_1():

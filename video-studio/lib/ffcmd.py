@@ -36,7 +36,8 @@ CAMERA_MOVES = ("推近", "拉远", "横移", "竖摇", "静止")
 # crawl and read as frozen). So the camera moves at a fixed RATE per second until it reaches
 # the ceiling, then holds; a long still keeps the same visible speed instead of slowing.
 # Tune the rate / ceiling here.
-_ZOOM_RATE = 0.05   # zoom units per second at intensity 1.0 (= 0.4 over 8s, the A/B "C" pick)
+# 2026-07-05 放开克制抬速度（用户主诉幅度过小）；_ZOOM_MAX/_PAN_MAX 不变（溢扫边界+test 断言）
+_ZOOM_RATE = 0.08   # zoom units per second at intensity 1.0
 _ZOOM_MAX = 1.4     # zoom ceiling for all moves (A/B "C")
 _ZOOM_MIN = 1.0     # floor / no-motion level
 # 静止: a gentle CONSTANT drift, no longer the near-frozen δ=0.02 hold.
@@ -45,7 +46,8 @@ _STATIC_MAX = 1.05
 # Pan: constant px/second on the pre-upscaled 3840-wide frame, capped at half the
 # ceiling-zoom overscan. At z=_ZOOM_MAX=1.4: overscan_x = 3840*0.4 = 1536 → half 768;
 # overscan_y = 2160*0.4 = 864 → half 432.  _PAN_RATE reaches that half-edge in 8s.
-_PAN_RATE = 96.0
+# 2026-07-05 放开克制抬速度（用户主诉幅度过小）；_ZOOM_MAX/_PAN_MAX 不变（溢扫边界+test 断言）
+_PAN_RATE = 140.0
 _PAN_MAX_X = 768.0
 _PAN_MAX_Y = 432.0
 

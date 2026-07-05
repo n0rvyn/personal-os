@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from lib import grade
+from lib.config import HostConfig
 from lib.media_source import GenerateSource, MediaRouter
 from lib.wiring import MediaSeams
 
@@ -2626,3 +2627,55 @@ def test_make_script_dispatch_memo_inject_empty_placeholder(tmp_path):
     prompt = captured["prompt"]
     assert "## 反复用过的类比/例子/钩子——本期避让(covered-ground)" in prompt, prompt
     assert "(无 covered-ground 避让约束)" in prompt, prompt
+
+
+def test_director_prompt_gender():
+    """Host with name+gender → director user_prompt names the host and gender,
+    so the director can match generic runner shots to the host (MR-2)."""
+    from lib.wiring import build_director_user_prompt
+
+    beats = [{"text": "第一段旁白"}, {"text": "第二段旁白"}]
+    host = HostConfig(name="卞旸", gender="女")
+
+    prompt = build_director_user_prompt(beats, host)
+
+    assert "卞旸" in prompt, prompt
+    assert "女" in prompt, prompt
+
+
+def test_director_prompt_no_host():
+    """Empty HostConfig() → no gender injection, prompt falls back to the
+    plain beats listing (backward compatible)."""
+    from lib.wiring import build_director_user_prompt
+
+    beats = [{"text": "第一段旁白"}, {"text": "第二段旁白"}]
+    host = HostConfig()
+
+    prompt = build_director_user_prompt(beats, host)
+
+    assert "女" not in prompt, prompt
+    assert "男" not in prompt, prompt
+    assert "1. 第一段旁白" in prompt, prompt
+    assert "2. 第二段旁白" in prompt, prompt
+
+
+def test_director_prompt_name_only():
+    """AD-2: name-only host (no gender) — gate is on gender, not name, so
+    other projects with a plain name-only host don't get a malformed '（）'
+    injection. Prompt must be byte-for-byte identical to the plain beats
+    listing."""
+    from lib.wiring import build_director_user_prompt
+
+    beats = [{"text": "第一段旁白"}, {"text": "第二段旁白"}]
+    host_named = HostConfig(name="张三", gender="")
+    host_empty = HostConfig()
+
+    prompt_named = build_director_user_prompt(beats, host_named)
+    prompt_empty = build_director_user_prompt(beats, host_empty)
+
+    # AD-2 intent: a name-only host injects NO gender clause, so the prompt is
+    # byte-identical to the no-host case. (The base template legitimately
+    # contains "（JSON数组）", so asserting "no （" would be wrong — the real
+    # check is "no gender-injection line" + byte-identical fallback.)
+    assert "主讲人物" not in prompt_named, prompt_named
+    assert prompt_named == prompt_empty

@@ -79,6 +79,7 @@ class HostConfig:
     name: str = ""       # e.g. "卞旸"
     channel: str = ""    # e.g. "跑者学堂"
     tone: str = ""       # e.g. "亲切"
+    gender: str = ""     # e.g. "女" — feeds director's generic-runner gender match (MR-2)
 
 
 @dataclass(frozen=True)
@@ -372,6 +373,7 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         name=str(host_raw.get("name", "")),
         channel=str(host_raw.get("channel", "")),
         tone=str(host_raw.get("tone", "")),
+        gender=str(host_raw.get("gender", "")),
     )
 
     # --- Phase 2: media-source layer style->kind binding (optional; empty = all-generate) ---

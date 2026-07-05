@@ -41,7 +41,7 @@ from lib import episode as episode_mod
 from lib import extract as extract_mod
 from lib import shotplan as shotplan_mod
 from lib import steps as steps_mod
-from lib.config import VideoStudioConfig
+from lib.config import HostConfig, VideoStudioConfig
 from lib.media_source import GenerateSource, MediaRouter
 from lib.budget import apply_video_budget, apply_video_floor
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
@@ -1453,6 +1453,28 @@ def apply_director_color_grade(ctx: dict, beats: list) -> None:
         ctx["grade_vf"] = grade.resolve_color_grade(cg)
 
 
+def build_director_user_prompt(beats: list, host: HostConfig) -> str:
+    """Build the director's live-dispatch user_prompt from beats (+ optional host).
+
+    When ``host.gender`` is set, prepend a line naming the host and gender so the
+    director can match generic (non-host) runner shots to the host's gender (MR-2).
+    Gate is on ``gender`` (not ``name``) — a name-only host (no gender configured)
+    falls back to the plain beats listing, byte-for-byte identical to no host at
+    all (AD-2: avoids a malformed "（）" injection and keeps other projects that
+    only set a host name unaffected).
+    """
+    beats_listing = "\n".join(
+        f"{i + 1}. {b.get('text', '')}" for i, b in enumerate(beats)
+    )
+    if host and getattr(host, "gender", ""):
+        gender_line = f"主讲人物：{host.name}（{host.gender}）；通用（非主讲）跑者镜头性别与主讲一致。\n\n"
+        return f"{gender_line}请为以下 {len(beats)} 段旁白逐段输出分镜方案（JSON数组），长度必须等于旁白段数({len(beats)})。\n\n{beats_listing}"
+    return (
+        f"请为以下 {len(beats)} 段旁白逐段输出分镜方案（JSON数组），"
+        f"长度必须等于旁白段数({len(beats)})。\n\n{beats_listing}"
+    )
+
+
 def make_storyboard_dispatch(
     cfg: VideoStudioConfig,
     *,
@@ -1528,13 +1550,7 @@ def make_storyboard_dispatch(
             return
 
         # --- (b) Live: beats lack visual_type (digest-writer output) ---
-        beats_listing = "\n".join(
-            f"{i + 1}. {b.get('text', '')}" for i, b in enumerate(beats)
-        )
-        user_prompt = (
-            f"请为以下 {len(beats)} 段旁白逐段输出分镜方案（JSON数组），"
-            f"长度必须等于旁白段数({len(beats)})。\n\n{beats_listing}"
-        )
+        user_prompt = build_director_user_prompt(beats, cfg.host)
         res = dispatch_persona_fn(
             "director", user_prompt, scratch_dir, "shotlist.json",
             plugin_root=plugin_root, model="sonnet",

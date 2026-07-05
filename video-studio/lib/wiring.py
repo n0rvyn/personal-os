@@ -994,7 +994,20 @@ def build_step_fns(
             # title/end card shows the actual host (not a generic runner). ref set
             # upstream by _ensure_ref_url; None-safe fallback keeps old no-lock behavior.
             card_ref = ctx.get("ref_url")
-            actual = seams.gen_still(prompt, card_ref, out)
+            try:
+                actual = seams.gen_still(prompt, card_ref, out)
+            except Exception as exc:  # noqa: BLE001 — a provider error (account overdue /
+                # content moderation / transient) on the card bg must NOT crash a fully
+                # rendered episode at the final assemble step. Fall back to the same neutral
+                # brand-color placeholder the per-shot gen-still path uses (steps.py:281-286)
+                # so the card still renders and the episode still produces final.mp4.
+                run_ff(
+                    ["-f", "lavfi", "-i", "color=c=0x1B2A38:s=1920x1080",
+                     "-frames:v", "1", out],
+                    "card-bg-placeholder",
+                )
+                log(f"[card] gen bg 失败({exc}) — 用中性占位图兜底，不中断整期")
+                return out
             log(f"[card] gen bg -> {actual} (ref={'locked' if card_ref else 'none'})")
             return actual
 

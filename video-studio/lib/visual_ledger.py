@@ -41,14 +41,28 @@ class VisualLedger:
 
     _FILENAME = "visual_ledger.json"
 
-    def __init__(self, episode_dir: str | Path, prior_dirs: Iterable[str | Path] = ()):
+    def __init__(
+        self,
+        episode_dir: str | Path,
+        prior_dirs: Iterable[str | Path] = (),
+        load_own: bool = True,
+    ):
         self.episode_dir = Path(episode_dir)
         self._seen: set[str] = set()
         self._ids: set[int] = set()
 
         # Load this episode's own already-recorded signatures (if any) —
         # supports round-tripping across separate pipeline runs.
-        self._load_dir(self.episode_dir)
+        #
+        # Task 5 (resume reproducibility): when resuming a durable-reuse
+        # render (shotlist stamp matched, ledger not yet re-derived this
+        # run), preloading this episode's OWN prior ledger poisons
+        # ``_derive_interim_prompt``'s seen-set — it derives a *different*
+        # interim prompt than the first render did, which makes the media
+        # cache key drift and miss. Callers doing a resume pass
+        # ``load_own=False`` to skip this self-load (prior_dirs still load).
+        if load_own:
+            self._load_dir(self.episode_dir)
 
         # Load every prior episode dir's visual_ledger.json (if present).
         for prior in prior_dirs:

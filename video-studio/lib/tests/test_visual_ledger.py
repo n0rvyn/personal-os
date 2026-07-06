@@ -216,6 +216,55 @@ def test_prior_dirs_ids_are_visible_to_seen_id(tmp_path):
     assert new_ledger.seen_id(1) is False
 
 
+# ---------------------------------------------------------------------------
+# Task 5: load_own=False (resume) — do not preload own episode's old ledger
+# ---------------------------------------------------------------------------
+
+
+def test_load_own_default_true_loads_own_ledger_resume(tmp_path):
+    ep_dir = tmp_path / "ep-resume-default"
+    ep_dir.mkdir()
+    s = sig("远景晨跑者剪影")
+    (ep_dir / "visual_ledger.json").write_text(
+        json.dumps({"signatures": [s]}), encoding="utf-8"
+    )
+
+    ledger = VisualLedger(ep_dir)
+    assert ledger.seen(s) is True
+
+
+def test_load_own_false_does_not_preload_self_ledger_resume(tmp_path):
+    ep_dir = tmp_path / "ep-resume-skip-own"
+    ep_dir.mkdir()
+    s = sig("远景晨跑者剪影")
+    (ep_dir / "visual_ledger.json").write_text(
+        json.dumps({"signatures": [s]}), encoding="utf-8"
+    )
+
+    ledger = VisualLedger(ep_dir, load_own=False)
+    assert ledger.seen(s) is False
+
+
+def test_load_own_false_still_loads_prior_dirs_resume(tmp_path):
+    old_dir = tmp_path / "ep-resume-old"
+    old_dir.mkdir()
+    s_old = sig("历史集已用过的镜头")
+    old_ledger = VisualLedger(old_dir)
+    old_ledger.record(s_old)
+    old_ledger.save()
+
+    ep_dir = tmp_path / "ep-resume-new"
+    ep_dir.mkdir()
+    s_own = sig("本集自身旧台账镜头")
+    (ep_dir / "visual_ledger.json").write_text(
+        json.dumps({"signatures": [s_own]}), encoding="utf-8"
+    )
+
+    ledger = VisualLedger(ep_dir, prior_dirs=[old_dir], load_own=False)
+    assert ledger.seen(s_own) is False
+    assert ledger.seen(s_old) is True
+
+
 def test_load_tolerates_missing_ids_key_backward_compat(tmp_path):
     # An old visual_ledger.json written before Phase 4 has no "ids" key —
     # loading it must not raise, and seen_id must simply report False.

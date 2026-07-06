@@ -47,6 +47,7 @@ from lib.budget import apply_video_budget, apply_video_floor
 from lib.ledger import LedgerError, validate_ledger, verify_anchors
 from lib.provenance import build_provenance, stamp_episode_provenance
 from lib.query_filter import sanitize_query
+from lib import render_stamp
 from lib.visual_ledger import VisualLedger, sig as visual_sig, _done_episode_dirs
 from lib.storyboard import parse_shotlist
 from lib.subtitle import build_ass, build_srt
@@ -431,6 +432,8 @@ def build_step_fns(
     log: Callable[[str], None],
     selection: Any = None,
     dry: bool = False,
+    resume: bool = False,
+    episode_target: bool = False,
 ) -> dict[str, Callable]:
     """Return {step_name: fn(step, ctx, scratch_dir)} for the Phase-2 pipeline.
 
@@ -494,6 +497,7 @@ def build_step_fns(
         ep_dir.mkdir(parents=True, exist_ok=True)
         ep["assets_dir"].mkdir(parents=True, exist_ok=True)
         ctx["ep"] = ep
+        ctx["_resume"] = resume
         ctx["scratch_dir"] = _sentinel(Path(scratch), "scratch_dir", str(ep_dir))
         log(f"[scratch] episode dir -> {ep_dir}")
 
@@ -514,6 +518,10 @@ def build_step_fns(
         _color_grade = (selection.color_grade if selection is not None else "") or ""
         seams.style_prefix = grade.resolve_art_style(_art_style)
         router.set_style(_style_name)
+        # Store the resolved art_style so the shotlist stamp (_shotlist_config_fields
+        # reads ctx["art_style"], design §Pillar A) actually invalidates on an
+        # art_style change — previously the field was unpopulated (always "").
+        ctx["art_style"] = _art_style
         ctx["grade_vf"] = grade.resolve_color_grade(_color_grade or None)
         log(f"[grade] art_style={_art_style!r}→{_style_name!r} color_grade={_color_grade!r}")
 
@@ -653,7 +661,11 @@ def build_step_fns(
         beats = ctx["beats"]
         sb = ctx.get("sb")
         ep_dir = ctx["ep"]["final"].parent
-        ledger = VisualLedger(ep_dir, prior_dirs=_done_episode_dirs(cfg, ctx))
+        ledger = VisualLedger(
+            ep_dir,
+            prior_dirs=_done_episode_dirs(cfg, ctx),
+            load_own=not ctx.get("_resume", False),
+        )
         windows: dict[int, list] = {}
         for i, beat in enumerate(beats):
             if beat["visual_type"] not in ("still", "multi"):
@@ -1152,6 +1164,10 @@ def build_step_fns(
             log("[publish] dry mode — skipping mark-done + cursor advance")
             return
 
+        if episode_target:
+            log("[publish] --episode 定向重渲 — cursor/status 不变")
+            return
+
         if not (getattr(cfg, "syllabus_path", "") and getattr(cfg, "cursor_path", "") and selection is not None):
             # Phase-2 / no-syllabus mode — preserve placeholder behaviour
             log("[publish] placeholder (Phase 7 wires real publish)")
@@ -1307,12 +1323,64 @@ def _beats_to_md(beats: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _stampable(value: Any) -> Any:
+    """Coerce a config/ctx field to a JSON-serializable stamp component.
+
+    Test doubles (bare `MagicMock()` configs used by unrelated existing
+    tests) auto-vivify unconfigured attributes as further MagicMock objects
+    rather than raising AttributeError, so a plain `getattr(cfg, "x", "")`
+    can still yield a non-JSON-serializable mock. Only primitives / None pass
+    through unchanged; anything else degrades to "" (treated like an unset
+    field — safe because a real VideoStudioConfig only ever carries
+    primitives here).
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return ""
+
+
+def _read_persona(plugin_root: Path, name: str) -> str:
+    """Read an agent persona file's text (for stamp fingerprinting). Missing
+    file → "" (treated as an empty/unstamped input, never a crash)."""
+    path = Path(plugin_root) / "agents" / f"{name}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _script_config_fields(cfg: VideoStudioConfig, ctx: dict) -> dict:
+    """Config/ctx fields the beats.json stamp must cover (Task 2/4 § Pillar A)."""
+    host = getattr(cfg, "host", None)
+    return {
+        "host_name": _stampable(getattr(host, "name", "")) or "",
+        "host_channel": _stampable(getattr(host, "channel", "")) or "",
+        "host_tone": _stampable(getattr(host, "tone", "")) or "",
+        "source": _stampable(ctx.get("source")) or "",
+        "verify_status": _stampable(ctx.get("verify_status")) or "",
+    }
+
+
+def _shotlist_config_fields(cfg: VideoStudioConfig, ctx: dict) -> dict:
+    """Config/ctx fields the shotlist.json stamp must cover (Task 2/4 § Pillar A)."""
+    host = getattr(cfg, "host", None)
+    budget = getattr(cfg, "budget", None)
+    return {
+        "host_gender": _stampable(getattr(host, "gender", "")) or "",
+        "art_style": _stampable(ctx.get("art_style")) or "",
+        "video_shots_per_episode": _stampable(getattr(budget, "video_shots_per_episode", None)),
+        "video_motion_threshold": _stampable(getattr(budget, "video_motion_threshold", None)),
+        "video_floor": _stampable(getattr(budget, "video_floor", None)),
+    }
+
+
 def make_script_dispatch(
     cfg: VideoStudioConfig,
     *,
     dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
     plugin_root: Path = PLUGIN_ROOT,
     log: Callable[[str], None] = lambda _m: None,
+    fresh: bool = False,
 ) -> Callable:
     """The `script` agent step's dispatch closure — host of the 忠实门.
 
@@ -1339,6 +1407,31 @@ def make_script_dispatch(
             ctx["script_ledger"] = ledger_art
             log("[script] fixture pass-through (beats already present)")
             return
+
+        # Durable-reuse: beats.json already on disk + stamp matches current
+        # upstream inputs (fulltext / persona text / config fields) → load it,
+        # skip the live digest-writer dispatch entirely (Task 4, A-layer).
+        ep = ctx.get("ep")
+        if not fresh and ep is not None and Path(ep["beats"]).exists():
+            persona_text = _read_persona(plugin_root, "digest-writer")
+            cfgfields = _script_config_fields(cfg, ctx)
+            want = render_stamp.beats_stamp(ctx.get("fulltext", ""), persona_text, cfgfields)
+            stamp_path = Path(str(ep["beats"]) + ".stamp")
+            if render_stamp.stamp_matches(stamp_path, want):
+                _data = json.loads(Path(ep["beats"]).read_text(encoding="utf-8"))
+                beats = _data["beats"]
+                ctx["beats"] = beats
+                # MF#2: restore authored card fields the live path would have set
+                # (persisted into beats.json above) so resumed cards match pass 1.
+                if _data.get("title_subtitle"):
+                    ctx["title_subtitle"] = _data["title_subtitle"]
+                if _data.get("end_card_bullets"):
+                    ctx["end_card_bullets"] = _data["end_card_bullets"]
+                with open(ledger_art, "w", encoding="utf-8") as f:
+                    json.dump({"beats": beats}, f, ensure_ascii=False)
+                ctx["script_ledger"] = ledger_art
+                log("[script] durable 复用 beats.json（stamp 匹配，跳过 digest-writer）")
+                return
 
         # PDF mode: hand the writer the literal fulltext (same object the gate
         # checks), dispatch, then run the 忠实门.
@@ -1446,9 +1539,21 @@ def make_script_dispatch(
         except (json.JSONDecodeError, OSError, KeyError):
             pass  # authored fields are optional; any read error → ctx stays empty
 
-        ep = ctx.get("ep")
         if ep is not None:
             ep["script"].write_text(_beats_to_md(beats), encoding="utf-8")
+            # MF#2: persist the authored card fields alongside beats so a durable
+            # resume restores them (they otherwise live only in the scratch digest
+            # JSON → resumed title/end cards would silently revert to defaults).
+            Path(ep["beats"]).write_text(
+                json.dumps({"beats": beats,
+                            "title_subtitle": ctx.get("title_subtitle", ""),
+                            "end_card_bullets": ctx.get("end_card_bullets")},
+                           ensure_ascii=False), encoding="utf-8"
+            )
+            persona_text = _read_persona(plugin_root, "digest-writer")
+            cfgfields = _script_config_fields(cfg, ctx)
+            want = render_stamp.beats_stamp(fulltext, persona_text, cfgfields)
+            render_stamp.write_stamp(Path(str(ep["beats"]) + ".stamp"), want)
         log(f"[script] {len(beats)} beats grounded → 忠实门 PASS")
 
     return dispatch
@@ -1464,6 +1569,38 @@ def apply_director_color_grade(ctx: dict, beats: list) -> None:
     cg = beats[0].get("color_grade") if beats else None
     if cg:
         ctx["grade_vf"] = grade.resolve_color_grade(cg)
+
+
+def _backprop_visual_fields(ctx: dict, items: list) -> None:
+    """Mirror the director's per-beat visual fields onto ``ctx["beats"]``.
+
+    The live storyboard path mutates each beat with visual_type / video_prompt /
+    chart / episode color_grade so downstream steps (step_shotplan reads
+    ``beat["visual_type"]``, step_gen_video reads ``beat["video_prompt"]``,
+    step_chart reads ``beat["chart"]``) find what they need on doc-mode beats
+    (which, unlike fixtures, don't hand-author these). The durable-reuse and
+    SPIKE reuse branches MUST perform the SAME back-prop from the persisted
+    shotlist ``items`` — otherwise a resumed run leaves beats without
+    visual_type and step_shotplan raises ``KeyError: 'visual_type'`` (the exact
+    doc-mode 崩溃续跑 path this feature exists for). Extracted here so the live
+    path and both reuse branches stay in lockstep.
+    """
+    beats = ctx["beats"]
+    for i, item in enumerate(items):
+        if i >= len(beats):
+            break
+        if "visual_type" in item:
+            beats[i]["visual_type"] = item["visual_type"]
+        if item.get("visual_type") == "video":
+            _shots = item.get("shots") or []
+            _vp = item.get("video_prompt") or (_shots[0].get("prompt", "") if _shots else "")
+            if _vp:
+                beats[i].setdefault("video_prompt", _vp)
+        if item.get("chart"):
+            beats[i]["chart"] = item["chart"]
+    if items and items[0].get("color_grade"):
+        beats[0]["color_grade"] = items[0]["color_grade"]
+    apply_director_color_grade(ctx, beats)
 
 
 def build_director_user_prompt(beats: list, host: HostConfig) -> str:
@@ -1494,6 +1631,7 @@ def make_storyboard_dispatch(
     dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
     plugin_root: Path = PLUGIN_ROOT,
     log: Callable[[str], None] = lambda _m: None,
+    fresh: bool = False,
 ) -> Callable:
     """The `分镜` agent step's dispatch closure — host of the 视频预算门.
 
@@ -1534,6 +1672,9 @@ def make_storyboard_dispatch(
                 )
             log(f"[storyboard] reusing {reuse_sb} "
                 f"({sum(len(e.get('shots', [])) for e in sb)} shots / {len(beats)} beats)")
+            # Same back-prop as durable/live: a doc-mode SPIKE reuse must also put
+            # visual_type/video_prompt/chart onto beats or step_shotplan crashes.
+            _backprop_visual_fields(ctx, sb)
             ctx["sb"] = sb
             if shotlist_path is not None:
                 shutil.copy(reuse_sb, str(shotlist_path))
@@ -1561,6 +1702,31 @@ def make_storyboard_dispatch(
             ctx["shotlist_art"] = _write_shotlist_art(minimal_sb, shotlist_path)
             # ctx["sb"] stays as-is (usually None); render uses beat-level prompts.
             return
+
+        # --- (a3) Durable-reuse: shotlist.json already on disk + stamp matches
+        # current upstream inputs (beats content / director persona text / config
+        # fields) → load it, skip the live director dispatch entirely (Task 4).
+        beats_json_text = json.dumps(beats, sort_keys=True, ensure_ascii=False)
+        persona_text = _read_persona(plugin_root, "director")
+        cfgfields = _shotlist_config_fields(cfg, ctx)
+        want = render_stamp.shotlist_stamp(beats_json_text, persona_text, cfgfields)
+        if not fresh and shotlist_path is not None and Path(shotlist_path).exists():
+            stamp_path = Path(str(shotlist_path) + ".stamp")
+            if render_stamp.stamp_matches(stamp_path, want):
+                sb = json.loads(Path(shotlist_path).read_text(encoding="utf-8"))
+                if len(sb) != len(beats):
+                    log(f"[storyboard] durable shotlist length mismatch "
+                        f"({len(sb)} vs {len(beats)} beats) → live re-dispatch")
+                else:
+                    # Mirror the live back-prop so resumed doc-mode beats carry
+                    # visual_type/video_prompt/chart/color_grade (else step_shotplan
+                    # raises KeyError 'visual_type'). Data is in the persisted sb.
+                    _backprop_visual_fields(ctx, sb)
+                    ctx["sb"] = [{"shots": item["shots"], "keywords": item["keywords"]}
+                                 for item in sb]
+                    ctx["shotlist_art"] = str(shotlist_path)
+                    log("[storyboard] durable 复用 shotlist.json（stamp 匹配，跳过导演）")
+                    return
 
         # --- (b) Live: beats lack visual_type (digest-writer output) ---
         user_prompt = build_director_user_prompt(beats, cfg.host)
@@ -1606,23 +1772,9 @@ def make_storyboard_dispatch(
         # a video_prompt (gen_video reads beat["video_prompt"]) from the director's
         # shot — doc-mode beats don't hand-author it like fixtures do.
         # For chart beats also carry the director's chart spec (type + params).
-        for i, item in enumerate(result):
-            ctx["beats"][i]["visual_type"] = item["visual_type"]
-            if item["visual_type"] == "video":
-                _shots = item.get("shots") or []
-                # Prefer an explicit video_prompt (e.g. the running shot apply_video_floor
-                # picked via _shot_score) over shots[0] — for a multi-shot beat the running
-                # shot may not be first, and gen_video reads beat["video_prompt"].
-                _vp = item.get("video_prompt") or (_shots[0].get("prompt", "") if _shots else "")
-                if _vp:
-                    ctx["beats"][i].setdefault("video_prompt", _vp)
-            if item.get("chart"):
-                ctx["beats"][i]["chart"] = item["chart"]
-
-        # Copy episode-level color_grade from director's first beat (DP-001=A).
-        if result and result[0].get("color_grade"):
-            ctx["beats"][0]["color_grade"] = result[0]["color_grade"]
-        apply_director_color_grade(ctx, ctx["beats"])
+        # Back-propagate visual_type / video_prompt / chart / color_grade onto
+        # ctx["beats"] (shared with the durable + SPIKE reuse branches).
+        _backprop_visual_fields(ctx, result)
 
         # Build ctx["sb"] (shots + keywords, 1:1 with beats)
         ctx["sb"] = [{"shots": item["shots"], "keywords": item["keywords"]}
@@ -1630,6 +1782,8 @@ def make_storyboard_dispatch(
 
         # Write shotlist deliverable and set the artifact key
         ctx["shotlist_art"] = _write_shotlist_art(result, shotlist_path)
+        if shotlist_path is not None:
+            render_stamp.write_stamp(Path(str(shotlist_path) + ".stamp"), want)
 
         n_video = sum(1 for b in ctx["beats"] if b.get("visual_type") == "video")
         log(
@@ -1865,25 +2019,50 @@ def prepare_render(
     log: Callable[[str], None],
     dispatch_persona_fn: Callable[..., Any] = dispatch_mod.dispatch_persona,
     selection: Any = None,
+    fresh: bool = False,
+    episode_target: bool = False,
 ) -> dict[str, Any]:
     """Build the {step_fns, gates, dispatch, scratch_dir} bundle the caller
     passes straight into `run_pipeline`. The caller owns the run_pipeline call
     (keeps this module off the runner's import path → no cycle).
+
+    `fresh` / `episode_target` (Task 7, resume/media-cache): `fresh=True`
+    bypasses both the durable A-layer (script/storyboard re-dispatch) and the
+    B-layer media cache (`CachingMediaSeams(fresh=True)`, forcing regeneration
+    even on a key hit). `episode_target=True` (the `--episode <seq>` CLI path)
+    is threaded through to `step_publish` so a directed re-render never
+    advances cursor/status (MR-1) — it is orthogonal to `fresh`.
     """
+    from lib import media_cache
+
     run_ff, probe_ms = make_ff_seams(cfg)
-    seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log,
-                       voice_id=getattr(cfg.audio, "voice_id", ""))
+    cache_dir = Path(cfg.output_dir) / "episodes" / f"{seq}-{slug}" / ".cache"
+    render_dims = (cfg.render.width, cfg.render.height)
+    shotlist_path = episode_mod.episode_paths(cfg.output_dir, seq, slug)["shotlist"]
+    # Resume detection for ledger skip-own (Task 5): sufficient to check the
+    # shotlist's presence — if the stamp later mismatches inside
+    # make_storyboard_dispatch, the shotlist re-dispatches and the windows
+    # change anyway, so a resume=True-but-stamp-miss is harmless (ADV per
+    # design doc — "宁可 True 也不误 False").
+    resume = (not fresh) and Path(shotlist_path).exists()
+
+    inner_seams = MediaSeams(dry=dry, provider=cfg.media.provider, log=log,
+                             voice_id=getattr(cfg.audio, "voice_id", ""))
+    seams = media_cache.wrap_seams(
+        inner_seams, cache_dir, render_dims=render_dims, fresh=fresh, log=log,
+    )
     router = MediaRouter(GenerateSource(seams), cfg=cfg, log=log)
     step_fns = build_step_fns(
         cfg, seams=seams, router=router, fixture_path=fixture_path, seq=seq, slug=slug,
         run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection, dry=dry,
+        resume=resume, episode_target=episode_target,
     )
     gates = {"check_artifact": episode_mod.check_artifact}
 
     script_dispatch = make_script_dispatch(
-        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
+        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log, fresh=fresh)
     storyboard_dispatch = make_storyboard_dispatch(
-        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
+        cfg, dispatch_persona_fn=dispatch_persona_fn, log=log, fresh=fresh)
     querywriter_dispatch = make_querywriter_dispatch(
         cfg, dispatch_persona_fn=dispatch_persona_fn, log=log)
     distiller_dispatch = make_distiller_dispatch(
@@ -1907,4 +2086,5 @@ def prepare_render(
         "gates": gates,
         "dispatch": dispatch,
         "scratch_dir": scratch,
+        "_seams": seams,
     }

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'">
+<title>video-studio 渲染 resume（媒体缓存）· 验收报告 · 2026-07-06</title>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--ink:#e6e8ec;--dim:#9aa3b2;--line:#2a2f3a;--ok:#3fb950;--bad:#f85149;--warn:#d29922;--accent:#58a6ff;--code:#11141a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px;}
+  h1{font-size:28px;margin:0 0 4px;}
+  .sub{color:var(--dim);margin-bottom:32px;}
+  h2{font-size:21px;margin:38px 0 12px;padding-top:18px;border-top:1px solid var(--line);}
+  h3{font-size:17px;margin:22px 0 8px;color:var(--accent);}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0;}
+  code{background:var(--code);padding:2px 6px;border-radius:4px;font:14px/1.5 "SF Mono",Menlo,monospace;color:#c9d1d9;}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font:13px/1.6 "SF Mono",Menlo,monospace;}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px;}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top;}
+  th{background:#212631;color:var(--dim);font-weight:600;}
+  .ok{color:var(--ok);} .bad{color:var(--bad);} .warn{color:var(--warn);} .dim{color:var(--dim);}
+  .pill{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12.5px;border:1px solid var(--line);}
+  .pill.ok{border-color:var(--ok);} .pill.bad{border-color:var(--bad);} .pill.warn{border-color:var(--warn);}
+  ul{margin:8px 0;padding-left:22px;} li{margin:5px 0;}
+  blockquote{margin:10px 0;padding:8px 16px;border-left:3px solid var(--accent);color:var(--dim);background:#161a21;}
+  details{margin:10px 0;} summary{cursor:pointer;color:var(--accent);}
+  .tag{font-size:12px;color:var(--dim);}
+  @media print{body{background:#fff;color:#000;} .card,pre,code{background:#f5f5f5;} .wrap{max-width:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>video-studio 渲染管线 resume（媒体缓存）</h1>
+  <div class="sub">2026-07-06 · personal-os / video-studio · self-pacing 自主执行验收</div>
+
+  <div class="card"><b>一句话结论：</b>崩溃/迭代重渲不再从零重付费的 resume 功能全部落地并验证——15 个任务、两层机制（钉死 prompt 源 + 媒体内容寻址缓存）+ 两条重渲路径，全套件 <b class="ok">986 passed / 3 skipped / 0 failed</b>；执行中经两轮独立审计各抓出真 bug（先是 2 个测试 bug，再是 2 个 doc 模式 must-fix），全部修复且复审确认闭合。<span class="pill warn">未提交（按约定等你说 commit）</span> <span class="pill warn">付费 LIVE 双跑验证由你择时</span></div>
+
+  <h2>背景 · 要解决什么</h2>
+  <p>M区 LIVE 渲染在<b>最后一步</b>因豆包欠费 403 崩溃，丢掉 6 个 S2V 视频（各 ~108900 tokens）+ ~50 张图 + 40 分钟。根子：每次渲染开一个带时间戳的新 scratch 目录，跑成功就删、崩了留着但<b>下次重跑又开全新的、根本不看上次那个</b>——已付费媒体成了孤儿。目标：崩溃续跑 + 改几个 beat 增量重渲，都复用已生成的贵付费媒体。</p>
+
+  <h2>交付了什么（What shipped）</h2>
+  <p>核心判断（brainstorm 挖出，是本次架构的关键）：<b>光缓存媒体不够</b>——分镜/脚本是 LLM 现生成、每次 prompt 都变，按 prompt 当缓存键会全 miss。所以是<b>两层</b>：</p>
+  <table>
+    <tr><th>层</th><th>做了什么</th><th>关键文件</th></tr>
+    <tr><td><b>A 层</b><br>钉死 prompt 源</td><td>脚本 <code>beats.json</code> + 分镜 <code>shotlist.json</code> durable 存盘、默认复用；各带 <code>.stamp</code> 输入指纹（教材原文 + persona + 相关 config），上游一变自动重掷那层（改 <code>director.md</code> 免 <code>--fresh</code> 自动生效）</td><td><code>render_stamp.py</code>（新）<br><code>wiring.py</code></td></tr>
+    <tr><td><b>B 层</b><br>媒体内容寻址缓存</td><td><code>CachingMediaSeams</code> 在 <code>prepare_render</code> 单点包住 4 个付费口；键 = <code>sha256(provider + 端点 + style_prefix + prompt + sha256(ref) + 尺寸/voice_id)</code>；只存原始付费素材、ffmpeg 中间片不存；原子写 + 命中前 size 校验防截断</td><td><code>media_cache.py</code>（新）<br><code>wiring.py</code></td></tr>
+    <tr><td>ledger 复现修复</td><td><code>VisualLedger</code> 加 <code>load_own</code> 开关：resume 时不预载自身旧台账，否则 <code>_derive_interim_prompt</code> 按旧 seen 集派生出不同 prompt → 缓存 miss</td><td><code>visual_ledger.py</code></td></tr>
+    <tr><td>两条重渲路径 + CLI</td><td>崩溃续跑走正常 cursor 命令（自动，崩溃集仍 locked）；定向迭代 <code>--episode &lt;seq&gt;</code>（绕 cursor+status，后端 <code>select_by_seq</code>）；<code>--fresh</code> 强制全新；<code>--clean-cache</code> 腾空</td><td><code>syllabus.py</code><br><code>runner.py</code></td></tr>
+  </table>
+
+  <h2>过程 · 15 任务 + 两轮抓 bug</h2>
+  <p>用 self-pacing 自主执行器分两段跑（batch 0 → batches 1-3），plan-verifier 事前 2 轮修订（抓 3 个纯 UT 会漏的集成 blocker：<code>--episode</code> 误推进 cursor、<code>seams</code> 撞 keyword-only <code>run_pipeline</code>、wrapper 丢 late-bind <code>style_prefix</code> 写）。执行后两轮独立审计各抓出真问题：</p>
+
+  <h3>第 1 轮 — 段末测试失败（2 个，都是测试 bug，实现是对的）</h3>
+  <table>
+    <tr><th>症状</th><th>真因</th><th>修法</th></tr>
+    <tr><td><code>test_shotplan</code> resume 断言挂</td><td>测试第 207 行记<b>原始 prompt</b>，生产记 <code>visual_sig(...)</code>（哈希），派生查的也是哈希 → 毒化 seen 集对不上、毒化没触发</td><td>测试改记 <code>visual_sig()</code></td></tr>
+    <tr><td>7 个 e2e "失败"</td><td class="warn">并非隔离/实现 bug——是我自己<b>同时跑了多个真 ffmpeg 重进程互相抢资源</b>。串行干净跑时 7 过 1 挂</td><td>诊断澄清；那 1 挂见下</td></tr>
+    <tr><td>e2e SPIKE 测试挂</td><td>测试自己的 helper <code>_run_once</code> 无条件 <code>delenv("SPIKE_STORYBOARD_JSON")</code>——把测试刚 <code>setenv</code> 的钩子删了，SPIKE 分支永不触发（wiring 分支顺序本来就对）</td><td>helper 加 <code>keep_env</code> 参数</td></tr>
+  </table>
+
+  <h3>第 2 轮 — implementation-reviewer 抓出 2 个 doc 模式 must-fix（真 bug，fixture-only e2e 照不到）</h3>
+  <p>根因同一类：<b>A 层"复用"分支只还原主产物，丢了 live 分支对 <code>ctx</code> 做的副作用</b>；而 e2e 只跑 fixture 模式（走 pass-through 分支），所以 986 绿是假绿。</p>
+  <table>
+    <tr><th>#</th><th>问题</th><th>后果</th><th>修法</th></tr>
+    <tr><td class="bad">MF#1</td><td>分镜 durable/SPIKE 复用没把 <code>visual_type</code>/<code>video_prompt</code>/<code>chart</code>/<code>color_grade</code> 回填到 <code>ctx["beats"]</code></td><td><b>doc 模式续跑直接崩</b>（<code>step_shotplan</code> 读 <code>beat["visual_type"]</code> → KeyError）——正是功能存在的核心场景</td><td>抽共享 <code>_backprop_visual_fields()</code>，live + durable + SPIKE 三分支统一调</td></tr>
+    <tr><td class="bad">MF#2</td><td>脚本 durable 复用丢了作者写的 <code>title_subtitle</code>/<code>end_card_bullets</code>（只在 scratch digest JSON）</td><td>续跑标题卡丢副标题、尾卡退回默认要点（破坏逐字节一致续跑）</td><td><code>beats.json</code> 一并存这俩字段、复用分支还原</td></tr>
+    <tr><td class="warn">nice</td><td><code>art_style</code> 指纹字段是死的（<code>ctx["art_style"]</code> 从没被设）</td><td>零实际影响（B 层 style_prefix 已兜住）</td><td><code>step_extract</code> 补 <code>ctx["art_style"]</code></td></tr>
+  </table>
+  <p><b>堵根</b>：加了 3 条 doc 模式续跑测试（beats 不带 visual_type、驱动两条复用分支），直接断言复用后 beats 带回 visual_type/video_prompt/chart + 卡片字段还原——正是修复前缺失、会挂的行为。</p>
+
+  <h2>决策记录（架构层，4 项已定）</h2>
+  <table>
+    <tr><th>决策</th><th>选择</th><th>依据</th></tr>
+    <tr><td>复用姿态</td><td>默认复用，<code>--fresh</code> 强制全新</td><td>正常渲下一集缓存空、天然不受影响；复用只在重跑同集时触发（正是想省钱的场景）</td></tr>
+    <tr><td>上游失效</td><td>输入指纹 stamp 自动失效</td><td>改 persona/config 重渲免记 <code>--fresh</code>，否则静默拿旧分镜</td></tr>
+    <tr><td>缓存深度</td><td>只存原始付费素材，不存 ffmpeg 中间片</td><td>40 分钟痛 ~95% 是付费素材；ffmpeg 重跑几分钟免费；让运镜/调色免费微调不触发重付</td></tr>
+    <tr><td>重渲触发</td><td>崩溃续跑走 cursor（自动）；定向加 <code>--episode</code></td><td>选择机制 ⊥ 缓存机制（Make/Bazel 通行做法）；<code>select_next</code> 够不到 done/cursor 后方的集</td></tr>
+  </table>
+
+  <h2>验证门</h2>
+  <table>
+    <tr><th>检查</th><th>状态</th><th>证据</th></tr>
+    <tr><td>非 e2e 全套件</td><td><span class="pill ok">✅ 通过</span></td><td>978 passed / 3 skipped / 0 failed（16s）</td></tr>
+    <tr><td>e2e（8 条真 ffmpeg，counting-fake seam）</td><td><span class="pill ok">✅ 通过</span></td><td>8 passed（1373s / 23min，串行干净跑）</td></tr>
+    <tr><td>合计</td><td><span class="pill ok">✅ 986 / 3 skip / 0 fail</span></td><td>—</td></tr>
+    <tr><td>行为断言 UX-001..011</td><td><span class="pill ok">✅ 绿</span></td><td>e2e 覆盖 001/003/004/005/006/007/010 + ADV-2 分支序守卫</td></tr>
+    <tr><td>实现审计（plan-vs-code）</td><td><span class="pill ok">✅ must-fix 全闭合</span></td><td>2 轮 implementation-reviewer；复审 byte-equivalence 对照 <code>git show HEAD</code>、证新测试修复前会挂</td></tr>
+    <tr><td>付费 LIVE 双跑（第二次 provider 零调用）</td><td><span class="pill warn">待填 / 用户择时</span></td><td>自动化测试用 fake seam、不花钱；真渲付费由你触发</td></tr>
+  </table>
+
+  <h2>遗留 / 建议（非阻塞）</h2>
+  <ul>
+    <li><b>慢 e2e 剥离</b>：8 条 e2e 每条 ~5min 真 ffmpeg（BGM 校准多轮重编码），整文件 ~23min。建议打 <code>@pytest.mark.slow</code>、默认套件跳过、单独跑。（分辨率不是瓶颈，实测过 256×144 ≈ 640×360。）</li>
+    <li><b>全链 doc 模式 e2e</b>：MF#1/#2 的闭合是单测 + 结构性证明（visual_type 回到 beats + grep 确认 step_shotplan 从 beats 读）。缺一个真 doc 模式续跑的端到端集成测试（需教材快照抽取机器），可与上一条一起做。</li>
+    <li><b>付费 LIVE 双跑验证</b>：季1 某集真渲两次，看第二次 provider 调用数为 0。用户已了解付费，择时触发。</li>
+    <li><b>art_style 指纹</b>：已接上（原为死字段），功能上零变化，B 层早已兜住。</li>
+  </ul>
+
+  <div class="card"><span class="tag">来源：<code>.claude/self-pacing/resume-media-cache.md</code>（run log）· 计划 <code>docs/06-plans/2026-07-06-video-studio-resume-media-cache-plan.md</code> · 设计 <code>...-design.md</code>。改动未提交，按约定等指令。</span></div>
+
+</div>
+</body>
+</html>

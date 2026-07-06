@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.28.0"
+    "version": "0.29.0"
   },
   "plugins": [
     {
@@ -167,7 +167,7 @@
       "name": "video-studio",
       "source": "./video-studio",
       "description": "教材 PDF → 结构化视频专栏 一键成片流水线（/video-plan 大纲规划 + /video-make 出片；ffmpeg 引擎 + Doubao(默认)/MiniMax 双 provider 图/视频/语音；忠实门 + 分镜判官预算治理；需 libass ffmpeg 静态构建）",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "media",
       "tags": [
         "video",

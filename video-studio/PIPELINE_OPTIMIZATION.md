@@ -186,4 +186,28 @@
 - **分镜模型**：用户关掉 sonnet→M3 代理后 `--model sonnet`=**真 Sonnet**(强、扣题)。真 Sonnet 经 `claude -p` 是完整 agent、偶尔editorialize(做审计/提权限)→ prompt 加硬约束"只吐JSON不用工具不写文件"治。**⛔ 永不提换直连 API**——这是 CC 插件，dispatch 必走 `claude -p`（用户 6/29 强烈强调）。
 - **运镜（camera movement）= 新维度、未做**：现每张图同一个居中慢推 Ken Burns，无拉远/横移/竖摇/内容匹配。用户已点名，next 候选（但要先有好构图，运镜救不了糊脸）。
 
-_相关文档：`SPIKE_FINDINGS.md`（API 契约 + 环境硬事实）。_
+## Resume / 媒体缓存（2026-07-06 并入）
+
+崩溃或改 prompt 重渲时复用已生成的贵付费媒体（S2V/静图/TTS/人物图/卡片背景），不从零重付。两层机制：
+
+- **A 层（钉死 prompt 源）**：脚本 `beats.json` + 分镜 `shotlist.json` durable 存盘（`episodes/{seq}-{slug}/` 下）、默认复用；各带 `.stamp` 输入指纹（教材原文/persona/config 摘要）。上游任一变 → 指纹不匹配 → 自动重掷那层，不用记 `--fresh`。
+- **B 层（媒体内容寻址缓存）**：`lib/media_cache.py` 的 `CachingMediaSeams` 在 `prepare_render` 单点包住 `MediaSeams`，4 个付费口（gen_still/gen_video/synth/gen_character_ref）按 `sha256(provider+端点+style_prefix+prompt+hash(ref)+render_dims/voice_id)` 查缓存，命中即复用（原子写、命中前 size>0 校验）。缓存目录：`episodes/{seq}-{slug}/.cache/`。
+- **ledger 复现修复**：`VisualLedger` 在 resume 时不预载自身旧台账（`load_own=False`），否则 `_derive_interim_prompt` 按旧 seen 集派生出不同 interim prompt → 媒体 key 漂移 → miss。
+
+**两条重渲路径**：
+1. **崩溃续跑**：原样重跑正常 cursor 命令（`python -m lib.runner --config ...`，不加旗标）——自动复用 A 层 + B 层，只补失败步。
+2. **定向迭代**：改了某集的 `shotlist.json`（或想强制重渲某一集，哪怕它已 `done`、在 cursor 后方）→ 加 `--episode <seq>`。该模式**不推进 cursor / 不改 syllabus status**，只重生成改动的镜头。
+
+**Flag 表**：
+
+| Flag | 作用 |
+|---|---|
+| `--fresh` | 全新渲染，忽略 A 层 + B 层缓存 |
+| `--episode <seq>` | 定向重渲指定集（无视 cursor/status），不推进 cursor |
+| `--clean-cache` | 清空目标集的 `.cache/` 目录后退出，不进渲染 |
+
+跑完打印 `[cache] 命中 N / 未命中 M` 汇总。
+
+**Known limitation**：定向重渲若发生在「之后又渲了多集」之后，`prior_dirs`（已完成集目录）变大 → 派生 interim 窗口的 seen 集变 → 那些**派生窗口**（非导演给定的 shot）可能 miss 重付；导演给定的 shot（来自 shotlist）不受影响、照常命中。要求完全一致可加 `--fresh`。
+
+_相关文档：`SPIKE_FINDINGS.md`（API 契约 + 环境硬事实）；`docs/06-plans/2026-07-06-video-studio-resume-media-cache-design.md`（设计）。_

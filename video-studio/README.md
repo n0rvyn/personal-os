@@ -68,6 +68,19 @@ python -m lib.runner --config ~/.video-studio/config.yaml
 
 Internally: preflight libass check → `select_next` (reads cursor + syllabus) → `prepare_render` (digest-writer script + 忠实门 + director storyboard + 分镜判官 budget gate + camera movements) → `run_pipeline` (media gen + ffmpeg composite) → `episodes/{seq}-{slug}/{seq}-{slug}.mp4` + provenance.
 
+### Resume / media cache
+
+Crash recovery and targeted re-renders reuse already-paid-for media (S2V/stills/TTS/character refs) instead of regenerating from scratch. Cache lives at `episodes/{seq}-{slug}/.cache/`.
+
+```bash
+python -m lib.runner --config ~/.video-studio/config.yaml            # normal cursor run — auto-resumes from durable/cached artifacts on rerun
+python -m lib.runner --config ~/.video-studio/config.yaml --episode 003   # re-render episode 003 only (doesn't advance cursor/status)
+python -m lib.runner --config ~/.video-studio/config.yaml --fresh         # ignore all caches, render from zero
+python -m lib.runner --config ~/.video-studio/config.yaml --episode 003 --clean-cache  # wipe episode 003's cache and exit
+```
+
+Editing `director.md`/persona/config auto-invalidates the script/storyboard stamps and re-dispatches the LLM; media cache keys are unaffected unless the prompt itself changed. See `PIPELINE_OPTIMIZATION.md` § Resume / 媒体缓存 for the full mechanism.
+
 ## Provider switch (Doubao / MiniMax)
 
 Set `MEDIA_PROVIDER=doubao` (default) or `MEDIA_PROVIDER=minimax` in your shell, or set `media.provider` in config.

@@ -461,6 +461,40 @@ class Selection:
 # ---------------------------------------------------------------------------
 
 
+def _build_selection(
+    syllabus: Syllabus, episode: Episode, seq: str, slug: str, module: Module
+) -> Selection:
+    """Construct a Selection for *episode* (owned by *module*) in *syllabus*.
+
+    Shared by select_next and select_by_seq so both produce field-identical
+    Selections for the same episode (no field drift between the two entry
+    points).
+    """
+    # Derive the owning season's name via object identity (the given module is
+    # a live reference into a season's module list).
+    season_name = ""
+    for season in syllabus.seasons:
+        if any(m is module for m in season.modules):
+            season_name = season.name
+            break
+    return Selection(
+        episode=episode,
+        seq=seq,
+        slug=slug,
+        doc_refs=episode.doc_refs,
+        source=episode.source,
+        verify_status=episode.verify_status,
+        learning_goal=episode.learning_goal,
+        topic=episode.title,
+        character_ref=(module.character_ref or syllabus.character_ref),
+        style=module.style,
+        art_style=module.art_style,
+        color_grade=syllabus.color_grade,
+        module_name=module.name,
+        season_name=season_name,
+    )
+
+
 def select_next(cfg: Any) -> Optional[Selection]:
     """Return the next pending episode as a Selection, or None.
 
@@ -485,29 +519,37 @@ def select_next(cfg: Any) -> Optional[Selection]:
         return None
 
     episode, seq, slug, module = result
-    # Derive the owning season's name via object identity (the returned module is
-    # a live reference into a season's module list).
-    season_name = ""
+    return _build_selection(syllabus, episode, seq, slug, module)
+
+
+def select_by_seq(cfg: Any, seq: str) -> Optional[Selection]:
+    """Return the episode matching global *seq* as a Selection, or None.
+
+    Unlike select_next, this scans the ENTIRE outline (all seasons/modules/
+    episodes) regardless of cursor position or episode status — it can reach
+    a `done` episode, a `pending` draft, or an episode behind or ahead of the
+    cursor. Read-only: never mutates cursor.yaml or syllabus.yaml.
+
+    Returns None when *seq* does not match any episode in the outline.
+    """
+    syllabus_path = getattr(cfg, "syllabus_path", "")
+    cursor_path = getattr(cfg, "cursor_path", "")
+
+    if not syllabus_path or not cursor_path:
+        return None
+
+    syllabus = load_syllabus(Path(syllabus_path))
+
+    flat_m = 0
     for season in syllabus.seasons:
-        if any(m is module for m in season.modules):
-            season_name = season.name
-            break
-    return Selection(
-        episode=episode,
-        seq=seq,
-        slug=slug,
-        doc_refs=episode.doc_refs,
-        source=episode.source,
-        verify_status=episode.verify_status,
-        learning_goal=episode.learning_goal,
-        topic=episode.title,
-        character_ref=(module.character_ref or syllabus.character_ref),
-        style=module.style,
-        art_style=module.art_style,
-        color_grade=syllabus.color_grade,
-        module_name=module.name,
-        season_name=season_name,
-    )
+        for module in season.modules:
+            for e_i, episode in enumerate(module.episodes):
+                candidate_seq, candidate_slug = derive_seq_slug(syllabus, flat_m, e_i)
+                if candidate_seq == seq:
+                    return _build_selection(syllabus, episode, candidate_seq, candidate_slug, module)
+            flat_m += 1
+
+    return None
 
 
 # ---------------------------------------------------------------------------

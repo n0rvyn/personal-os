@@ -210,6 +210,12 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
     parser.add_argument("--slug", default="ep", help="Episode slug (default: ep)")
     parser.add_argument("--dry", action="store_true",
                         help="Dry render: copy cached .spike media seams ($0), real ffmpeg")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Bypass durable script/storyboard reuse + the media cache — regenerate everything")
+    parser.add_argument("--episode", default=None,
+                        help="定向重渲某一集（按 seq，无视 cursor/status）；不推进 cursor/status")
+    parser.add_argument("--clean-cache", action="store_true",
+                        help="清空目标集的媒体缓存目录后退出（不渲染）")
     args = parser.parse_args(argv)
 
     from lib.config import load_config, ConfigError, ConfigNotFound
@@ -244,17 +250,34 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
 
     # Phase 6: Stage-1 entry — select next pending episode from syllabus (if configured).
     # Must run BEFORE prepare_render so seq/slug are closure-bound with the right values.
-    from lib.syllabus import select_next
-    selection = select_next(config)
+    # Task 7: `--episode <seq>` (episode_target=True) takes priority over the normal
+    # cursor-driven select_next — it scans the WHOLE outline regardless of cursor/status
+    # (lib.syllabus.select_by_seq) so the user can point-rerender a done/locked episode.
+    from lib.syllabus import select_next, select_by_seq
+    episode_target = args.episode is not None
+    if episode_target:
+        selection = select_by_seq(config, args.episode)
+        if selection is None:
+            print(f"error: --episode {args.episode} 在大纲中找不到", file=sys.stderr)
+            return 1
+    else:
+        selection = select_next(config)
     syllabus_configured = bool(getattr(config, "syllabus_path", ""))
 
-    if selection is None and syllabus_configured:
+    if selection is None and syllabus_configured and not episode_target:
         print("无 locked 期/未锁定/大纲跑完", file=sys.stderr)
         return 0
 
     # Determine seq/slug: from selection (syllabus mode) or CLI args (Phase-2 mode).
     ep_seq = selection.seq if selection is not None else args.seq
     ep_slug = selection.slug if selection is not None else args.slug
+
+    if args.clean_cache:
+        from lib import media_cache
+        cache_dir = Path(config.output_dir) / "episodes" / f"{ep_seq}-{ep_slug}" / ".cache"
+        media_cache.clean_cache(cache_dir)
+        print(f"[cache] 清理 {cache_dir}")
+        return 0
 
     fixture_path = Path(args.fixture)
     if not fixture_path.is_absolute():
@@ -274,10 +297,17 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
 
     if selection is not None:
         bundle = prepare_fn(config, fixture_path=fixture_path, seq=ep_seq,
-                            slug=ep_slug, dry=args.dry, log=_log, selection=selection)
+                            slug=ep_slug, dry=args.dry, log=_log, selection=selection,
+                            fresh=args.fresh, episode_target=episode_target)
     else:
         bundle = prepare_fn(config, fixture_path=fixture_path, seq=ep_seq,
-                            slug=ep_slug, dry=args.dry, log=_log)
+                            slug=ep_slug, dry=args.dry, log=_log,
+                            fresh=args.fresh, episode_target=episode_target)
+
+    # MR-2: prepare_render carries the (possibly cache-wrapped) seams object back
+    # under "_seams" for the post-run cache summary — run_pipeline is keyword-only
+    # with no **kwargs, so it must be popped BEFORE unpacking the bundle into it.
+    seams = bundle.pop("_seams", None)
 
     run = run_pipeline_fn or run_pipeline
     result = run(config, pipeline=pipeline, **bundle)
@@ -293,6 +323,10 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
         p = ep[key]
         mark = "✓" if Path(p).exists() else "—"
         print(f"  {mark} {key}: {p}")
+    hits = getattr(seams, "hits", None)
+    misses = getattr(seams, "misses", None)
+    if hits is not None or misses is not None:
+        print(f"[cache] 命中 {hits or 0} / 未命中 {misses or 0}")
     return 0
 
 

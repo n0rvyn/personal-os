@@ -951,3 +951,187 @@ def test_cli_argparse_explicit_config_passes_path():
         f"load_config must be called with the explicit path, "
         f"got {captured_calls[0]!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 11) CLI flags: --fresh / --episode / --clean-cache (Task 7, resume/media-cache)
+# ---------------------------------------------------------------------------
+
+def _fake_cli_config(tmp_path):
+    """A MagicMock config with the attributes runner._cli reads at module
+    scope BEFORE reaching prepare_fn (ffmpeg bin, output_dir, syllabus_path)."""
+    fake_config = MagicMock()
+    fake_config.ffmpeg = MagicMock()
+    fake_config.ffmpeg.ffmpeg_bin = "/usr/bin/ffmpeg"
+    fake_config.output_dir = str(tmp_path / "output")
+    fake_config.syllabus_path = ""  # non-syllabus mode by default
+    return fake_config
+
+
+def test_cli_fresh_flag_passed_to_prepare_fn(tmp_path):
+    """--fresh must reach prepare_fn as fresh=True, and episode_target=False
+    when --episode is absent (MR-1 orthogonality)."""
+    from lib.runner import _cli
+
+    fixture_file = tmp_path / "beats.fixture.json"
+    fixture_file.write_text("{}", encoding="utf-8")
+
+    fake_config = _fake_cli_config(tmp_path)
+    captured: dict = {}
+
+    def fake_prepare_fn(config, **kwargs):
+        captured.update(kwargs)
+        fake_seams = MagicMock()
+        fake_seams.hits = 3
+        fake_seams.misses = 1
+        return {
+            "step_fns": {}, "gates": {}, "dispatch": lambda *a: None,
+            "scratch_dir": tmp_path / "scratch", "_seams": fake_seams,
+        }
+
+    run_kwargs: dict = {}
+
+    def fake_run_pipeline_fn(config, **kwargs):
+        run_kwargs.update(kwargs)
+        return {"status": "done"}
+
+    with patch("lib.config.load_config", return_value=fake_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_next", return_value=None), \
+         patch("lib.episode.episode_paths", return_value={
+             "final": tmp_path / "ep" / "final.mp4",
+             "subtitles": tmp_path / "ep" / "subtitles.srt",
+             "shotlist": tmp_path / "ep" / "shotlist.json",
+             "provenance": tmp_path / "ep" / "provenance.json",
+         }):
+        rc = _cli(
+            ["--fixture", str(fixture_file), "--fresh"],
+            prepare_fn=fake_prepare_fn, run_pipeline_fn=fake_run_pipeline_fn,
+        )
+
+    assert rc == 0
+    assert captured.get("fresh") is True, f"prepare_fn kwargs: {captured}"
+    assert captured.get("episode_target") is False, f"prepare_fn kwargs: {captured}"
+    assert "_seams" not in run_kwargs, (
+        "MR-2: _seams must be popped from the bundle before run_pipeline is called"
+    )
+
+
+def test_cli_episode_flag_routes_via_select_by_seq_and_sets_episode_target(tmp_path):
+    """--episode <seq> must route through select_by_seq (not select_next) and
+    pass episode_target=True to prepare_fn."""
+    from lib.runner import _cli
+    from types import SimpleNamespace
+
+    fixture_file = tmp_path / "beats.fixture.json"
+    fixture_file.write_text("{}", encoding="utf-8")
+
+    fake_config = _fake_cli_config(tmp_path)
+    fake_config.syllabus_path = "syllabus.yaml"  # syllabus mode
+
+    fake_selection = SimpleNamespace(seq="007", slug="ep7")
+
+    captured: dict = {}
+
+    def fake_prepare_fn(config, **kwargs):
+        captured.update(kwargs)
+        return {
+            "step_fns": {}, "gates": {}, "dispatch": lambda *a: None,
+            "scratch_dir": tmp_path / "scratch", "_seams": None,
+        }
+
+    def fake_run_pipeline_fn(config, **kwargs):
+        return {"status": "done"}
+
+    select_next_called = []
+
+    def fake_select_next(cfg):
+        select_next_called.append(True)
+        return None
+
+    with patch("lib.config.load_config", return_value=fake_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_next", side_effect=fake_select_next), \
+         patch("lib.syllabus.select_by_seq", return_value=fake_selection) as mock_by_seq, \
+         patch("lib.episode.episode_paths", return_value={
+             "final": tmp_path / "ep" / "final.mp4",
+             "subtitles": tmp_path / "ep" / "subtitles.srt",
+             "shotlist": tmp_path / "ep" / "shotlist.json",
+             "provenance": tmp_path / "ep" / "provenance.json",
+         }):
+        rc = _cli(
+            ["--fixture", str(fixture_file), "--episode", "007"],
+            prepare_fn=fake_prepare_fn, run_pipeline_fn=fake_run_pipeline_fn,
+        )
+
+    assert rc == 0
+    mock_by_seq.assert_called_once_with(fake_config, "007")
+    assert not select_next_called, "--episode must NOT fall through to select_next"
+    assert captured.get("episode_target") is True, f"prepare_fn kwargs: {captured}"
+    assert captured.get("selection") is fake_selection
+
+
+def test_cli_episode_flag_not_found_returns_error(tmp_path):
+    """--episode <seq> that select_by_seq can't find must error out (exit 1)
+    without ever calling prepare_fn."""
+    from lib.runner import _cli
+
+    fixture_file = tmp_path / "beats.fixture.json"
+    fixture_file.write_text("{}", encoding="utf-8")
+
+    fake_config = _fake_cli_config(tmp_path)
+    prepare_called = []
+
+    def fake_prepare_fn(config, **kwargs):
+        prepare_called.append(True)
+        return {}
+
+    with patch("lib.config.load_config", return_value=fake_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_by_seq", return_value=None):
+        rc = _cli(
+            ["--fixture", str(fixture_file), "--episode", "999"],
+            prepare_fn=fake_prepare_fn,
+        )
+
+    assert rc == 1
+    assert not prepare_called, "prepare_fn must not be called when --episode seq is not found"
+
+
+def test_cli_clean_cache_flag_cleans_and_exits_without_rendering(tmp_path):
+    """--clean-cache must resolve the target seq/slug, clean that episode's
+    .cache dir, print the path, and return 0 WITHOUT calling prepare_fn/run."""
+    from lib.runner import _cli
+
+    fake_config = _fake_cli_config(tmp_path)
+    prepare_called = []
+    run_called = []
+
+    def fake_prepare_fn(config, **kwargs):
+        prepare_called.append(True)
+        return {}
+
+    def fake_run_pipeline_fn(config, **kwargs):
+        run_called.append(True)
+        return {"status": "done"}
+
+    cleaned: list = []
+
+    def fake_clean_cache(cache_dir):
+        cleaned.append(Path(cache_dir))
+
+    with patch("lib.config.load_config", return_value=fake_config), \
+         patch("lib.preflight.check_ffmpeg_libass"), \
+         patch("lib.syllabus.select_next", return_value=None), \
+         patch("lib.media_cache.clean_cache", side_effect=fake_clean_cache):
+        rc = _cli(
+            ["--seq", "042", "--slug", "myslug", "--clean-cache"],
+            prepare_fn=fake_prepare_fn, run_pipeline_fn=fake_run_pipeline_fn,
+        )
+
+    assert rc == 0
+    assert not prepare_called, "--clean-cache must not enter the render path"
+    assert not run_called, "--clean-cache must not call run_pipeline"
+    assert len(cleaned) == 1
+    expected = Path(fake_config.output_dir) / "episodes" / "042-myslug" / ".cache"
+    assert cleaned[0] == expected, f"expected {expected}, got {cleaned[0]}"

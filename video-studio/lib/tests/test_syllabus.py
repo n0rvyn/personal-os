@@ -1823,3 +1823,167 @@ def test_reset_current_locked_is_reselectable(tmp_path: Path) -> None:
     episode, seq, slug, module = result
     assert episode.title == "什么是VDOT"
     assert episode.status == "locked"
+
+
+# ---------------------------------------------------------------------------
+# Tests: select_by_seq (Task 6) — point-name reselection by global seq, ignoring
+# cursor position and status; must produce a Selection structurally identical to
+# select_next's for the same episode (shared `_build_selection`, no field drift).
+# ---------------------------------------------------------------------------
+
+# Multi-season outline mixing done / locked / pending, cursor parked in the middle
+# (season0 mod A: ep0=done seq001, ep1=locked seq002; season1 mod B: ep0=pending
+# seq003, ep1=locked seq004).
+SYLLABUS_YAML_BY_SEQ = textwrap.dedent("""\
+    book: running-science-v1
+    character_ref: assets/character/coach_ref.jpg
+    color_grade: 暖金
+    seasons:
+      - name: 第一季
+        modules:
+          - name: 模块A
+            style: educational
+            art_style: 简笔日漫
+            character_ref: assets/character/moduleA_ref.jpg
+            episodes:
+              - title: 已完成期
+                doc_refs: ["01-x.md#a"]
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 目标A0
+                status: done
+              - title: 已锁定期
+                doc_refs: ["01-x.md#b"]
+                source: Daniels
+                verify_status: "✅"
+                learning_goal: 目标A1
+                status: locked
+      - name: 第二季
+        modules:
+          - name: 模块B
+            style: tutorial
+            episodes:
+              - title: 草案期
+                doc_refs: ["02-y.md#a"]
+                source: UESCA
+                verify_status: "⚠️"
+                learning_goal: 目标B0
+                status: pending
+              - title: 未来期
+                doc_refs: ["02-y.md#b"]
+                source: UESCA
+                verify_status: "✅"
+                learning_goal: 目标B1
+                status: locked
+""")
+
+
+def _write_by_seq_fixture(tmp_path: Path, cursor_module_idx: int = 0, cursor_episode_idx: int = 1):
+    s_file = tmp_path / "syllabus.yaml"
+    s_file.write_text(SYLLABUS_YAML_BY_SEQ)
+    c_file = tmp_path / "cursor.yaml"
+    c_file.write_text(
+        f"book: running-science-v1\nmodule_idx: {cursor_module_idx}\nepisode_idx: {cursor_episode_idx}\n"
+    )
+    return s_file, c_file
+
+
+def test_select_by_seq_matches_select_next_for_same_locked_episode(tmp_path: Path) -> None:
+    """select_by_seq(cfg, seq) for a locked episode returns a Selection identical,
+    field-for-field, to select_next's Selection when the cursor points directly at
+    that same locked episode — proving both share the same `_build_selection`."""
+    from lib.syllabus import select_by_seq, select_next
+    import types
+
+    # Cursor placed exactly at season0 mod A ep1 ("已锁定期", seq=002, locked) so
+    # select_next resolves that very episode via the normal cursor+locked gate.
+    s_file, c_file = _write_by_seq_fixture(tmp_path, cursor_module_idx=0, cursor_episode_idx=1)
+    cfg = types.SimpleNamespace(syllabus_path=str(s_file), cursor_path=str(c_file))
+
+    via_next = select_next(cfg)
+    assert via_next is not None
+    assert via_next.episode.title == "已锁定期"
+
+    via_seq = select_by_seq(cfg, via_next.seq)
+    assert via_seq is not None
+    assert via_seq == via_next
+
+
+def test_select_by_seq_returns_done_episode_ignoring_status(tmp_path: Path) -> None:
+    """select_by_seq reaches a `done` episode (select_next's cursor+locked gate
+    would never surface it) with all fields populated correctly."""
+    from lib.syllabus import select_by_seq
+    import types
+
+    s_file, c_file = _write_by_seq_fixture(tmp_path)
+    cfg = types.SimpleNamespace(syllabus_path=str(s_file), cursor_path=str(c_file))
+
+    sel = select_by_seq(cfg, "001")
+    assert sel is not None
+    assert sel.episode.title == "已完成期"
+    assert sel.episode.status == "done"
+    assert sel.seq == "001"
+    assert sel.doc_refs == ["01-x.md#a"]
+    assert sel.source == "Daniels"
+    assert sel.verify_status == "✅"
+    assert sel.learning_goal == "目标A0"
+    assert sel.topic == "已完成期"
+    assert sel.art_style == "简笔日漫"
+    assert sel.character_ref == "assets/character/moduleA_ref.jpg"
+    assert sel.module_name == "模块A"
+    assert sel.season_name == "第一季"
+    assert sel.color_grade == "暖金"
+
+
+def test_select_by_seq_reaches_pending_episode_behind_cursor(tmp_path: Path) -> None:
+    """select_by_seq can select a `pending` draft episode (status ignored) even
+    though it sits behind the cursor position — cursor placed AFTER seq003."""
+    from lib.syllabus import select_by_seq
+    import types
+
+    # Cursor at season1 mod B ep1 (seq004, locked) — behind it is the pending seq003.
+    s_file, c_file = _write_by_seq_fixture(tmp_path, cursor_module_idx=1, cursor_episode_idx=1)
+    cfg = types.SimpleNamespace(syllabus_path=str(s_file), cursor_path=str(c_file))
+
+    sel = select_by_seq(cfg, "003")
+    assert sel is not None
+    assert sel.episode.title == "草案期"
+    assert sel.episode.status == "pending"
+    assert sel.module_name == "模块B"
+    assert sel.season_name == "第二季"
+
+
+def test_select_by_seq_nonexistent_seq_returns_none(tmp_path: Path) -> None:
+    """An out-of-range seq (not present in the outline) resolves to None."""
+    from lib.syllabus import select_by_seq
+    import types
+
+    s_file, c_file = _write_by_seq_fixture(tmp_path)
+    cfg = types.SimpleNamespace(syllabus_path=str(s_file), cursor_path=str(c_file))
+
+    assert select_by_seq(cfg, "999") is None
+
+
+def test_select_by_seq_is_read_only_cursor_and_status_unchanged(tmp_path: Path) -> None:
+    """select_by_seq never mutates cursor.yaml or syllabus.yaml on disk (pure
+    read/select — no advance, no status flip)."""
+    from lib.syllabus import select_by_seq, load_cursor, load_syllabus
+    import types
+
+    s_file, c_file = _write_by_seq_fixture(tmp_path, cursor_module_idx=0, cursor_episode_idx=1)
+    cfg = types.SimpleNamespace(syllabus_path=str(s_file), cursor_path=str(c_file))
+
+    before_cursor_text = c_file.read_text(encoding="utf-8")
+    before_syllabus_text = s_file.read_text(encoding="utf-8")
+
+    sel = select_by_seq(cfg, "001")  # a done episode, distinct from cursor position
+    assert sel is not None
+
+    assert c_file.read_text(encoding="utf-8") == before_cursor_text
+    assert s_file.read_text(encoding="utf-8") == before_syllabus_text
+
+    c2 = load_cursor(c_file)
+    s2 = load_syllabus(s_file)
+    assert c2.module_idx == 0 and c2.episode_idx == 1
+    assert s2.modules[0].episodes[0].status == "done"
+    assert s2.modules[0].episodes[1].status == "locked"

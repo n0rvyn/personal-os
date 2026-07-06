@@ -39,7 +39,7 @@ def _write_config(tmp_path: Path) -> Path:
     return cfg
 
 
-def _fake_prepare(config, *, fixture_path, seq, slug, dry, log):
+def _fake_prepare(config, *, fixture_path, seq, slug, dry, log, fresh=False, episode_target=False):
     """Bundle whose step_fns satisfy each gate with a sentinel file — no media,
     no ffmpeg. Mirrors run_pipeline's contract (ctx[artifact] = non-empty file)."""
     from lib.pipeline import load_pipeline

@@ -70,6 +70,7 @@ def episode_paths(
 
     Returned keys:
         script      — script.md        (narration / beat script)
+        beats       — beats.json        (durable digest-writer beats, for resume/reuse)
         shotlist    — shotlist.json     (shot descriptions + timing)
         assets_dir  — assets/           (downloaded images / clip frames)
         audio       — audio.mp3         (TTS-synthesized narration)
@@ -105,6 +106,7 @@ def episode_paths(
     # paths too for belt-and-suspenders.)
     paths: dict[str, Path] = {
         "script": ep_dir / "script.md",
+        "beats": ep_dir / "beats.json",
         "shotlist": ep_dir / "shotlist.json",
         "assets_dir": ep_dir / "assets",
         "audio": ep_dir / "audio.mp3",

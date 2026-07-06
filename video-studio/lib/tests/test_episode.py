@@ -40,6 +40,7 @@ def test_episode_paths_returns_all_keys(tmp_path):
     paths = episode_paths(str(tmp_path), seq="001", slug="intro-to-python")
     required_keys = {
         "script",
+        "beats",
         "shotlist",
         "assets_dir",
         "audio",
@@ -133,6 +134,19 @@ def test_episode_paths_returns_path_objects(tmp_path):
     paths = episode_paths(str(tmp_path), seq="001", slug="slug")
     for key, p in paths.items():
         assert isinstance(p, Path), f"Key '{key}' is not a Path: {type(p)}"
+
+
+# ---------- beats.json durable path (media-cache resume) ----------
+
+def test_episode_paths_beats_json_same_dir_as_shotlist(tmp_path):
+    """episode_paths must expose ep['beats'] pointing at
+    episodes/{seq}-{slug}/beats.json, alongside shotlist.json, so the
+    script step can persist beats durably for resume/reuse."""
+    from lib.episode import episode_paths
+    paths = episode_paths(str(tmp_path), seq="002", slug="x")
+    expected = tmp_path / "episodes" / "002-x" / "beats.json"
+    assert paths["beats"] == expected
+    assert paths["beats"].parent == paths["shotlist"].parent
 
 
 # ---------- path-traversal guard ----------

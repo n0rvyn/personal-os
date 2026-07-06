@@ -19,6 +19,7 @@ The `dur` this module assigns is authoritative — render layer must reuse it ve
 import pytest
 
 from lib.shotplan import plan_windows
+from lib.visual_ledger import VisualLedger, sig as visual_sig
 
 
 def _beat(text: str, beat_id: str = "b1") -> dict:
@@ -180,3 +181,52 @@ def test_window_dict_structure_and_r5_field_provenance():
         assert w["camera_intensity"] == 1.0
         assert w["shot_type"] == ""
         assert w["with_character"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 5: resume reproducibility — VisualLedger(load_own=False) must let
+# plan_windows re-derive the exact same interim prompts as the first render.
+# ---------------------------------------------------------------------------
+
+
+def test_resume_load_own_false_reproduces_first_render_interim_prompts(tmp_path):
+    ep_dir = tmp_path / "ep-resume-shotplan"
+    ep_dir.mkdir()
+
+    beat = _beat(_LONG_TEXT)
+    clip_len = 44.0
+    shots = [_director_shot("单张静图：跑者出发", with_character=True)]
+
+    # First render: fresh ledger (nothing of its own preloaded yet).
+    first_ledger = VisualLedger(ep_dir)
+    first_windows = plan_windows(beat, clip_len, shots, keywords=["起跑", "训练"],
+                                  ledger=first_ledger)
+    first_prompts = [w["prompt"] for w in first_windows]
+
+    for w in first_windows:
+        # Match production: wiring.step_shotplan records the SIGNATURE, not the
+        # raw prompt (wiring.py:677 etc.), and _derive_interim_prompt looks up
+        # seen(_ledger_sig(candidate)). Recording the raw prompt here would leave
+        # the seen-set keyed on raw strings that the sig-based lookup never hits,
+        # so the poison (load_own=True) would silently not reproduce.
+        first_ledger.record(visual_sig(w["prompt"]))
+    first_ledger.save()
+
+    # Naive resume (default load_own=True) preloads the just-saved signatures
+    # into `seen`, poisoning _derive_interim_prompt's derivation -> different
+    # prompts (this is the bug being fixed).
+    poisoned_ledger = VisualLedger(ep_dir, load_own=True)
+    poisoned_windows = plan_windows(beat, clip_len, shots, keywords=["起跑", "训练"],
+                                     ledger=poisoned_ledger)
+    poisoned_prompts = [w["prompt"] for w in poisoned_windows]
+    assert poisoned_prompts != first_prompts, (
+        "expected load_own=True (naive resume) to poison interim derivation"
+    )
+
+    # Fixed resume: load_own=False -> does not preload this episode's own
+    # ledger -> plan_windows re-derives the exact same prompts as first render.
+    resumed_ledger = VisualLedger(ep_dir, load_own=False)
+    resumed_windows = plan_windows(beat, clip_len, shots, keywords=["起跑", "训练"],
+                                    ledger=resumed_ledger)
+    resumed_prompts = [w["prompt"] for w in resumed_windows]
+    assert resumed_prompts == first_prompts

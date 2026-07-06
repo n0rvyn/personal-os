@@ -105,7 +105,7 @@ def test_pdf_mode_grounded_writes_artifact_and_script_md(tmp_path):
         ]}), encoding="utf-8")
         return {"ok": True, "artifact_path": str(out)}
 
-    ep = {"script": tmp_path / "script.md"}
+    ep = {"script": tmp_path / "script.md", "beats": tmp_path / "beats.json"}
     ctx = {"fulltext": LAYOUT_FT, "ep": ep}
     d = make_script_dispatch(object(), dispatch_persona_fn=fake_persona)
     d("digest-writer", _script_step(), ctx, tmp_path)

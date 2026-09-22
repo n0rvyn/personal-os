@@ -120,7 +120,9 @@
     {
       "name": "podcast-prep",
       "source": "./podcast-prep",
-      "description": "Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker",
+      "deprecated": true,
+      "replacedBy": "podcast-studio/podcast-studio-prep",
+      "description": "[DEPRECATED 2026-09-22 — superseded by the vendored fork podcast-studio/skills/podcast-studio-prep, which is now a strict superset; no live caller invokes this plugin] Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker",
       "version": "0.10.0",
       "category": "intelligence",
       "tags": [

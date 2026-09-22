@@ -105,9 +105,9 @@ carries the morning's open questions forward):
 - `lib/config.py` — single source of truth for `~/.podcast-studio/config.yaml`.
 - `lib/podcast-env.sh` — exports `tts.*` from config into the env vars the
   fleet `tts` skill's scripts expect (incl. `TTS_LEDGER_DIR`).
-- `skills/podcast-studio-prep/` — vendored from personal-os `podcast-prep` @ 0.8.0
-  (see `skills/podcast-studio-prep/VENDORED.md`; remains vendored for the
-  `_resolve_vault_root` config patch + upstream drift to 0.10.0).
+- `skills/podcast-studio-prep/` — originally vendored from personal-os
+  `podcast-prep` @ 0.8.0; since 2026-09-22 this tree is the source of truth and
+  the upstream plugin is deprecated (see `skills/podcast-studio-prep/VENDORED.md`).
 - TTS is not vendored — the pipeline dispatches to the personal-os fleet's
   `tts` skill (from `tts-toolkit`). `references/voice-catalog.md` is a
   snapshot of the upstream voice-catalog, re-synced when upstream voices
@@ -115,8 +115,8 @@ carries the morning's open questions forward):
 
 ## Fleet membership
 
-podcast-studio is a personal-os fleet member (sibling plugin of `podcast-prep`
-and `tts-toolkit` in the same marketplace). Inputs arrive via the personal-os
-IEF exchange; TTS synthesis is consumed as the fleet `tts` skill. Prep remains
-vendored in-tree for its config patch and upstream drift. Configure
-`~/.podcast-studio/config.yaml` and the TTS credential env, and run.
+podcast-studio is a personal-os fleet member (sibling plugin of `tts-toolkit`
+in the same marketplace). Inputs arrive via the personal-os IEF exchange; TTS
+synthesis is consumed as the fleet `tts` skill. Prep lives in-tree and is now
+its own source of truth — the upstream `podcast-prep` plugin is deprecated.
+Configure `~/.podcast-studio/config.yaml` and the TTS credential env, and run.

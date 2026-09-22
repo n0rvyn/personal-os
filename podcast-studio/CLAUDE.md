@@ -84,9 +84,11 @@ self-discipline:
    (`stance.py`); Character Bible distillation (`bible.py`); throughline
    obsession tracking (`throughline.py`); the config resolver (`config.py`).
 
-4. **Vendored skill: `skills/podcast-studio-prep/`** — vendored from personal-os
-   `podcast-prep` @ 0.8.0. Has a `VENDORED.md` recording its source-of-truth,
-   upstream version, and re-vendor procedure. **TTS is not vendored** — the
+4. **Prep skill: `skills/podcast-studio-prep/`** — originally vendored from
+   personal-os `podcast-prep` @ 0.8.0; **as of 2026-09-22 this tree is the
+   source of truth** and the upstream plugin is deprecated (it is now a strict
+   subset — see `VENDORED.md` for the file-by-file evidence). Edit this tree
+   directly; there is no re-vendor cycle. **TTS is not vendored** — the
    pipeline calls the personal-os fleet's `tts` skill (from `tts-toolkit`) by
    name. `references/voice-catalog.md` is a snapshot of the upstream
    `tts-toolkit/skills/tts/references/voice-catalog.md` re-synced when

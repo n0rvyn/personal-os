@@ -23,6 +23,7 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 from lib.config import load_config  # noqa: E402  (test-FAIL-first expects this to fail pre-impl)
 from lib.config import _default_config_path, _resolve_personal_os_yaml  # noqa: E402
+from lib.config import ConfigError  # noqa: E402
 
 
 # ---------- helpers ----------
@@ -271,6 +272,98 @@ def test_tts_settings_resolve(tmp_path, monkeypatch):
     cfg = load_config()
     assert cfg.tts.provider == "minimax"
     assert cfg.tts.host_voice == "male-qn-jingying"
+
+
+# --- tts.vendor_priority / tts.local_voice (optional) --------------------
+# Which TTS vendors get tried, in what order, is configuration. These keys are
+# OPTIONAL: absent → None, and the `tts` skill keeps its own default order.
+# ⛔ Present-but-malformed must RAISE. A misspelled ordering that quietly
+#    reverted to the default would be a setting that looks applied and is not.
+
+
+def _tts_cfg(tmp_path, monkeypatch, tts_block: str):
+    cfg_path = tmp_path / "config.yaml"
+    dirs = _make_vault_dirs(tmp_path)
+    _write_config(cfg_path, f"""
+        vault:
+          subjective_dir: {dirs['subjective_dir']}
+          news_dir: {dirs['news_dir']}
+          output_dir: {dirs['output_dir']}
+        tts:
+          provider: minimax
+          host_voice: male-qn-jingying
+{tts_block}
+    """)
+    monkeypatch.setenv("PODCAST_STUDIO_CONFIG", str(cfg_path))
+    return load_config()
+
+
+def test_vendor_priority_absent_is_none(tmp_path, monkeypatch):
+    """No key → None, so the skill uses its own default order (zero-change
+    for every config written before these keys existed)."""
+    cfg = _tts_cfg(tmp_path, monkeypatch, "")
+    assert cfg.tts.vendor_priority is None
+    assert cfg.tts.local_voice is None
+
+
+def test_vendor_priority_as_yaml_list(tmp_path, monkeypatch):
+    cfg = _tts_cfg(tmp_path, monkeypatch, "          vendor_priority: [local, minimax]")
+    assert cfg.tts.vendor_priority == ("local", "minimax")
+
+
+def test_vendor_priority_as_comma_string(tmp_path, monkeypatch):
+    """Both forms are natural to write; both must land as the same tuple."""
+    cfg = _tts_cfg(tmp_path, monkeypatch, "          vendor_priority: 'local, minimax'")
+    assert cfg.tts.vendor_priority == ("local", "minimax")
+
+
+def test_vendor_priority_same_result_without_pyyaml(tmp_path, monkeypatch):
+    """⛔ The two parsers must agree on the SAME file.
+
+    PyYAML turns `[local, minimax]` into a list; the minimal fallback reader
+    hands the whole flow sequence over as one string. 2026-09-22: splitting
+    that on commas produced ('[local', 'minimax]') — two names no vendor
+    roster contains, and NOTHING raised. A setting that looks applied and is
+    not. This pins both paths to the same tuple.
+    """
+    monkeypatch.setitem(sys.modules, "yaml", None)  # force the minimal reader
+    cfg = _tts_cfg(tmp_path, monkeypatch, "          vendor_priority: [local, minimax]")
+    assert cfg.tts.vendor_priority == ("local", "minimax")
+
+
+def test_vendor_priority_quoted_list_without_pyyaml(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    cfg = _tts_cfg(tmp_path, monkeypatch, "          vendor_priority: ['local', 'minimax']")
+    assert cfg.tts.vendor_priority == ("local", "minimax")
+
+
+def test_vendor_priority_preserves_order(tmp_path, monkeypatch):
+    """⛔ Order IS the setting — a sorted/normalized tuple would silently
+    change which vendor gets tried first."""
+    cfg = _tts_cfg(
+        tmp_path, monkeypatch,
+        "          vendor_priority: [volc-1.0, local, minimax, volc-2.0]")
+    assert cfg.tts.vendor_priority == ("volc-1.0", "local", "minimax", "volc-2.0")
+
+
+def test_vendor_priority_empty_entry_raises(tmp_path, monkeypatch):
+    with pytest.raises(ConfigError, match="vendor_priority"):
+        _tts_cfg(tmp_path, monkeypatch, "          vendor_priority: 'local,,minimax'")
+
+
+def test_vendor_priority_wrong_type_raises(tmp_path, monkeypatch):
+    with pytest.raises(ConfigError, match="vendor_priority"):
+        _tts_cfg(tmp_path, monkeypatch, "          vendor_priority: 42")
+
+
+def test_local_voice_resolves(tmp_path, monkeypatch):
+    cfg = _tts_cfg(tmp_path, monkeypatch, "          local_voice: vits-zh-ll-sid3")
+    assert cfg.tts.local_voice == "vits-zh-ll-sid3"
+
+
+def test_local_voice_empty_raises(tmp_path, monkeypatch):
+    with pytest.raises(ConfigError, match="local_voice"):
+        _tts_cfg(tmp_path, monkeypatch, "          local_voice: '   '")
 
 
 def test_nested_schema_minimal_parser(tmp_path, monkeypatch):

@@ -27,6 +27,27 @@ tts:
   provider: volc
   host_voice: BV001_streaming
 
+  # vendor_priority (OPTIONAL) — the order synth-auto tries TTS vendors in.
+  # The first one with enough quota synthesizes the WHOLE episode.
+  # Known vendors: minimax, volc-2.0, volc-1.0, local
+  #   local = the offline on-device engine (sherpa-onnx VITS-zh-ll). Costs
+  #   nothing and cannot run out, but it is 16 kHz and its Chinese-only
+  #   lexicon silently drops English words. Install it once with the tts
+  #   skill's scripts/fetch-local-model.sh.
+  # Omit this key → the skill's own default: minimax, volc-2.0, volc-1.0, local
+  # ⛔ A name that is not in the list above is an ERROR, not a silent skip.
+  # Examples:
+  #   vendor_priority: [local, minimax]                 # stop spending money
+  #   vendor_priority: [minimax, volc-2.0, volc-1.0]    # no offline fallback:
+  #                                                     # an exhausted pool
+  #                                                     # fails (exit 4) instead
+  #                                                     # of shipping local audio
+  # vendor_priority: [minimax, volc-2.0, volc-1.0, local]
+
+  # local_voice (OPTIONAL) — which offline speaker the `local` vendor uses.
+  # vits-zh-ll-sid0 … vits-zh-ll-sid4. Omit → sid0.
+  # local_voice: vits-zh-ll-sid0
+
 # TTS credentials are NOT stored in this file.
 # Set VOLC_TTS_APPID + VOLC_TTS_TOKEN (Volcengine) or MINIMAX_API_KEY (MiniMax) in
 # your shell env before running the tts scripts. The shim (lib/podcast-env.sh)

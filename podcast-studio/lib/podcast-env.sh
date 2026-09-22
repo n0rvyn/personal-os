@@ -2,7 +2,10 @@
 # podcast-env.sh — TTS config→env shim for the podcast-studio plugin.
 #
 # Reads the podcast-studio config (lib/config.py) and exports the tts
-# provider / host_voice as env vars the vendored tts scripts consume.
+# provider / host_voice as env vars the vendored tts scripts consume, plus the
+# optional `tts.vendor_priority` (→ TTS_VENDOR_PRIORITY, the order synth-auto
+# tries vendors in) and `tts.local_voice` (→ TTS_LOCAL_VOICE, which offline
+# speaker the `local` vendor uses). Both are written only when configured.
 # Credential env vars (VOLC_TTS_*, MINIMAX_API_KEY, MM_*) are passed
 # through from the parent environment — the shim never reads or prints
 # them.
@@ -66,6 +69,13 @@ def _shell_quote(s: str) -> str:
 with env_path.open("w", encoding="utf-8") as f:
     f.write(f"PODCAST_TTS_PROVIDER={_shell_quote(cfg.tts.provider)}\n")
     f.write(f"PODCAST_HOST_VOICE={_shell_quote(cfg.tts.host_voice)}\n")
+    # Optional vendor-order + offline-speaker settings. Written ONLY when the
+    # config sets them, so an unset key leaves the `tts` skill on its own
+    # defaults rather than pinning an order this shim invented.
+    if cfg.tts.vendor_priority:
+        f.write(f"TTS_VENDOR_PRIORITY={_shell_quote(','.join(cfg.tts.vendor_priority))}\n")
+    if cfg.tts.local_voice:
+        f.write(f"TTS_LOCAL_VOICE={_shell_quote(cfg.tts.local_voice)}\n")
 PYEOF
 
 # Source the env file: `set -a` auto-exports every assignment.

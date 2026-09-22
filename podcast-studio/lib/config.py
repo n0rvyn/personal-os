@@ -66,6 +66,16 @@ class VaultConfig:
 class TtsConfig:
     provider: str
     host_voice: str
+    # Which TTS vendors to try, in order. OPTIONAL — absent means the `tts`
+    # skill's own built-in default (minimax → volc-2.0 → volc-1.0 → local).
+    # Set it to reorder or to drop a vendor: `["local", "minimax"]` stops
+    # spending money; `["minimax", "volc-2.0", "volc-1.0"]` (no `local`) makes
+    # an exhausted pool fail rather than ship the offline voice.
+    # `lib/podcast-env.sh` exports it as `TTS_VENDOR_PRIORITY`.
+    vendor_priority: tuple[str, ...] | None = None
+    # Which offline speaker the `local` vendor uses (vits-zh-ll-sid0 … sid4).
+    # OPTIONAL — absent means sid0. Exported as `TTS_LOCAL_VOICE`.
+    local_voice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -323,7 +333,69 @@ def _validate_tts(tts_raw: dict[str, Any]) -> TtsConfig:
         if not isinstance(val, str) or not val.strip():
             raise ConfigError(f"tts.{key} must be a non-empty string")
 
-    return TtsConfig(provider=tts_raw["provider"], host_voice=tts_raw["host_voice"])
+    return TtsConfig(
+        provider=tts_raw["provider"],
+        host_voice=tts_raw["host_voice"],
+        vendor_priority=_validate_vendor_priority(tts_raw.get("vendor_priority")),
+        local_voice=_validate_local_voice(tts_raw.get("local_voice")),
+    )
+
+
+def _validate_vendor_priority(raw: Any) -> tuple[str, ...] | None:
+    """Parse the optional `tts.vendor_priority` ordering.
+
+    Accepts a YAML list (`["minimax", "local"]`) or a comma string
+    (`"minimax,local"`) — both are natural to write, and the value ends up as a
+    comma string in `TTS_VENDOR_PRIORITY` either way.
+
+    OPTIONAL: absent → `None`, and the `tts` skill uses its own default order.
+    ⛔ Present-but-malformed raises rather than silently falling back — a
+    misspelled ordering that quietly reverted would be a setting that looks
+    applied and is not. (The skill applies the same rule to unknown vendor
+    NAMES; this function only checks shape, since the vendor roster lives in
+    the skill, not here.)
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        # ⚠️ BOTH parsers must produce the same tuple for the same file.
+        #    PyYAML turns `[local, minimax]` into a real list; the minimal
+        #    fallback reader (used whenever PyYAML is absent — which is the
+        #    live path on a machine that never `pip install -r`'d) hands the
+        #    WHOLE flow sequence over as the string "[local, minimax]".
+        #    Splitting that on commas yields ('[local', 'minimax]') — two
+        #    names no vendor roster contains, and nothing raises. 2026-09-22:
+        #    this shipped and was caught only by sourcing the env shim.
+        #    So strip the brackets here rather than letting the result depend
+        #    on whether a dependency happens to be installed.
+        s = raw.strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        items = [p.strip() for p in s.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        items = [str(p).strip() if not isinstance(p, str) else p.strip() for p in raw]
+    else:
+        raise ConfigError("tts.vendor_priority must be a list or a comma-separated string")
+
+    # Per-item quote strip: the minimal parser keeps `['local', 'minimax']`
+    # quoting verbatim, PyYAML does not.
+    items = [p[1:-1].strip() if len(p) >= 2 and p[0] == p[-1] and p[0] in "\"'" else p
+             for p in items]
+
+    if not items:
+        raise ConfigError("tts.vendor_priority must name at least one vendor")
+    if any(not p for p in items):
+        raise ConfigError("tts.vendor_priority contains an empty entry")
+    return tuple(items)
+
+
+def _validate_local_voice(raw: Any) -> str | None:
+    """Parse the optional `tts.local_voice` (offline speaker id)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError("tts.local_voice must be a non-empty string")
+    return raw.strip()
 
 
 def _validate_papers(papers_raw: Any) -> PapersConfig:

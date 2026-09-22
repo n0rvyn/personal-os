@@ -155,6 +155,24 @@ not next to the artifacts. Migrate an existing flat vault with
   Do not introduce cross-vendor mixing. For long-form, always go through
   `synth-auto` (quota-aware vendor selection + fallback); never hand-pick a
   vendor or call `synth-batch`/`quota_check` directly.
+  ⭐ The pool's LAST entry is `local` — an offline sherpa-onnx engine
+  (VITS-zh-ll) that costs nothing and cannot run out, so an expired key no
+  longer means no episode. It is still single-vendor for a whole job, so the
+  invariant above is unchanged.
+  ⚠️ **Not live in this plugin's runtime yet.** The code is in the
+  `tts-toolkit` source tree; the `tts` skill that step 14 dispatches resolves
+  to the installed plugin *cache*, which is 0.4.0 and has no
+  `providers/local.sh`. It reaches the pipeline only after the change is
+  committed + pushed (auto-version.yml bumps the version) and the plugin is
+  updated locally. Until then the default pool is still the three cloud
+  vendors and an exhausted pool still exits 4.
+  ⚠️ It is 16 kHz and its
+  **Chinese-only lexicon silently drops Latin words** ("Swift", "Apple") — on a
+  tech-heavy script that changes meaning, and the pipeline log is where the
+  warning lands. Install it once with tts-toolkit's
+  `scripts/fetch-local-model.sh`; exclude it with
+  `--vendor-pool minimax,volc-2.0,volc-1.0` when a run should fail rather than
+  ship the offline voice.
 
 - **The reader `.md` is the step-12 finalize `body`, not the winning
   `polish-*.md`.** The polish is the pre-finalize committee draft; only after

@@ -84,9 +84,17 @@ _PIPELINE: list[dict[str, Any]] = [
         "artifact": None,
         "gate": [],
     },
-    # 3b — script: digest-writer → beats, gated by the 忠实门 (verify_anchors)
-    # inside the dispatch closure. retry=1: a faithfulness miss re-dispatches the
-    # writer once (runner re-runs THIS step on gate miss); double-miss → halt.
+    # 3b — script: digest-writer → beats, gated by TWO gates inside the dispatch
+    # closure: the 忠实门 (verify_anchors) and the length gate (script_chars vs
+    # cfg.script.min_chars). Either miss → no artifact → check_artifact fails →
+    # runner re-runs THIS step, and the closure feeds the failure back so the
+    # retry is a targeted fix (_retry_brief) rather than a blind re-roll.
+    # retry=3 (4 attempts). The original single retry was sized for ONE gate. There
+    # are now three (忠实 / 字数 / 开场), and the pilot showed the writer fixes the
+    # gate it is told about while dropping one it had already satisfied — attempt 1
+    # greeted but was long enough; attempt 2 opened cold and came back 759 chars
+    # short. Each such trade costs an attempt, so the budget has to cover more than
+    # one round of it.
     # Fixture/reuse mode (beats already in ctx) → pass-through (no live dispatch).
     {
         "name": "script",
@@ -95,7 +103,7 @@ _PIPELINE: list[dict[str, Any]] = [
         "inputs": ["extract", "config"],
         "artifact": "script_ledger",
         "gate": [{"fn": "check_artifact"}],
-        "retry": 1,
+        "retry": 3,
     },
     # 3b2 — distill: covered-ground 蒸馏器 (anti-homogenization). Runs on the
     # just-finalized台本 (script gate passed) to extract this episode's

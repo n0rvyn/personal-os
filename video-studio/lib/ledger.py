@@ -189,6 +189,109 @@ def validate_ledger(d: Any) -> None:
 
 # ---------- anchor recompute gate ----------
 
+# ---------- style gate (cold open + standalone episode) ----------
+#
+# Same discipline as the anchor gate, applied to the two structural rules the
+# channel's own numbers justify: viewers average 55.5 seconds, so the opening
+# cannot be spent on a greeting; and every video is pushed to strangers who never
+# saw the last one, so cross-episode references only tell a new viewer they missed
+# something.
+#
+# These are gates rather than instructions because instructions did not hold. The
+# persona forbade the greeting, the user prompt forbade it in bold, and the writer
+# opened with 「大家好，我是X，欢迎来到Y」 anyway — on two consecutive live runs.
+# Recompute, never trust.
+
+# Banned in the FIRST beat only: the cold open. A greeting later is fine — the
+# self-intro is supposed to land right after the hook.
+_COLD_OPEN_BANNED: tuple[str, ...] = (
+    "大家好", "欢迎来到", "欢迎收看", "今天我们讲", "今天我们聊",
+    "本期我们", "这期我们讲", "这期我们聊",
+)
+
+# Banned ANYWHERE: an episode must stand alone.
+_STANDALONE_BANNED: tuple[str, ...] = (
+    "上期", "上一期", "下期", "下一期", "前几期", "前面几期",
+    "我们下次见", "我们下期见", "咱们下期", "下集",
+)
+
+# Citation framing ("教材说 X" instead of just saying X) is not zero-tolerance like
+# the other two — the persona allows citing authority once or twice per episode
+# (e.g. "UESCA 直接说"). Only flag when the whole draft leans on this framing past
+# the budget the persona itself sets ("控制在两三句以内").
+#
+# This is a correctness/voice gate, not an engagement-tuned threshold — it does not
+# need the completion-rate CSV justification § 4.1 requires for pacing/length gates
+# (see running-class/CLAUDE.md § 4.1 "适用范围"). Evidence instead: the same framing
+# instruction lived in a prior digest-writer.md revision and was dropped in a later
+# rewrite; the writer produced 10+ instances per episode once unconstrained (EP011).
+# Upgraded from a fixed-phrase tuple (7 exact strings) to a pattern: the fixed
+# list caught only 2 of 15 known real-episode variants (EP012 pre-polish audit,
+# 2026-07-28) — "教材里写出的" / "这本教材从头到尾" / "教材同一章里讲了" etc.
+# all slipped past exact matching. The subject (教材/原文/书里) followed within
+# a few characters by a citation-shaped verb is the actual signal, not any one
+# fixed phrase. "原话" is kept in the verb alternation — it was one of the 7
+# exact phrases in the old table and dropping it silently breaks 2 existing
+# tests (verified 2026-07-28 via plan-verifier: budget-exceeding fixture drops
+# from 4 hits to 3 == budget, gate stops firing).
+_CITATION_PATTERN = re.compile(
+    r"(教材|原文|书里)[^。！？，、]{0,6}"
+    r"(说|写|给|讲|提到|引用|强调|指出|列|把|原话|停了|另一[章段篇节]|同一[章段篇节])"
+)
+_CITATION_BUDGET = 3
+
+
+def verify_style(ledger: dict) -> dict:
+    """Recompute the three structural/voice rules on a finished draft.
+
+    Returns ``{"ok": bool, "violations": [{"beat_id", "rule", "found", "excerpt"}]}``.
+    Does not raise; the caller (the script dispatch closure) decides to halt/retry.
+    """
+    violations: list[dict] = []
+    citation_hits: list[dict] = []
+    beats = [b for b in (ledger.get("beats") or []) if isinstance(b, dict)]
+
+    for idx, beat in enumerate(beats):
+        text = beat.get("text")
+        if not isinstance(text, str) or not text:
+            continue
+        bid = beat.get("beat_id") or f"b{idx:02d}"
+
+        if idx == 0:
+            for phrase in _COLD_OPEN_BANNED:
+                if phrase in text:
+                    violations.append({
+                        "beat_id": bid,
+                        "rule": "冷开场",
+                        "found": phrase,
+                        "excerpt": text[:60],
+                    })
+
+        for phrase in _STANDALONE_BANNED:
+            if phrase in text:
+                at = text.find(phrase)
+                violations.append({
+                    "beat_id": bid,
+                    "rule": "独立成篇",
+                    "found": phrase,
+                    "excerpt": text[max(0, at - 20): at + 20],
+                })
+
+        for m in _CITATION_PATTERN.finditer(text):
+            at = m.start()
+            citation_hits.append({
+                "beat_id": bid,
+                "rule": "引用腔",
+                "found": m.group(0),
+                "excerpt": text[max(0, at - 20): at + 20],
+            })
+
+    if len(citation_hits) > _CITATION_BUDGET:
+        violations.extend(citation_hits)
+
+    return {"ok": not violations, "violations": violations}
+
+
 def verify_anchors(ledger: dict, fulltext: str) -> dict:
     """Recompute every beat's anchor as a grounded location in `fulltext`.
 
@@ -217,3 +320,28 @@ def verify_anchors(ledger: dict, fulltext: str) -> dict:
             })
 
     return {"ok": not flagged, "flagged": flagged}
+
+
+def ground_text(text: str, fulltext: str) -> bool:
+    """Public wrapper around the anchor-grounding check — NOT a faithfulness
+    gate, despite reusing the same machinery as `verify_anchors`.
+
+    Known limitation (load-bearing, do not remove this warning): pure-CJK
+    `text` with no ASCII/digit tokens returns True unconditionally (`_anchor_
+    grounded`'s empty-token-list short circuit, ledger.py:143-144) — it
+    cannot catch a fabricated Chinese claim with no numbers in it. Even with
+    digit tokens present, this only checks "does this digit string appear
+    ANYWHERE in fulltext" — on a multi-thousand-character source document, a
+    short 2-digit number can coincidentally match unrelated text elsewhere
+    (verified 2026-07-28: on EP012's real ~95k-char source, both the correct
+    "48" and the fabricated "99" test as grounded).
+
+    Use this as an informational "does this number's string form appear in
+    the source somewhere" spot-check for human review — never as an
+    automated pass/fail gate. The actual anti-fabrication check for the
+    running-class citation-voice rewrite tooling is the digit-subset
+    invariant in `citation_voice_scan.py` (candidate digits must be a
+    subset of the original beat's digits), which this function does not
+    replace.
+    """
+    return _anchor_grounded(text, _norm_match(fulltext))

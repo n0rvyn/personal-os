@@ -72,6 +72,27 @@ class FfmpegConfig:
 
 
 @dataclass(frozen=True)
+class ScriptConfig:
+    """Per-episode 台本 length target, enforced by the length gate in
+    make_script_dispatch.
+
+    Without a gate the writer settles at whatever floor its persona names —
+    measured: a persona asking for "2200–3000 字" produced 2204 and 2298 chars.
+    So the target has to be checked and fed back, not merely requested.
+
+    `min_chars` is the gate (a shorter draft is rejected and re-dispatched with
+    the shortfall named); `target_chars` is what the writer is asked to aim for.
+    Counting is over the beats' narration text only — the same text TTS speaks.
+    """
+    target_chars: int = 3000
+    min_chars: int = 2800
+    # Beyond this a 10-minute episode becomes a 13-minute one; the writer is told
+    # to stop, but an over-long draft is NOT rejected (padding is the failure mode
+    # a floor creates, and rejecting长 drafts would push the writer to pad-then-cut).
+    max_chars: int = 3400
+
+
+@dataclass(frozen=True)
 class HostConfig:
     """Optional host persona + channel brand (content-level, configurable — never
     hardcoded in the plugin). Feeds digest-writer's fixed greeting/signoff and the
@@ -102,6 +123,15 @@ class VideoStudioConfig:
     book_series: str = ""
     # Phase 6: syllabus source directory (snapshot of training science materials)
     syllabus_source_dir: str = ""
+    # 台本 length target + gate (optional; defaults target 3000 / floor 2800)
+    script: ScriptConfig = ScriptConfig()
+    # Markdown file listing the 招牌装置 (类比/例子/钩子) the show's ALREADY-PUBLISHED
+    # back catalogue has used. Injected into every episode's avoidance memo,
+    # permanently. This is deliberately NOT the covered-ground store: that one
+    # decays (an anchor goes cold once it is >recent_n episodes old), which is
+    # right for within-season de-duplication and wrong here — "don't re-use the
+    # analogy from the 100 episodes we already shipped" never expires.
+    legacy_avoid_path: str = ""
     # R2: optional host persona + channel brand (configurable, content-level)
     host: HostConfig = HostConfig()
     # Phase 2: media-source layer — style_name -> library kind binding.
@@ -366,6 +396,28 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
     # --- Phase 6: book_series + syllabus_source_dir: lenient, not required ---
     book_series = str(raw.get("book_series", ""))
     syllabus_source_dir = str(raw.get("syllabus_source_dir", ""))
+    legacy_avoid_path = str(raw.get("legacy_avoid_path", ""))
+    if legacy_avoid_path and not Path(os.path.expanduser(legacy_avoid_path)).is_file():
+        # Fail loud: a typo'd path would otherwise silently ship a season that
+        # recycles the back catalogue's analogies — the exact failure this exists
+        # to prevent, and one nobody would notice until the episodes were written.
+        raise ConfigError(
+            f"legacy_avoid_path does not exist: {legacy_avoid_path}"
+        )
+
+    # --- 台本 length target + gate (optional; defaults live on ScriptConfig) ---
+    script_raw = raw.get("script") or {}
+    script = ScriptConfig(
+        target_chars=int(script_raw.get("target_chars", ScriptConfig.target_chars)),
+        min_chars=int(script_raw.get("min_chars", ScriptConfig.min_chars)),
+        max_chars=int(script_raw.get("max_chars", ScriptConfig.max_chars)),
+    )
+    if not (0 < script.min_chars <= script.target_chars <= script.max_chars):
+        raise ConfigError(
+            f"script lengths must satisfy 0 < min_chars ({script.min_chars}) "
+            f"<= target_chars ({script.target_chars}) <= max_chars "
+            f"({script.max_chars})"
+        )
 
     # --- R2: host persona (optional; empty = no fixed host) ---
     host_raw = raw.get("host") or {}
@@ -402,6 +454,8 @@ def load_config(path: str | os.PathLike | None = None) -> VideoStudioConfig:
         cursor_path=cursor_path,
         book_series=book_series,
         syllabus_source_dir=syllabus_source_dir,
+        script=script,
+        legacy_avoid_path=legacy_avoid_path,
         host=host,
         library=library,
         character_refs=character_refs,

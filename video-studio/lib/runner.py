@@ -216,6 +216,9 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
                         help="定向重渲某一集（按 seq，无视 cursor/status）；不推进 cursor/status")
     parser.add_argument("--clean-cache", action="store_true",
                         help="清空目标集的媒体缓存目录后退出（不渲染）")
+    parser.add_argument("--stop-after", default=None, metavar="STEP",
+                        help="跑到这一步为止就停（如 --stop-after covered-update = 只出剧本，"
+                             "不碰 TTS/图/视频/合成，零media开销）")
     args = parser.parse_args(argv)
 
     from lib.config import load_config, ConfigError, ConfigNotFound
@@ -237,16 +240,50 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
         print(f"error: {e}", file=sys.stderr)
         return 1
 
+    # --stop-after: truncate the step table after the named step. Resolved here
+    # (before the ffmpeg preflight) because a run that stops before the media
+    # steps needs no ffmpeg at all — demanding a libass-capable binary to produce
+    # a text script would be a preflight failing on a tool the run never calls.
+    from lib.pipeline import _PIPELINE  # noqa: F401 — only for the name list below
+    pipeline = load_pipeline()
+    validate_pipeline(pipeline)
+    step_names = [s["name"] for s in pipeline]
+    if args.stop_after is not None:
+        if args.stop_after not in step_names:
+            print(
+                f"error: --stop-after {args.stop_after!r} 不是管线里的步骤。可选：\n  "
+                + "\n  ".join(step_names),
+                file=sys.stderr,
+            )
+            return 1
+        cut = step_names.index(args.stop_after) + 1
+        pipeline = pipeline[:cut]
+        print(f"[stop-after] 管线截断到 {args.stop_after!r}（{cut}/{len(step_names)} 步）",
+              file=sys.stderr)
+
+    # Steps that shell out to ffmpeg/ffprobe. If none of them survive the
+    # truncation, the preflight is skipped (and so is the character-ref
+    # resolution, which can fall through to a paid image generation).
+    _MEDIA_STEPS = {
+        "tts", "镜头计划", "gen-still", "gen-video", "chart",
+        "subtitle", "assemble",
+    }
+    remaining = {s["name"] for s in pipeline}
+    script_only = not (remaining & _MEDIA_STEPS)
+
     # Phase 7: preflight — check ffmpeg has libass BEFORE entering render (AD-3).
     # FFMPEG_BIN env takes priority over config.ffmpeg.ffmpeg_bin (AD-4, mirrors wiring.py:66).
     import os as _os
     from lib.preflight import check_ffmpeg_libass, PreflightError
     _ffmpeg_bin = _os.environ.get("FFMPEG_BIN", config.ffmpeg.ffmpeg_bin)
-    try:
-        check_ffmpeg_libass(_ffmpeg_bin)
-    except PreflightError as e:
-        print(str(e), file=sys.stderr)
-        return 1
+    if script_only:
+        print("[stop-after] 只出剧本：跳过 ffmpeg preflight，零 media 开销", file=sys.stderr)
+    else:
+        try:
+            check_ffmpeg_libass(_ffmpeg_bin)
+        except PreflightError as e:
+            print(str(e), file=sys.stderr)
+            return 1
 
     # Phase 6: Stage-1 entry — select next pending episode from syllabus (if configured).
     # Must run BEFORE prepare_render so seq/slug are closure-bound with the right values.
@@ -286,8 +323,8 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
         print(f"error: fixture not found: {fixture_path}", file=sys.stderr)
         return 1
 
-    pipeline = load_pipeline()
-    validate_pipeline(pipeline)
+    # NOTE: the pipeline was already loaded, validated and (possibly) truncated
+    # above — re-loading it here would silently discard --stop-after.
 
     def _log(msg: str) -> None:
         print(msg, file=sys.stderr)
@@ -298,11 +335,13 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
     if selection is not None:
         bundle = prepare_fn(config, fixture_path=fixture_path, seq=ep_seq,
                             slug=ep_slug, dry=args.dry, log=_log, selection=selection,
-                            fresh=args.fresh, episode_target=episode_target)
+                            fresh=args.fresh, episode_target=episode_target,
+                            script_only=script_only)
     else:
         bundle = prepare_fn(config, fixture_path=fixture_path, seq=ep_seq,
                             slug=ep_slug, dry=args.dry, log=_log,
-                            fresh=args.fresh, episode_target=episode_target)
+                            fresh=args.fresh, episode_target=episode_target,
+                            script_only=script_only)
 
     # MR-2: prepare_render carries the (possibly cache-wrapped) seams object back
     # under "_seams" for the post-run cache summary — run_pipeline is keyword-only
@@ -319,10 +358,22 @@ def _cli(argv: list[str] | None = None, *, prepare_fn=None, run_pipeline_fn=None
 
     ep = lib.episode.episode_paths(config.output_dir, ep_seq, ep_slug)
     print(f"done — episode {ep_seq}-{ep_slug}")
-    for key in ("final", "subtitles", "shotlist", "provenance"):
+    # A script-only run produces no video; reporting the render deliverables as
+    # missing ("—") would read as a failure. Report what it actually made.
+    keys = ("script", "beats") if script_only else (
+        "final", "subtitles", "shotlist", "provenance")
+    for key in keys:
         p = ep[key]
         mark = "✓" if Path(p).exists() else "—"
         print(f"  {mark} {key}: {p}")
+    if script_only:
+        try:
+            import json as _json
+            _b = _json.loads(Path(ep["beats"]).read_text(encoding="utf-8"))["beats"]
+            _n = sum(len(x.get("text") or "") for x in _b)
+            print(f"  {len(_b)} beats · {_n} 字")
+        except (OSError, ValueError, KeyError):
+            pass
     hits = getattr(seams, "hits", None)
     misses = getattr(seams, "misses", None)
     if hits is not None or misses is not None:

@@ -39,7 +39,11 @@ def test_pipeline_has_single_script_agent_step_with_retry():
     assert len(scripts) == 1
     s = scripts[0]
     assert s["kind"] == "agent" and s["agent"] == "digest-writer"
-    assert s.get("retry") == 1
+    # 3, not 1: the step now hosts THREE gates (忠实门 / 字数门 / 开场门). One retry
+    # was sized for one gate, and the writer trades one gate for another between
+    # attempts (the pilot greeted, then opened cold but came back short), so the
+    # budget has to absorb more than a single trade. See test_script_length_gate.py.
+    assert s.get("retry") == 3
     # ordered after extract, before tts
     names = [x["name"] for x in p]
     assert names.index("extract") < names.index("script") < names.index("tts")
@@ -227,7 +231,12 @@ def test_host_persona_injected_into_prompt(tmp_path):
 
     p = captured["prompt"]
     assert "卞旸" in p and "跑者学堂" in p and "亲切" in p
-    assert "问候" in p and "签名" in p
+    # The host directive used to ORDER a greeting opening ("问候"). It now orders the
+    # opposite — cold hook first, intro after — because the channel's viewers average
+    # 55.5 seconds and a greeting spends the opening on nothing. See
+    # test_script_length_gate.test_host_line_does_not_order_a_greeting_opening.
+    assert "第一个 beat 是冷钩子" in p
+    assert "我是卞旸，跑者学堂" in p     # the intro still ships, just later
 
 
 def test_no_host_no_greeting_directive(tmp_path):

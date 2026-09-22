@@ -44,7 +44,7 @@ from lib import steps as steps_mod
 from lib.config import HostConfig, VideoStudioConfig
 from lib.media_source import GenerateSource, MediaRouter
 from lib.budget import apply_video_budget, apply_video_floor
-from lib.ledger import LedgerError, validate_ledger, verify_anchors
+from lib.ledger import LedgerError, validate_ledger, verify_anchors, verify_style
 from lib.provenance import build_provenance, stamp_episode_provenance
 from lib.query_filter import sanitize_query
 from lib import render_stamp
@@ -62,6 +62,13 @@ MAX_CALIB_ROUNDS = 3
 # to comfortably cover a 10-min full-length encode with margin; per-clip encodes finish
 # in seconds and never approach it.
 FFMPEG_TIMEOUT_S = 1200
+
+# digest-writer's `claude -p` budget. dispatch_persona defaults to 600s, which the
+# pilot burned through three times over — every attempt died on the clock, not on a
+# gate, and the truncated draft it left behind was indistinguishable from a real
+# length-gate rejection. One attempt = read a ~26 KB chapter, write ~3000 characters
+# of narration carrying a verbatim source anchor per beat, then self-check it.
+WRITER_TIMEOUT_S = 1500
 # ⑧ (2026-07-03): a chart held fully static for a whole long-narration beat reads as
 # frozen (ep002 had one chart on screen ~50s). Cap the chart's on-screen time; the rest
 # of the beat's narration plays over a content-relevant still (no camera on the chart —
@@ -434,6 +441,7 @@ def build_step_fns(
     dry: bool = False,
     resume: bool = False,
     episode_target: bool = False,
+    script_only: bool = False,
 ) -> dict[str, Callable]:
     """Return {step_name: fn(step, ctx, scratch_dir)} for the Phase-2 pipeline.
 
@@ -531,6 +539,15 @@ def build_step_fns(
             # DESCRIPTION → generate, or empty → default). SPIKE_REF hook still wins.
             # See resolve_character_ref_url for the full priority + corrupt-file
             # fallback. This replaces the old within-run-only ephemeral-URL path.
+            #
+            # A script-only run stops before any media step, so nothing will ever
+            # read ref_url — and resolving it is not free: a missing/unreadable
+            # character_ref file falls through to gen_character_ref, a PAID image
+            # generation. Skip it outright rather than rely on the ref happening
+            # to be on disk.
+            if script_only:
+                log("[ref] script-only：跳过人物参考图解析（不生成、不计费）")
+                return
             ep = ctx["ep"]
             cref_out = str(ep["assets_dir"] / "character_ref.png")
             ctx["ref_url"] = resolve_character_ref_url(
@@ -1236,26 +1253,47 @@ def build_step_fns(
     # soft: any store error → memo='' (the run must never halt on the memo).
     # int(ctx['seq']) — seq is a zero-padded STRING (syllabus.derive_seq_slug),
     # is_stale/render_memo want an int.
+    def _legacy_avoid() -> str:
+        """The back catalogue's already-used apparatus — a permanent avoid list.
+
+        Kept separate from the covered-ground store on purpose. That store decays
+        (an anchor goes cold once it is older than `recent_n` episodes), which is
+        correct for de-duplicating WITHIN a season and wrong for this: "do not
+        re-use an analogy from the 100 episodes already published" does not expire
+        after 20 episodes. Fail-soft — an unreadable file must not halt the run
+        (config already fail-closed on a path that doesn't exist).
+        """
+        path = getattr(cfg, "legacy_avoid_path", "") or ""
+        if not path:
+            return ""
+        try:
+            return Path(os.path.expanduser(path)).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            log(f"[avoid-memo] legacy avoid list unreadable (fail-soft): {exc}")
+            return ""
+
     def step_avoid_memo(step, ctx, scratch):
-        # No seq = fixture / no-cursor render: no episode context, so no memo.
-        # Handle explicitly so the try/except below only ever catches a GENUINE
-        # store/embed failure (not the expected no-seq case, which would else
-        # silently mask a real bug behind "empty avoid-memo").
+        legacy = _legacy_avoid()
+
+        # No seq = fixture / no-cursor render: no episode context, so no
+        # covered-ground memo. The legacy list still applies — it is not
+        # seq-relative.
         seq = ctx.get("seq")
         if seq is None:
-            ctx["avoid_memo"] = ""
-            log("[avoid-memo] no seq (fixture/no-cursor) — empty avoid-memo")
+            ctx["avoid_memo"] = legacy
+            log("[avoid-memo] no seq (fixture/no-cursor) — legacy list only"
+                if legacy else "[avoid-memo] no seq — empty avoid-memo")
             return
         try:
-            ctx["avoid_memo"] = coveredground.render_memo(
+            recent = coveredground.render_memo(
                 coveredground.load_store(cfg.output_dir), int(seq)
             )
         except Exception:  # noqa: BLE001 — fail-soft: never halt on the memo
-            ctx["avoid_memo"] = ""
-        if ctx["avoid_memo"]:
-            log("[avoid-memo] covered-ground avoidance brief seeded")
-        else:
-            log("[avoid-memo] no hot anchors (empty avoid-memo)")
+            recent = ""
+
+        ctx["avoid_memo"] = "\n\n".join(p for p in (legacy, recent) if p)
+        log(f"[avoid-memo] legacy={'yes' if legacy else 'no'} "
+            f"covered-ground={'yes' if recent else 'no hot anchors'}")
 
     # ---- covered-update (B6): fold this episode's distilled covered.json into
     # the cross-episode store, so the NEXT episode's avoid-memo sees it.
@@ -1311,9 +1349,144 @@ def build_step_fns(
 # prepare_render — assemble everything run_pipeline needs (no run_pipeline call)
 # ---------------------------------------------------------------------------
 
-def _beats_to_md(beats: list[dict]) -> str:
-    """Render digest-writer beats into a reviewable script.md."""
-    lines = ["# 脚本（digest-writer）\n"]
+def script_chars(beats: list[dict]) -> int:
+    """Length of the narration, counted the way the length gate counts it.
+
+    Every character of every beat's `text` — the exact string TTS speaks, so the
+    count maps to runtime (~4-5 chars/sec of Mandarin). `anchor` is excluded: it
+    is the source citation, not narration, and never reaches the audio.
+    """
+    return sum(len((b.get("text") or "")) for b in beats if isinstance(b, dict))
+
+
+def _retry_brief(ctx: dict) -> str:
+    """Turn the previous attempt's gate failures into a corrective brief.
+
+    Every gate reports back, so a retry is a targeted fix rather than a re-roll.
+    Empty string on the first attempt (nothing to report).
+    """
+    parts: list[str] = []
+
+    schema_err = ctx.get("_schema_error")
+    if schema_err:
+        parts.append(
+            "## 上一稿的 JSON 不合格（整期作废，必须修）\n\n"
+            f"报错：`{schema_err}`\n\n"
+            "常见原因：\n"
+            "- **某个 beat 没写 `anchor`**（每一个 beat 都必须有；纯过渡段就摘该段引用的术语原词）\n"
+            "- `text` 里用了英文直引号 `\"`，把 JSON 字符串提前截断了 → 改用中文「」\n"
+            "- 输出带了 ```json 围栏或解释文字 → 只输出那一个 JSON，别的都不要\n"
+        )
+
+    flagged = ctx.get("_faithfulness_flagged") or []
+    if flagged:
+        lines = [
+            "## 上一稿被忠实门拦下了（必须修，否则本期作废）\n",
+            "以下 beat 的 anchor 在教材原文里找不到依据——要么数字是编的，"
+            "要么 anchor 被你改写/概括了。anchor 必须是原文里**原样存在**的英文句子。\n",
+        ]
+        for f in flagged[:8]:
+            lines.append(f"- `{f.get('beat_id', '?')}`：anchor = {f.get('anchor', '')!r}")
+        lines.append(
+            "\n改法：把 anchor 换成原文里真实存在的那一行原话；如果原文根本没有这个数据，"
+            "**删掉这个说法**，不要换个数字硬凑。"
+        )
+        parts.append("\n".join(lines))
+
+    style = ctx.get("_style_violations") or []
+    if style:
+        lines = ["## 上一稿违反了开场/独立成篇/引用腔规则（必须修）\n"]
+        for v in style[:8]:
+            if v.get("rule") == "冷开场":
+                lines.append(
+                    f"- `{v.get('beat_id')}`：**第一个 beat 出现了「{v.get('found')}」**。"
+                    f"第一个 beat 必须是冷钩子——一个具体画面 / 一个反差事实 / 一个具体的人。"
+                    f"问候和自我介绍挪到钩子之后。\n"
+                    f"  你写的是：{v.get('excerpt', '')}…"
+                )
+            elif v.get("rule") == "引用腔":
+                lines.append(
+                    f"- `{v.get('beat_id')}`：出现了「{v.get('found')}」。"
+                    f"全篇以「教材/原文」作主语的框架句超过两三句了——把知识内化成你自己要讲的话，"
+                    f"直接讲结论和数据，不必每句都点出处。\n"
+                    f"  上下文：…{v.get('excerpt', '')}…"
+                )
+            else:
+                lines.append(
+                    f"- `{v.get('beat_id')}`：出现了「{v.get('found')}」。每一期都是单独推给"
+                    f"陌生人的，观众没看过上一期，也不知道有下一期——提到它们只会让人划走。删掉。\n"
+                    f"  上下文：…{v.get('excerpt', '')}…"
+                )
+        parts.append("\n".join(lines))
+
+    short = ctx.get("_length_short")
+    if short:
+        got, need = short
+        parts.append(
+            f"## 上一稿字数不够（{got} 字，下限 {need} 字，还差 {need - got} 字）\n\n"
+            "补法只有一种：**加实料**——多讲一个教材里的具体例子/实验/人物，"
+            "多把一个要点讲透（为什么、怎么用、常见错在哪），或补一个书里真有的相关角度。\n"
+            "**禁止**：车轱辘话、重复上一句、空泛铺垫、把一句话抻长。宁可多讲一个真实要点。"
+        )
+
+    long_ = ctx.get("_length_long")
+    if long_:
+        got, cap = long_
+        parts.append(
+            f"## 上一稿字数超上限（{got} 字，上限 {cap} 字，多了 {got - cap} 字）\n\n"
+            "砍法只有一种：**砍实料**——合并重复的实验/人物、删最弱的一个例子、把两个相邻 beat 合并成一个。"
+            "**禁止**：直接砍末尾的 beat（破坏结尾领取物结构）；把长句拆短充数（不会减字）；删证据/数字让忠实门不通过。"
+            "**目标**：把字数砍到 ≤ {cap}。宁可少一个真实要点，不可超过上限。"
+        )
+
+    if not parts:
+        return ""
+
+    # Observed on the pilot: attempt 1 greeted and was long enough; attempt 2 fixed
+    # the opening and came back 759 characters short. The writer fixes the gate it
+    # is told about and quietly drops one it already satisfied. So every retry brief
+    # restates the full set — a fix is only a fix if it holds everything else.
+    parts.append(
+        "## 修的时候别把已经对的地方改回去\n\n"
+        "下面几条是**同时成立**的硬约束，不是可以互相交换的：\n"
+        "- 第一个 beat 是冷钩子（没有「大家好」「欢迎来到」「今天我们讲」）\n"
+        "- 字数达到下限\n"
+        "- 每个 beat 都有 anchor，且是教材原文原样摘抄\n"
+        "- 全片不出现「上期」「下期」「我们下次见」\n\n"
+        "只修被点名的那一条，其余原样保留。"
+    )
+    return "\n\n---\n\n" + "\n\n".join(parts) + "\n\n---\n\n"
+
+
+def _beats_to_md(
+    beats: list[dict],
+    *,
+    title: str = "",
+    title_subtitle: str = "",
+    end_card_bullets: list[str] | None = None,
+) -> str:
+    """Render the episode's deliverables into a reviewable script.md.
+
+    The publish title and the end-card lines are part of what gets handed over,
+    not just the narration — so they lead the file rather than living only inside
+    beats.json where a human would never look for them.
+    """
+    lines: list[str] = [f"# {title}\n" if title else "# 脚本（digest-writer）\n"]
+
+    meta: list[str] = []
+    if title:
+        meta.append(f"- **视频号标题**：{title}")
+    if title_subtitle:
+        meta.append(f"- **显示副标**：{title_subtitle}")
+    if end_card_bullets:
+        meta.append("- **尾卡文案**：")
+        meta.extend(f"  {i}. {b}" for i, b in enumerate(end_card_bullets, 1))
+    if meta:
+        lines.append("\n".join(meta) + "\n")
+
+    lines.append(f"> {len(beats)} beats · {script_chars(beats)} 字（配音正文）\n")
+    lines.append("---\n")
+
     for b in beats:
         lines.append(f"## {b.get('beat_id', '')}\n")
         lines.append(b.get("text", "") + "\n")
@@ -1350,14 +1523,23 @@ def _read_persona(plugin_root: Path, name: str) -> str:
 
 
 def _script_config_fields(cfg: VideoStudioConfig, ctx: dict) -> dict:
-    """Config/ctx fields the beats.json stamp must cover (Task 2/4 § Pillar A)."""
+    """Config/ctx fields the beats.json stamp must cover (Task 2/4 § Pillar A).
+
+    The length target is part of the stamp: without it, raising `target_chars`
+    would leave every existing (shorter) beats.json stamp-valid, and the durable-
+    reuse branch would silently hand back the old under-length script instead of
+    re-dispatching the writer.
+    """
     host = getattr(cfg, "host", None)
+    script = getattr(cfg, "script", None)
     return {
         "host_name": _stampable(getattr(host, "name", "")) or "",
         "host_channel": _stampable(getattr(host, "channel", "")) or "",
         "host_tone": _stampable(getattr(host, "tone", "")) or "",
         "source": _stampable(ctx.get("source")) or "",
         "verify_status": _stampable(ctx.get("verify_status")) or "",
+        "target_chars": _stampable(getattr(script, "target_chars", None)),
+        "min_chars": _stampable(getattr(script, "min_chars", None)),
     }
 
 
@@ -1423,6 +1605,8 @@ def make_script_dispatch(
                 ctx["beats"] = beats
                 # MF#2: restore authored card fields the live path would have set
                 # (persisted into beats.json above) so resumed cards match pass 1.
+                if _data.get("title"):
+                    ctx["title"] = _data["title"]
                 if _data.get("title_subtitle"):
                     ctx["title_subtitle"] = _data["title_subtitle"]
                 if _data.get("end_card_bullets"):
@@ -1456,24 +1640,55 @@ def make_script_dispatch(
         if _host is not None and getattr(_host, "name", ""):
             _ch = getattr(_host, "channel", "")
             _tone = getattr(_host, "tone", "")
+            # The self-intro goes AFTER the hook, not before it. This line used to
+            # order the opposite ("开场第一个 beat 用「大家好，我是X，欢迎来到Y」"),
+            # which overrode the persona from the user prompt — the pilot opened with
+            # the greeting despite the persona forbidding it. The channel's own data
+            # settles it: viewers average 55.5 seconds, so a greeting spends the
+            # product's opening on nothing.
+            _intro = f"我是{_host.name}" + (f"，{_ch}" if _ch else "")
             _host_line = (
                 f"本期主播：{_host.name}"
                 + (f"（频道：{_ch}）" if _ch else "")
                 + (f"，口吻基调：{_tone}" if _tone else "")
-                + f"。开场第一个 beat 用「大家好，我是{_host.name}"
-                + (f"，欢迎来到{_ch}" if _ch else "")
-                + "」式问候，且问候必须和钩子合一（问候后立刻抛反差/悬念，不许干念"
-                  "「今天我们讲 X」）；结尾最后一个 beat 用主播签名收尾（暖收束+一句留客），"
-                  "但结尾签名不要照搬开头的自我介绍原话（如「我是X，欢迎来到Y」），"
-                  "换一种收束说法，避免结尾听起来像开头那段又重播了一遍；"
-                  "整期贯穿该口吻。\n"
+                + "。\n"
+                "**开场硬规则**：第一个 beat 是冷钩子——一个具体画面 / 一个反差事实 / "
+                "一个具体的人。**禁止**出现「大家好」「欢迎来到」「今天我们讲」。\n"
+                f"自我介绍放在钩子之后（约第 2 个 beat 末尾），只用极短一句：「{_intro}。」"
+                "然后立刻回到内容，不许展开寒暄。\n"
+                "结尾用暖收束 + 一个可执行动作 + 一句升华收口；不要照搬开头的自我介绍，"
+                "不要预告下期。整期贯穿该口吻。\n"
             )
+        # Length target is config-driven. A cfg that carries no ScriptConfig (the
+        # bare stand-ins the wiring tests inject) yields 0 → the gate is inert and
+        # the prompt says nothing about length, i.e. exactly the pre-existing
+        # behaviour. A real VideoStudioConfig always carries one (dataclass
+        # default), so the production path is always gated.
+        _sc = getattr(cfg, "script", None)
+
+        def _cfg_int(name: str) -> int:
+            v = getattr(_sc, name, None)
+            return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+        _target, _minc, _maxc = (
+            _cfg_int("target_chars"), _cfg_int("min_chars"), _cfg_int("max_chars"),
+        )
         user_prompt = (
             f"教材原文（只依据这段原文，不外检索）在: {src}\n"
             f"本期主源: {_src_label or '教材原文'}；溯源状态: {_vstatus or '已溯源'}。{_disclosure}\n"
             f"{_host_line}"
             f"读它，写一期结构化跑步知识脚本 beats。"
         )
+        if _minc:
+            user_prompt += (
+                f"\n**本期字数：目标 {_target} 字，硬下限 {_minc} 字"
+                + (f"，不要超过 {_maxc} 字" if _maxc else "")
+                + "。**（按 beats 的 text 累计字符数算——就是配音要念的那些字。）"
+                "不到下限会被字数门打回重写。字数靠加实料达到，绝不注水。"
+            )
+        # Retry feedback: on attempt 2+ the previous gate failures are named, so
+        # the writer fixes THOSE rather than re-rolling the whole episode.
+        user_prompt += _retry_brief(ctx)
         # B5: covered-ground avoidance section — recently-overused 类比/例子/钩子
         # the writer should avoid/replace this episode. DATA, not a fact source
         # (温度盾: only packaging, never opinions; the 忠实门 owns the numbers).
@@ -1482,9 +1697,21 @@ def make_script_dispatch(
             "\n## 反复用过的类比/例子/钩子——本期避让(covered-ground)\n"
             f"{ctx.get('avoid_memo', '') or '(无 covered-ground 避让约束)'}\n"
         )
+
+        # Clear last attempt's output first. A timed-out or crashed attempt leaves a
+        # half-written digest_beats.json behind; if the NEXT `claude -p` exits 0
+        # without rewriting it, that stale draft would sail through the gates as
+        # though the writer had just produced it.
+        _stale = Path(scratch_dir) / "digest_beats.json"
+        if _stale.exists():
+            try:
+                _stale.unlink()
+            except OSError:
+                pass
+
         res = dispatch_persona_fn(
             "digest-writer", user_prompt, scratch_dir, "digest_beats.json",
-            plugin_root=plugin_root, model="sonnet",
+            plugin_root=plugin_root, model="sonnet", timeout=WRITER_TIMEOUT_S,
         )
         if not res.get("ok"):
             log(f"[script] dispatch failed → no artifact (retry): {res.get('reason')}")
@@ -1499,15 +1726,51 @@ def make_script_dispatch(
             # persona. A schema miss is a FAILED ATTEMPT (→ retry), like bad JSON.
             validate_ledger({"beats": beats})
         except (json.JSONDecodeError, OSError, AttributeError, ValueError, LedgerError) as exc:
+            # Report it back. A schema miss used to retry blind: the writer was told
+            # nothing, so it had no idea which beat was missing an anchor or where
+            # its JSON broke. (Live: "beat 2 missing or empty 'anchor'".)
+            ctx["_schema_error"] = str(exc)
             log(f"[script] digest output invalid (bad JSON / empty / unsourced) → retry: {exc}")
             return
 
+        # Three gates, evaluated together so ONE retry can fix all of them.
+        # Evaluating in series would spend an attempt per gate and halt an episode
+        # that was a single draft away from passing everything.
         verdict = verify_anchors({"beats": beats}, fulltext)
+        style = verify_style({"beats": beats})
+        n_chars = script_chars(beats)
+        too_short = bool(_minc) and n_chars < _minc
+        too_long = bool(_maxc) and n_chars > _maxc
+
+        # Clear last attempt's findings first: a stale flag would otherwise be
+        # replayed into the NEXT retry's brief as though it were still failing.
+        for k in ("_faithfulness_flagged", "_length_short", "_length_long",
+                  "_style_violations", "_schema_error"):
+            ctx.pop(k, None)
+
         if not verdict["ok"]:
             ctx["_faithfulness_flagged"] = verdict["flagged"]
-            log(f"[script] 忠实门 FLAGGED {len(verdict['flagged'])} beat(s) "
-                f"→ no artifact → retry/halt")
+        if too_short:
+            ctx["_length_short"] = (n_chars, _minc)
+        if too_long:
+            ctx["_length_long"] = (n_chars, _maxc)
+        if not style["ok"]:
+            ctx["_style_violations"] = style["violations"]
+
+        if not verdict["ok"] or too_short or too_long or not style["ok"]:
+            why = []
+            if not verdict["ok"]:
+                why.append(f"忠实门拦下 {len(verdict['flagged'])} beat")
+            if too_short:
+                why.append(f"字数 {n_chars} < 下限 {_minc}")
+            if too_long:
+                why.append(f"字数 {n_chars} > 上限 {_maxc}")
+            if not style["ok"]:
+                why.append(f"开场/独立成篇/引用腔违规 {len(style['violations'])} 处")
+            log(f"[script] {' + '.join(why)} → no artifact → retry/halt")
             return
+
+        log(f"[script] {len(beats)} beats · {n_chars} 字（目标 {_target}，下限 {_minc}）· 三门通过")
 
         # Normalize the render id: the 忠实门/ledger schema uses `beat_id`
         # (digest-writer emits it); fixture beats + every render step (tts /
@@ -1536,16 +1799,32 @@ def make_script_dispatch(
             if isinstance(_subtitle, str) and _subtitle.strip():
                 ctx["title_subtitle"] = _subtitle.strip()
                 log(f"[script] title_subtitle authored: {_subtitle[:40]!r}")
+            # The 视频号 publish title — the one line a viewer sees in the feed
+            # before deciding to tap. Persisted like the other authored fields;
+            # without this it would be written by the persona and then dropped.
+            _title = _digest_full.get("title")
+            if isinstance(_title, str) and _title.strip():
+                ctx["title"] = _title.strip()
+                log(f"[script] 视频号标题: {_title[:40]!r}")
         except (json.JSONDecodeError, OSError, KeyError):
             pass  # authored fields are optional; any read error → ctx stays empty
 
         if ep is not None:
-            ep["script"].write_text(_beats_to_md(beats), encoding="utf-8")
+            ep["script"].write_text(
+                _beats_to_md(
+                    beats,
+                    title=ctx.get("title", ""),
+                    title_subtitle=ctx.get("title_subtitle", ""),
+                    end_card_bullets=ctx.get("end_card_bullets"),
+                ),
+                encoding="utf-8",
+            )
             # MF#2: persist the authored card fields alongside beats so a durable
             # resume restores them (they otherwise live only in the scratch digest
             # JSON → resumed title/end cards would silently revert to defaults).
             Path(ep["beats"]).write_text(
                 json.dumps({"beats": beats,
+                            "title": ctx.get("title", ""),
                             "title_subtitle": ctx.get("title_subtitle", ""),
                             "end_card_bullets": ctx.get("end_card_bullets")},
                            ensure_ascii=False), encoding="utf-8"
@@ -2021,10 +2300,15 @@ def prepare_render(
     selection: Any = None,
     fresh: bool = False,
     episode_target: bool = False,
+    script_only: bool = False,
 ) -> dict[str, Any]:
     """Build the {step_fns, gates, dispatch, scratch_dir} bundle the caller
     passes straight into `run_pipeline`. The caller owns the run_pipeline call
     (keeps this module off the runner's import path → no cycle).
+
+    `script_only` (the `--stop-after` CLI path) tells the step layer that no media
+    step will run, so it must not resolve the character ref — that resolution can
+    fall through to a PAID image generation.
 
     `fresh` / `episode_target` (Task 7, resume/media-cache): `fresh=True`
     bypasses both the durable A-layer (script/storyboard re-dispatch) and the
@@ -2055,7 +2339,7 @@ def prepare_render(
     step_fns = build_step_fns(
         cfg, seams=seams, router=router, fixture_path=fixture_path, seq=seq, slug=slug,
         run_ff=run_ff, probe_ms=probe_ms, log=log, selection=selection, dry=dry,
-        resume=resume, episode_target=episode_target,
+        resume=resume, episode_target=episode_target, script_only=script_only,
     )
     gates = {"check_artifact": episode_mod.check_artifact}
 

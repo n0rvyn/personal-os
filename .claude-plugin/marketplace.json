@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Personal OS data plugins: health, reflection, intelligence, and knowledge management",
-    "version": "0.29.0"
+    "version": "0.30.0"
   },
   "plugins": [
     {
@@ -88,7 +88,7 @@
       "name": "tts-toolkit",
       "source": "./tts-toolkit",
       "description": "Unified TTS skill across Volcengine (Doubao) and MiniMax with cross-vendor voice catalog, provider-quirk references, and chunk/merge scripts for long-form audio.",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "category": "audio",
       "tags": [
         "tts",
@@ -120,7 +120,7 @@
       "name": "podcast-studio",
       "source": "./podcast-studio",
       "description": "personal-os fleet-member podcast production: a Claude-driven multi-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, vendored prep orchestrator, and TTS synthesis via the personal-os fleet's tts skill. Reads paths and credentials from ~/.podcast-studio/config.yaml.",
-      "version": "0.7.1",
+      "version": "0.8.0",
       "category": "audio",
       "tags": [
         "podcast",
@@ -135,7 +135,7 @@
       "name": "video-studio",
       "source": "./video-studio",
       "description": "教材 PDF → 结构化视频专栏 一键成片流水线（/video-plan 大纲规划 + /video-make 出片；ffmpeg 引擎 + Doubao(默认)/MiniMax 双 provider 图/视频/语音；忠实门 + 分镜判官预算治理；需 libass ffmpeg 静态构建）",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "category": "media",
       "tags": [
         "video",

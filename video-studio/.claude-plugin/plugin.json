@@ -1,6 +1,6 @@
 {
   "name": "video-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "教材 PDF → 结构化视频专栏 一键成片流水线（ffmpeg 引擎 + Doubao(默认)/MiniMax 双 provider 图/视频/语音）",
   "author": {
     "name": "Norvyn"

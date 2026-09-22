@@ -14,12 +14,31 @@
 #   synth-auto.sh --input <md>      --output <mp3> [--reserve-pct 25] [--concurrency 2] [--max-chars 280] [--vendor-pool a,b]
 #   synth-auto.sh --segments <json> --output <mp3> [--reserve-pct 25] [--concurrency 2] [--vendor-pool a,b]
 #
-# Default vendor pool (priority order): minimax → volc-2.0 → volc-1.0
+# Vendor priority is CONFIGURABLE, not baked in. Highest source wins:
+#   1. `--vendor-pool a,b,c`   per-call
+#   2. `TTS_VENDOR_PRIORITY`   standing setting (podcast-studio exports it from
+#                              `tts.vendor_priority` in its config YAML)
+#   3. built-in default:       minimax → volc-2.0 → volc-1.0 → local
+# The order given is the order tried; an unknown name is an error, not a skip.
+#
+# ⚠️ `local` is the offline sherpa-onnx engine (see providers/local.sh). It is
+#    LAST on purpose: it sounds worse than every cloud vendor and its lexicon
+#    drops English words. What it gives back is that it cannot run out — once
+#    it is installed, a fully-exhausted cloud pool yields a rougher episode
+#    instead of no episode.
+#
+# ⛔ Consequence, stated rather than discovered: with `local` installed, exit 4
+#    effectively stops happening on the default pool. The "never a half-spent
+#    budget" guarantee is untouched (local spends nothing); what changes is
+#    that "no audio at all" is no longer an outcome. Drop it with
+#    `--vendor-pool minimax,volc-2.0,volc-1.0` when you specifically want the
+#    run to fail rather than ship the offline voice.
 #
 # Exit codes:
 #   0  success (mp3 written to --output; path echoed to stdout)
 #   1  argument error
 #   4  no vendor has enough quota / is usable — decided before any synthesis
+#      (reachable when local is excluded, or not yet installed)
 #   other: propagated from synth.sh
 #
 # Env (read indirectly by quota_check.sh / providers):
@@ -27,6 +46,8 @@
 #   VOLC_TTS_APPID / VOLC_TTS_TOKEN                  — Volcengine synth
 #   VOLC_TTS_DAILY_BUDGET_V1 / _V2                   — per-tier self-set ceilings
 #   VOLC_IAM_ACCESS_KEY_ID / VOLC_IAM_SECRET_ACCESS_KEY — (optional) UsageMonitoring
+#   TTS_LOCAL_VOICE                                  — local speaker (default vits-zh-ll-sid0)
+#   TTS_LOCAL_MODEL_DIR / TTS_LOCAL_PYTHON           — offline engine overrides
 #   TTS_CHUNKER_PATH, TTS_LEDGER_DIR                 — overrides for tests
 
 set -euo pipefail
@@ -71,19 +92,49 @@ declare -a POOL=(
     "minimax|mm-Chinese (Mandarin)_Radio_Host||--vendor minimax"
     "volc-2.0|volc-zh_male_yuanboxiaoshu_uranus_bigtts|seed-tts-2.0|--vendor volcengine --tier 2.0"
     "volc-1.0|volc-zh_male_M392_conversation_wvae_bigtts|seed-tts-1.0|--vendor volcengine --tier 1.0"
+    "local|local-${TTS_LOCAL_VOICE:-vits-zh-ll-sid0}||--vendor local"
 )
 
-if [[ -n "$vendor_pool" ]]; then
+# --- Priority resolution --------------------------------------------------
+# Which vendors, in what order, is CONFIGURATION — not something baked into the
+# array above. Three sources, highest wins:
+#
+#   1. `--vendor-pool a,b,c`   per-call override (a human, or a test)
+#   2. `TTS_VENDOR_PRIORITY`   the standing setting; podcast-studio's
+#                              `lib/podcast-env.sh` exports it from
+#                              `tts.vendor_priority` in the config YAML
+#   3. the POOL literal above  the default when nothing is configured
+#
+# ⭐ The order given is the order tried. Reorder freely — put `local` first to
+#    stop spending money; leave it out entirely to make an exhausted pool fail
+#    (exit 4) instead of shipping the offline voice.
+# ⛔ An unknown name is an ERROR, never a silent skip. A typo'd
+#    `TTS_VENDOR_PRIORITY` that quietly fell back to the default would be a
+#    setting that looks applied and is not.
+_priority="${vendor_pool:-${TTS_VENDOR_PRIORITY:-}}"
+if [[ -n "$vendor_pool" ]]; then _priority_src="--vendor-pool"
+else                             _priority_src="TTS_VENDOR_PRIORITY"; fi
+
+if [[ -n "$_priority" ]]; then
     declare -a FILTERED=()
-    IFS=',' read -ra _want <<<"$vendor_pool"
+    IFS=',' read -ra _want <<<"$_priority"
     for _w in "${_want[@]}"; do
+        # Tolerate whitespace around names ("minimax, local").
+        _w="${_w#"${_w%%[![:space:]]*}"}"; _w="${_w%"${_w##*[![:space:]]}"}"
+        [[ -n "$_w" ]] || continue
+        _found=0
         for _entry in "${POOL[@]}"; do
-            [[ "${_entry%%|*}" == "$_w" ]] && FILTERED+=("$_entry")
+            if [[ "${_entry%%|*}" == "$_w" ]]; then FILTERED+=("$_entry"); _found=1; fi
         done
+        [[ "$_found" -eq 1 ]] || {
+            echo "synth-auto: ${_priority_src} names an unknown vendor: '${_w}'" >&2
+            echo "synth-auto: known vendors: ${POOL[*]%%|*}" >&2
+            exit 1; }
     done
     [[ ${#FILTERED[@]} -gt 0 ]] || {
-        echo "synth-auto: --vendor-pool '$vendor_pool' matched no known vendor" >&2; exit 1; }
+        echo "synth-auto: ${_priority_src} '$_priority' matched no known vendor" >&2; exit 1; }
     POOL=("${FILTERED[@]}")
+    echo "synth-auto: vendor priority from ${_priority_src}: ${POOL[*]%%|*}" >&2
 fi
 
 # --- Chunk once, estimate total chars -------------------------------------

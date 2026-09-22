@@ -7,8 +7,9 @@
 #   Segments: --segments <json> --voice <id> --output <path> [--speed --rate --concurrency]
 #
 # Voice prefix routing:
-#   volc-* → providers/volcengine.sh
-#   mm-*   → providers/minimax.sh
+#   volc-*  → providers/volcengine.sh
+#   mm-*    → providers/minimax.sh
+#   local-* → providers/local.sh   (offline sherpa-onnx, no network, no quota)
 #
 # Env overrides (for tests / CI):
 #   TTS_PROVIDER_OVERRIDE  — path to a stub provider script (bypasses prefix routing)
@@ -112,11 +113,12 @@ fi
 # Voice-prefix routing: always validate prefix; provider_override only replaces the
 # binary, not the validation. voice_inner strips the known prefix for the provider call.
 case "$voice" in
-    volc-*) provider="$HERE/providers/volcengine.sh"; voice_inner="${voice#volc-}";;
-    mm-*)   provider="$HERE/providers/minimax.sh";    voice_inner="${voice#mm-}";;
+    volc-*)  provider="$HERE/providers/volcengine.sh"; voice_inner="${voice#volc-}";;
+    mm-*)    provider="$HERE/providers/minimax.sh";    voice_inner="${voice#mm-}";;
+    local-*) provider="$HERE/providers/local.sh";      voice_inner="${voice#local-}";;
     *)
         echo "unsupported voice prefix: $voice" >&2
-        echo "supported: volc-* (Volcengine), mm-* (MiniMax)" >&2
+        echo "supported: volc-* (Volcengine), mm-* (MiniMax), local-* (offline sherpa-onnx)" >&2
         exit 1;;
 esac
 # Provider override: replace binary but keep voice_inner from prefix strip above.

@@ -2,7 +2,7 @@
 # quota_check.sh — Real-time vendor quota check (no local ledger).
 #
 # Subcommands:
-#   check --vendor <minimax|volcengine> --required-chars N [--reserve-pct N] [--model <name>]
+#   check --vendor <minimax|volcengine|local> --required-chars N [--reserve-pct N] [--model <name>]
 #       exit 0: ok (sufficient quota)
 #       exit 1: over-budget
 #       exit 2: vendor-down / model-not-found
@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$vendor" ]]; then
-    echo "quota_check: --vendor required (minimax|volcengine)" >&2
+    echo "quota_check: --vendor required (minimax|volcengine|local)" >&2
     exit 1
 fi
 
@@ -254,6 +254,50 @@ volcengine_tier_check() {
 }
 
 # ---------------------------------------------------------------------------
+# Local (offline) branch — no vendor, no account, no ceiling
+# ---------------------------------------------------------------------------
+# There is no quota to check: the model runs on this machine and bills nothing,
+# so --required-chars / --reserve-pct are accepted and ignored. What IS checked
+# is READINESS — model files present, python importable. An unprepared local
+# provider reports exit 3 (auth/config missing) so `synth-auto` skips it the
+# same way it skips a vendor with no key, instead of selecting it and failing
+# mid-synthesis.
+local_check() {
+    local model_dir py n
+    model_dir="${TTS_LOCAL_MODEL_DIR:-$HOME/.tts-toolkit/models/vits-zh-ll}"
+
+    for n in model.onnx tokens.txt lexicon.txt date.fst number.fst phone.fst new_heteronym.fst; do
+        if [[ ! -f "$model_dir/$n" ]]; then
+            echo "local: model not installed (missing ${model_dir}/${n}) — run scripts/fetch-local-model.sh" >&2
+            exit 3
+        fi
+    done
+
+    py="${TTS_LOCAL_PYTHON:-}"
+    if [[ -z "$py" ]]; then
+        if [[ -x "$HOME/.tts-toolkit/venv/bin/python" ]]; then
+            py="$HOME/.tts-toolkit/venv/bin/python"
+        else
+            py="python3"
+        fi
+    fi
+    if ! "$py" -c "import sherpa_onnx, numpy" 2>/dev/null; then
+        echo "local: ${py} cannot import sherpa_onnx/numpy — run scripts/fetch-local-model.sh" >&2
+        exit 3
+    fi
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        echo "local: ffmpeg not on PATH" >&2
+        exit 3
+    fi
+
+    if [[ "$subcommand" == "show" ]]; then
+        echo "local: ready (offline, unlimited) model=${model_dir} python=${py}"
+        return 0
+    fi
+    echo "local ok: offline engine ready — no quota (requested ${required_chars} chars)"
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 case "$vendor" in
@@ -265,5 +309,6 @@ case "$vendor" in
             volcengine_check
         fi
         ;;
-    *) echo "quota_check: unknown vendor: ${vendor} (supported: minimax, volcengine)" >&2; exit 1 ;;
+    local)       local_check ;;
+    *) echo "quota_check: unknown vendor: ${vendor} (supported: minimax, volcengine, local)" >&2; exit 1 ;;
 esac

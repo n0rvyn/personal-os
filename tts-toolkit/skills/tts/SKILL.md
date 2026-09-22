@@ -1,6 +1,6 @@
 ---
 name: tts
-description: "Synthesize speech with a single command across Volcengine (Doubao) and MiniMax. Voice-id prefix routes the backend: volc-* → Volcengine, mm-* → MiniMax. Provides single-shot synth, long-text batched synth with auto-chunk + ffmpeg merge, and per-provider quota check. Caller never writes vendor-specific curl. Use when generating podcast audio, character voiceovers, or any TTS output from a Role script."
+description: "Synthesize speech with a single command across Volcengine (Doubao), MiniMax, and an offline on-device engine. Voice-id prefix routes the backend: volc-* → Volcengine, mm-* → MiniMax, local-* → offline sherpa-onnx (no key, no quota, no network). Provides single-shot synth, long-text batched synth with auto-chunk + ffmpeg merge, per-provider quota check, and automatic fallback down to the offline engine when every cloud vendor is exhausted. Caller never writes vendor-specific curl. Use when generating podcast audio, character voiceovers, or any TTS output from a Role script."
 allowed-tools:
   - Bash
   - Read
@@ -43,6 +43,23 @@ ${CLAUDE_SKILL_DIR}/scripts/synth.sh \
 
 Behaviour: routes to backend by voice prefix, writes one mp3, exits 0 on success.
 
+### `local-*` — the offline engine (no key, no quota, no network)
+
+One-time install: `${CLAUDE_SKILL_DIR}/scripts/fetch-local-model.sh`
+(113 MB sherpa-onnx VITS-zh-ll → `~/.tts-toolkit/models/`, plus a private venv;
+the script synthesizes a real sentence before reporting success).
+
+Once installed it becomes the **last** entry in `synth-auto`'s default pool, so
+a fully-exhausted cloud pool yields a rougher episode instead of no episode.
+⛔ Two things to know before relying on it: it is 16 kHz and audibly below the
+cloud voices, and its **Chinese-only lexicon silently drops Latin words**
+("Swift", "Apple") — the provider warns on stderr, but on an English-heavy
+script it changes meaning. Voice ids and measurements:
+`references/voice-catalog.md`.
+
+To force a run to FAIL rather than ship the offline voice, exclude it:
+`--vendor-pool minimax,volc-2.0,volc-1.0`.
+
 ### `synth-batch` — long text → single merged mp3
 
 ```bash
@@ -68,9 +85,11 @@ ${CLAUDE_SKILL_DIR}/scripts/synth-auto.sh \
   [--reserve-pct 25] [--concurrency 2] [--vendor-pool minimax,volc-2.0,volc-1.0]
 ```
 
-Behaviour: estimates the WHOLE job's character count (chunks once, generic format), then walks the vendor pool in priority order (default **minimax → volc-2.0 → volc-1.0**) calling `quota_check` for each. The FIRST vendor with enough quota for the entire job is selected and synthesizes all of it. If NO vendor has enough, it exits **4 before synthesizing a single character** — never a half-made podcast, never a half-spent budget. Use this (not raw `synth-batch`) for any unattended long-form run.
+Behaviour: estimates the WHOLE job's character count (chunks once, generic format), then walks the vendor pool in priority order (default **minimax → volc-2.0 → volc-1.0 → local**) calling `quota_check` for each. The FIRST vendor with enough quota for the entire job is selected and synthesizes all of it. If NO vendor has enough, it exits **4 before synthesizing a single character** — never a half-made podcast, never a half-spent budget. Use this (not raw `synth-batch`) for any unattended long-form run.
 
-Exit codes: `0` success · `1` arg error · `4` no vendor has enough quota (decided pre-synthesis) · other = propagated from `synth.sh`.
+⚠️ With the offline engine installed, **exit 4 effectively stops happening on the default pool** — `local` always has quota because it spends nothing. The "never a half-spent budget" guarantee is untouched; what changes is that "no audio at all" is no longer an outcome. That is the point of the fallback, but it is a behaviour change: pass `--vendor-pool minimax,volc-2.0,volc-1.0` when you specifically want the run to fail rather than ship the offline voice.
+
+Exit codes: `0` success · `1` arg error · `4` no vendor has enough quota (decided pre-synthesis; reachable when local is excluded or not yet installed) · other = propagated from `synth.sh`.
 
 ### Volcengine 1.0 / 2.0 — separate models, separate quota
 

@@ -35,17 +35,57 @@ MiniMax model variants — HD = best quality (longform podcast, audiobook), Turb
 | `mm-Chinese (Mandarin)_News_Anchor` | News female anchor, authoritative | `speech-2.8-turbo` | Turbo OK for short news clips |
 | `mm-male-qn-qingse` | Young male, clear narration | `speech-2.8-hd` | The 周杰伦 Role's previous default |
 
+## Local (offline, on-device) — `local-*` — 已验证可用
+
+Verified 2026-09-22 on an **Intel** Mac (x86_64, macOS 15.8) through
+`providers/local.sh`. Engine: sherpa-onnx 1.13.8 + VITS-zh-ll, running entirely
+on this machine — no key, no network, no quota, no bill. This is the floor the
+pool falls back to when every cloud vendor is exhausted or a key expired.
+Install once with `scripts/fetch-local-model.sh` (113 MB download → 142 MB under
+`~/.tts-toolkit/models/vits-zh-ll`, plus a private venv).
+
+One model, five Mandarin speakers — the sid is the only thing that varies, so
+switching between them costs nothing.
+
+| Voice ID | Notes (post-gain peak on the same 180-char podcast excerpt) |
+| --- | --- |
+| `local-vits-zh-ll-sid0` | Default. Even, neutral pacing — peak 0.605 |
+| `local-vits-zh-ll-sid1` | peak 0.876 |
+| `local-vits-zh-ll-sid2` | peak 0.898 |
+| `local-vits-zh-ll-sid3` | Loudest of the five; the limiter does real work here — peak 0.970 |
+| `local-vits-zh-ll-sid4` | peak 0.830 |
+
+Override which one the pool uses: `TTS_LOCAL_VOICE=vits-zh-ll-sid3`.
+
+**Measured here** (2026-09-22, Intel x86_64, 4 onnx threads): single-process
+RTF 0.17; through the real `synth-auto` path (concurrency 2, chunker +
+per-chunk model load + ffmpeg merge) a 795-char markdown produced 35.7 s of
+audio in 11.6 s wall. A ~6000-char episode lands near 90 s.
+
+⚠️ **Two limitations. Both real, neither a bug:**
+
+1. **The lexicon is Chinese-only and drops Latin words silently.** "Swift",
+   "Apple", "TTS", "ffmpeg" are simply not spoken — sherpa prints `Ignore OOV`
+   and carries on. `local_tts.py` counts them and warns on stderr so the
+   omission surfaces in a pipeline log instead of only in the finished audio.
+   On an English-heavy script this voice changes the meaning of sentences.
+2. **16 kHz, and audibly below the cloud voices.** A fallback, not a peer. The
+   ×2.1 gain + soft-knee limiter (ported from ArtLens's measured calibration —
+   this model runs ~6 dB under everything else) brings its LOUDNESS to parity.
+   Nothing brings its fidelity there.
+
 ## Cross-vendor equivalents
 
 When quota_check signals a vendor is over-budget, the caller may swap voice with this mapping:
 
-| Scene | Volcengine 2.0 (`seed-tts-2.0`) | Volcengine 1.0 (`seed-tts-1.0`) | MiniMax |
-| --- | --- | --- | --- |
-| Mature warm male / podcast host | `volc-zh_male_yuanboxiaoshu_uranus_bigtts` | `volc-zh_male_M392_conversation_wvae_bigtts` | `mm-Chinese (Mandarin)_Radio_Host` |
-| Narration / audiobook female | TODO empirical | TODO empirical | `mm-audiobook_female_1` |
-| News / announcement female | TODO empirical | TODO empirical | `mm-Chinese (Mandarin)_News_Anchor` |
+| Scene | Volcengine 2.0 (`seed-tts-2.0`) | Volcengine 1.0 (`seed-tts-1.0`) | MiniMax | Local (offline) |
+| --- | --- | --- | --- | --- |
+| Mature warm male / podcast host | `volc-zh_male_yuanboxiaoshu_uranus_bigtts` | `volc-zh_male_M392_conversation_wvae_bigtts` | `mm-Chinese (Mandarin)_Radio_Host` | `local-vits-zh-ll-sid0` |
+| Narration / audiobook female | TODO empirical | TODO empirical | `mm-audiobook_female_1` | — (5 个 sid 的性别/音色未逐个听辨，见上表) |
+| News / announcement female | TODO empirical | TODO empirical | `mm-Chinese (Mandarin)_News_Anchor` | — (5 个 sid 的性别/音色未逐个听辨，见上表) |
 
-`synth-auto.sh` uses this row's three voices as its default vendor pool (priority: MiniMax → Volcengine 2.0 → Volcengine 1.0).
+`synth-auto.sh` uses this row's voices as its default vendor pool
+(priority: MiniMax → Volcengine 2.0 → Volcengine 1.0 → local).
 
 ## How to add a MiniMax voice
 

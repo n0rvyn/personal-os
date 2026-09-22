@@ -56,23 +56,6 @@
       "strict": true
     },
     {
-      "name": "youtube-scout",
-      "source": "./youtube-scout",
-      "deprecated": true,
-      "replacedBy": "domain-intel/youtube-scan",
-      "description": "YouTube video intelligence: scrapes recommended feed and topic search, extracts transcripts, scores videos with Claude AI on 6 quality dimensions, exports IEF-compliant insights",
-      "version": "1.1.0",
-      "category": "intelligence",
-      "tags": [
-        "youtube",
-        "video",
-        "intelligence",
-        "transcripts",
-        "ief"
-      ],
-      "strict": true
-    },
-    {
       "name": "pkos",
       "source": "./pkos",
       "description": "Personal Knowledge Operating System: automated knowledge compilation for Obsidian vaults, IEF ingestion, digest generation, and cross-source signal aggregation",
@@ -114,23 +97,6 @@
         "speech",
         "volcengine",
         "minimax"
-      ],
-      "strict": true
-    },
-    {
-      "name": "podcast-prep",
-      "source": "./podcast-prep",
-      "deprecated": true,
-      "replacedBy": "podcast-studio/podcast-studio-prep",
-      "description": "[DEPRECATED 2026-09-22 — superseded by the vendored fork podcast-studio/skills/podcast-studio-prep, which is now a strict superset; no live caller invokes this plugin] Daily podcast prep orchestrator: topic dedup, angle rotation, MinHash text dedup, PKOS serendipity, contrarian source picker",
-      "version": "0.10.0",
-      "category": "intelligence",
-      "tags": [
-        "podcast",
-        "dedup",
-        "minhash",
-        "orchestrator",
-        "pkos"
       ],
       "strict": true
     },

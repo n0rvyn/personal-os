@@ -4,7 +4,7 @@ Phase 5 — Fleet-consumer note (this file's reason for existing):
 
 podcast-studio is now a **fleet consumer** (舰队消费者) in the personal-os Insight
 Exchange Format (IEF) network. It reads IEF markdown written by sibling
-plugins (e.g. domain-intel, youtube-scout) from
+plugins (e.g. domain-intel) from
 `{cfg.exchange_dir}/<producer>/**/*.md`, parses frontmatter, normalizes
 the candidate shape, and feeds it to the orchestrator's brief as a
 deterministic field (`run_check` stays PURE — all filesystem IO lives

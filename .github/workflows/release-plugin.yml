@@ -12,11 +12,9 @@ on:
           - health-insights
           - session-reflect
           - domain-intel
-          - youtube-scout
           - pkos
           - portfolio-lens
           - tts-toolkit
-          - podcast-prep
           - novel-forge
           - podcast-studio
           - video-studio
@@ -84,7 +82,7 @@ jobs:
           }
 
           if [[ "$TARGET" == "all" ]]; then
-            PLUGINS=("health-insights" "session-reflect" "domain-intel" "youtube-scout" "pkos" "portfolio-lens" "tts-toolkit" "podcast-prep" "novel-forge" "podcast-studio" "video-studio")
+            PLUGINS=("health-insights" "session-reflect" "domain-intel" "pkos" "portfolio-lens" "tts-toolkit" "novel-forge" "podcast-studio" "video-studio")
           else
             PLUGINS=("$TARGET")
           fi

@@ -307,7 +307,7 @@ def run_check(candidates: list, topic_log_path: str, today: str,
         "self_past_candidates": same_topic_past_notes(
             today_tags, resolved_root, today=today, n=5, notes=notes),
         # Phase 5 Task 4 (B2 brief field): IEF news from upstream plugins
-        # (domain-intel, youtube-scout). Carried through verbatim from the
+        # (domain-intel). Carried through verbatim from the
         # CLI handler — run_check is pure. Parallel to cross_domain_candidates
         # (deterministic, not ad-hoc LLM collection).
         "ief_candidates": list(ief_candidates) if ief_candidates else [],
@@ -522,7 +522,7 @@ def main():
         exclude = source_log.recent_source_ids(
             source_log_path, args.date, window_days=14)
         # Phase 5 Task 4: IEF roundtrip — read upstream IEF (domain-intel,
-        # youtube-scout, etc.) from {exchange_dir}/**/*.md, dedup against
+        # etc.) from {exchange_dir}/**/*.md, dedup against
         # ief_source_log.jsonl using `include_today=False` (D-3: same-day
         # check-A/B/C must see the same candidate pool). All filesystem IO
         # lives here in the CLI handler; run_check stays pure. Mirrors the

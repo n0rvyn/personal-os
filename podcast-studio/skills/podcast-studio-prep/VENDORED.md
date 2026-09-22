@@ -1,9 +1,11 @@
 # podcast-studio-prep — formerly vendored from `podcast-prep`
 
 **Status as of 2026-09-22: this tree is the source of truth.** The upstream
-`podcast-prep` plugin it was vendored from is deprecated and has no live
-caller. Nothing needs to be pulled from it, and nothing needs to be ported
-back to it. Edit this tree directly.
+`podcast-prep` plugin it was vendored from was deprecated and then **deleted
+from the marketplace the same day** — it no longer exists on disk. Nothing can
+be pulled from it, and nothing needs to be ported back to it. Edit this tree
+directly. (Its history remains in git; `git log -- podcast-prep` from the
+repo root still reaches it.)
 
 ## Why the vendoring relationship ended
 
@@ -39,8 +41,11 @@ behind), and the co-location argument is moot now that upstream is retired.
 - **Origin:** `podcast-prep` plugin, `personal-os` marketplace
 - **Vendored at:** 2026-06-08 from upstream 0.8.0
 - **Relocated** into personal-os alongside upstream: 2026-06-12
-- **Upstream deprecated:** 2026-09-22 (`marketplace.json`: `"deprecated": true`,
-  `"replacedBy": "podcast-studio/podcast-studio-prep"`)
+- **Upstream last real change:** 2026-06-12 (everything after was auto version bumps)
+- **Upstream deprecated and deleted:** 2026-09-22 — marked
+  `"deprecated": true` / `"replacedBy"` in `marketplace.json`, then the
+  directory was removed along with its marketplace entry, both CI workflow
+  registrations, and its README rows
 
 ## Runtime data is separate
 

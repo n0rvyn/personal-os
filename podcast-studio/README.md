@@ -15,6 +15,16 @@ by a single Python config module and a thin bash env shim.
 (prep remains vendored in-tree for a config patch + upstream drift; TTS is
 consumed as a fleet skill). Drop a `~/.podcast-studio/config.yaml` and run.
 
+## English production and configurable show name
+
+The existing pipeline reads `podcast.name` and `production` from the same project
+config. New project initialization requires a name; legacy unnamed projects stay
+compatible. Sources retain their original languages, while the selected English
+production uses OpenAI text generation and `gpt-realtime-2.1-mini` narration.
+English and Chinese artifacts coexist in the existing output directories with
+language-qualified filenames and shared continuity; no English folder or profile
+activation command is required. See [configuration and review notes](docs/openai-english.md).
+
 ## Install
 
 **System prerequisites** — these must be on your `PATH`:

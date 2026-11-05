@@ -318,7 +318,7 @@ def load_cards(output_dir: str | os.PathLike) -> list[dict[str, Any]]:
     return cards
 
 
-def stance_card_exists(output_dir: str | os.PathLike, date: str, show: str) -> bool:
+def stance_card_exists(output_dir: str | os.PathLike, date: str, show: str, *, language: str | None = None) -> bool:
     """True iff `{date}-{show}.stance.yaml` already exists in `output_dir`.
 
     Pre-flight guard for the SAME-DAY RE-RUN case. `write_card` refuses to
@@ -332,7 +332,7 @@ def stance_card_exists(output_dir: str | os.PathLike, date: str, show: str) -> b
     the right early tripwire.
     """
     out = Path(os.path.realpath(str(output_dir)))
-    return stance_path(out, date, show).exists()
+    return stance_path(out, date, show, language=language).exists()
 
 
 def write_card(
@@ -372,7 +372,9 @@ def write_card(
             f"refusing to write a future-dated stance card: {date} > {today.isoformat()}"
         )
 
-    target = stance_path(out, date, show)
+    ep = card.get("episode") if isinstance(card, dict) else None
+    language = ep.get("language") if isinstance(ep, dict) else None
+    target = stance_path(out, date, show, language=language)
     if target.exists():
         raise FileExistsError(
             f"stance card already exists (append-only): {target}"
@@ -389,6 +391,7 @@ def write_card(
         if not (
             c.get("episode", {}).get("date") == date
             and c.get("episode", {}).get("show") == show
+            and c.get("episode", {}).get("language") == language
         )
     ]
     settles = card.get("settles", [])

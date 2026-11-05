@@ -288,6 +288,13 @@ def _axis_judge_dim(name: str, value: Any) -> dict[str, Any]:
 # public: 组装记分卡
 # ---------------------------------------------------------------------------
 
+def _english_duration(script_text: str) -> dict[str, Any]:
+    from lib.english import check_english
+    result = check_english(script_text)
+    return {"name": "duration", "detail": result["reason"] + " (130 words/minute)",
+            "hits": [], "ok": result["ok"]}
+
+
 def build_scorecard(
     body: str,
     script_text: str,
@@ -299,6 +306,7 @@ def build_scorecard(
     today: str,
     judge_verdict: Any,
     thesis_verdict: Any = None,
+    output_language: Optional[str] = None,
 ) -> dict[str, Any]:
     """组装记分卡 = 硬门(structlint + dedup) + 判官维度(钱钟书 total 复用 +
     factcheck ok 复用 + 判官 3 维).
@@ -336,7 +344,8 @@ def build_scorecard(
         _hard_gate_sections(body, show),
         _hard_gate_draft_marker(body),
         _hard_gate_betting_section(body),
-        _hard_gate_duration(script_text),
+        (_english_duration(script_text) if output_language == "en"
+         else _hard_gate_duration(script_text)),
         _hard_gate_intra_dup(body),
         _hard_gate_cross_dup(script_text, store, today),
         _hard_gate_thesis_advance(thesis_verdict),

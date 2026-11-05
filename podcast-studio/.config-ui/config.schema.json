@@ -25,14 +25,21 @@
           "description": "Generated briefs and topic log live here"
         }
       },
-      "required": ["subjective_dir", "news_dir", "output_dir"]
+      "required": [
+        "subjective_dir",
+        "news_dir",
+        "output_dir"
+      ]
     },
     "tts": {
       "type": "object",
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["volc", "minimax"],
+          "enum": [
+            "volc",
+            "minimax"
+          ],
           "description": "TTS provider: volc (Volcengine / Doubao) or minimax (MiniMax)"
         },
         "host_voice": {
@@ -41,7 +48,132 @@
           "description": "Host voice id — must match the selected provider's voice catalog"
         }
       },
-      "required": ["provider", "host_voice"]
+      "required": [
+        "provider",
+        "host_voice"
+      ]
+    },
+    "podcast": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required project/channel name when creating a podcast project."
+        },
+        "english_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional English display name for bilingual production; original name/history are retained."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "production": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "openai"
+          ],
+          "description": "Service used by the existing morning/evening orchestrator."
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "zh",
+            "en"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "gpt-4.1-mini-2025-04-14"
+          ]
+        },
+        "speech_model": {
+          "type": "string",
+          "enum": [
+            "gpt-realtime-2.1-mini"
+          ]
+        },
+        "voice": {
+          "type": "string",
+          "enum": [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar"
+          ]
+        },
+        "source_authorized": {
+          "type": "boolean",
+          "default": false,
+          "description": "Record the owner’s approval for selected configured sources to be processed by OpenAI; never inferred by installation."
+        },
+        "budget_ledger": {
+          "type": "string",
+          "description": "Existing shared ledger with verified actual commitments; not auto-created/reset."
+        },
+        "budget_timezone": {
+          "type": "string"
+        },
+        "per_call_limit_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "daily_limit_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 32768
+        },
+        "speech_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        }
+      }
     }
-  }
+  },
+  "required": [],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "production": {
+            "properties": {
+              "provider": {
+                "const": "openai"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          }
+        },
+        "required": [
+          "production"
+        ]
+      },
+      "then": {
+        "required": [
+          "podcast"
+        ]
+      }
+    }
+  ]
 }

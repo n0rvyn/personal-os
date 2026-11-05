@@ -78,6 +78,7 @@ def stance_path(
     output_dir: str | os.PathLike,
     date: str,
     show: str,
+    *, language: str | None = None,
 ) -> Path:
     """Return the canonical stance-card path: `{output_dir}/{date}-{show}.stance.yaml`.
 
@@ -86,7 +87,10 @@ def stance_path(
     refuse-overwrite on different path strings).
     """
     out_dir = Path(os.path.realpath(str(output_dir)))
-    return out_dir / f"{date}-{show}.stance.yaml"
+    if language not in (None, "zh", "en"):
+        raise ValueError("Unsupported episode language")
+    suffix = "-en" if language == "en" else ""
+    return out_dir / f"{date}-{show}{suffix}.stance.yaml"
 
 
 def episode_paths(
@@ -94,6 +98,7 @@ def episode_paths(
     date: str,
     title: str,
     show: str,
+    *, language: str | None = None,
 ) -> dict[str, Path]:
     """Return the canonical paths for an episode.
 
@@ -117,10 +122,12 @@ def episode_paths(
     else:
         base = f"{date}-{slug}"
 
+    if language == "en":
+        base += "-en"
     paths = {
         "script": out_dir / f"{base}.md",
         "audio": out_dir / f"{base}.mp3",
-        "stance": stance_path(out_dir, date, show),
+        "stance": stance_path(out_dir, date, show, language=language),
     }
 
     # Path-traversal guard: all joined paths must stay inside output_dir.
@@ -154,6 +161,7 @@ def check_stance_card(
     output_dir: str | os.PathLike,
     date: str,
     show: str,
+    *, language: str | None = None,
 ) -> dict[str, Any]:
     """Continuity gate: is the stance card for {output_dir, date, show}
     present AND a loadable stance card?
@@ -171,7 +179,7 @@ def check_stance_card(
     — load_cards scans the whole dir, and stance.py imports stance_path from
     this module, so importing lib.stance here would be circular.
     """
-    path = stance_path(output_dir, date, show)
+    path = stance_path(output_dir, date, show, language=language)
     basic = check_artifact(path)  # presence + non-empty
     if not basic["ok"]:
         return basic

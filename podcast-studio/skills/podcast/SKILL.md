@@ -31,7 +31,7 @@ this skill is a thin wrapper that calls:
 
 ```bash
 # config 由 lib.config.load_config 解析,顺序: $PODCAST_STUDIO_CONFIG →
-# cwd 向上找带 vault/tts 段的 personal-os.yaml → ~/.podcast-studio/config.yaml。
+# cwd 向上找 personal-os.yaml → 带 vault+tts 的项目 config.yaml → ~/.podcast-studio/config.yaml。
 # 都没命中就 fail-closed(ConfigError)—— 这时设 $PODCAST_STUDIO_CONFIG 指向你的 config。
 python -m lib.runner --show <morning|evening|papers> [--date YYYY-MM-DD] [--no-tts]
 ```
@@ -673,3 +673,16 @@ before invoking a vendored script.
 | 17   | episode.py   | scratch                              | (removed)                          | (cleanup is idempotent)      |
 | 18   | coveredground-distiller (ISOLATED, **post-publish, fail-soft**) | published body + recent bodies + covered-ground store (read-only) → 本期用过的招牌锚/类比/框架 (Phase 2) | `coveredground-apparatus.json` (scratch) | `check_artifact`; **`fail_soft: True` — a distiller failure NEVER halts the already-published episode** |
 | 19   | coveredground-update (code, **post-publish, fail-soft**) | `coveredground-apparatus.json` + embeddings (`lib.embed`, NLContextualEmbedding / n-gram fallback) | `{output_dir}/covered-ground.yaml` updated (count/last_used/decay/embedding) | none; try/except fail-soft — store skips this round on any error |
+
+## Configured project name, language and provider
+
+New projects must supply `podcast.name` in the existing configuration/creation
+phase. Old projects without that section remain compatible and are never renamed
+automatically. An optional `podcast.english_name` names English output.
+
+Use the SAME ordinary runner command above. It reads `production.provider` and
+`production.language` from the existing project config; OpenAI English production
+has no profile file or separate activation command. Keep the configured output,
+source and continuity paths. English artifacts add `-en` to their filenames in
+the existing directories. Follow `../../docs/openai-english.md` for the reviewed
+config and provider contracts. Never run an episode merely to verify an update.

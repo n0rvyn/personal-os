@@ -92,6 +92,19 @@ class PapersConfig:
 
 
 @dataclass(frozen=True)
+class PodcastIdentity:
+    name: str | None = None
+    english_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ProductionConfig:
+    provider: str = "claude"
+    language: str = "zh"
+    options: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class PodcastTeamConfig:
     vault: VaultConfig
     tts: TtsConfig
@@ -105,6 +118,8 @@ class PodcastTeamConfig:
     # config station requires it fail-closed via `require_papers(cfg)` at the
     # use site, never here.
     papers: PapersConfig | None = None
+    podcast: PodcastIdentity | None = None
+    production: ProductionConfig | None = None
 
 
 def _default_config_path() -> Path:
@@ -160,6 +175,17 @@ def _resolve_config_path(path: str | os.PathLike | None) -> Path:
     anchored = _resolve_personal_os_yaml()
     if anchored is not None:
         return anchored
+    # Existing podcast projects already use config.yaml. Recognize only files
+    # carrying both podcast data sections, so arbitrary app configs are ignored.
+    for directory in [Path.cwd(), *Path.cwd().parents]:
+        candidate = directory / "config.yaml"
+        try:
+            if candidate.is_file():
+                raw = _read_yaml(candidate)
+                if all(isinstance(raw.get(k), dict) for k in ("vault", "tts")):
+                    return candidate
+        except (ConfigError, OSError):
+            continue
     return _default_config_path()
 
 
@@ -444,6 +470,69 @@ def require_papers(cfg: PodcastTeamConfig) -> PapersConfig:
     return cfg.papers
 
 
+def _validate_podcast(raw: Any, *, required=False) -> PodcastIdentity | None:
+    if raw is None and not required:
+        return None  # Old projects retain their exact behavior and history.
+    if not isinstance(raw, dict):
+        raise ConfigError("podcast.name is required when creating/naming a project")
+    for key in ("name", "english_name"):
+        value = raw.get(key)
+        if key == "name" or value is not None:
+            if not isinstance(value, str) or not value.strip() or "\n" in value or len(value) > 200:
+                raise ConfigError(f"podcast.{key} must be a nonempty single-line name")
+    return PodcastIdentity(name=raw["name"].strip(), english_name=(raw.get("english_name") or "").strip() or None)
+
+
+def _validate_production(raw: Any) -> ProductionConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("production must be a mapping")
+    provider, language = raw.get("provider", "claude"), raw.get("language", "zh")
+    if (provider, language) not in {("claude", "zh"), ("openai", "en")}:
+        raise ConfigError("production currently supports claude/zh or openai/en in the same opinion pipeline")
+    options = {k:v for k,v in raw.items() if k not in {"provider", "language"}}
+    auth = options.get("source_authorized", False)
+    if isinstance(auth, str) and auth.lower() in {"true", "false"}:
+        auth = auth.lower() == "true"
+    if type(auth) is not bool:
+        raise ConfigError("production.source_authorized must be boolean")
+    options["source_authorized"] = auth
+    for key in ("per_call_limit_usd", "daily_limit_usd"):
+        if key in options and isinstance(options[key], str):
+            try: options[key] = float(options[key])
+            except ValueError: raise ConfigError(f"production.{key} must be numeric") from None
+    for key in ("max_output_tokens", "speech_output_tokens"):
+        if key in options and isinstance(options[key], str):
+            try: options[key] = int(options[key])
+            except ValueError: raise ConfigError(f"production.{key} must be an integer") from None
+    return ProductionConfig(provider=provider, language=language, options=options)
+
+
+def initialize_config(path, *, name, template_path):
+    """Existing config handler's project-creation phase: require/store the name.
+
+    Copies an explicitly selected config template; creates no directories and
+    refuses to overwrite an existing config. Does not run a provider or migrate data.
+    """
+    identity = _validate_podcast({"name": name}, required=True)
+    raw = _read_yaml(Path(template_path))
+    raw["podcast"] = {"name": identity.name}
+    if not isinstance(raw.get("vault"), dict) or not isinstance(raw.get("tts"), dict):
+        raise ConfigError("Initialization template requires vault and tts sections")
+    _validate_tts(raw["tts"])
+    _validate_production(raw.get("production"))
+    for key in REQUIRED_VAULT_KEYS:
+        if not isinstance(raw["vault"].get(key), str) or not raw["vault"][key].strip():
+            raise ConfigError(f"initialization template missing vault.{key}")
+    try:
+        import yaml
+    except ImportError:
+        raise ConfigError("PyYAML is required for project initialization; install requirements.txt") from None
+    with Path(path).open("x", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+
+
 def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     """Resolve and validate the podcast-studio config.
 
@@ -451,7 +540,8 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     1. explicit `path` arg
     2. PODCAST_STUDIO_CONFIG env var
     3. PERSONAL_OS_ROOT/personal-os.yaml or cwd-walk personal-os.yaml (sentinel: vault|tts)
-    4. ~/.podcast-studio/config.yaml (standalone fallback)
+    4. cwd-walk config.yaml containing both vault and tts (existing project)
+    5. ~/.podcast-studio/config.yaml (standalone fallback)
     """
     cfg_path = _resolve_config_path(path)
 
@@ -459,7 +549,7 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
         raise ConfigError(
             f"config file not found: {cfg_path}. "
             f"解析顺序: 显式 path 参数 → $PODCAST_STUDIO_CONFIG → "
-            f"cwd 向上找带 vault/tts 段的 personal-os.yaml → "
+            f"cwd 向上找带 vault/tts 段的 personal-os.yaml / config.yaml → "
             f"~/.podcast-studio/config.yaml。"
             f"把 $PODCAST_STUDIO_CONFIG 指向你的 config,或在默认路径建文件。"
         )
@@ -472,6 +562,10 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
         raise ConfigError("missing required section: tts")
 
     tts = _validate_tts(raw["tts"])
+    identity = _validate_podcast(raw.get("podcast"))
+    production = _validate_production(raw.get("production"))
+    if production is not None and production.provider == "openai" and identity is None:
+        raise ConfigError("podcast.name is required; add the existing show's name to this config")
 
     # exchange_dir: fail-soft. A non-empty str is expanded + resolved to
     # an absolute path; anything else (missing, non-str, empty, blank)
@@ -495,7 +589,8 @@ def load_config(path: str | os.PathLike | None = None) -> PodcastTeamConfig:
     vault = _validate_vault_paths(raw["vault"], has_papers=has_papers)
 
     return PodcastTeamConfig(
-        vault=vault, tts=tts, exchange_dir=exchange_dir, papers=papers
+        vault=vault, tts=tts, exchange_dir=exchange_dir, papers=papers,
+        podcast=identity, production=production
     )
 
 
@@ -509,7 +604,20 @@ if __name__ == "__main__":
         help="Validate the config at PATH; exit 0 if valid, 1 (with the offending "
         "key on stderr) otherwise. Used by the config-studio editor's save gate.",
     )
+    parser.add_argument("--init", metavar="PATH", help="Create a new project config; requires --name and --from-config")
+    parser.add_argument("--name", help="Required podcast/channel name for a new project")
+    parser.add_argument("--from-config", metavar="PATH", help="Explicit existing configuration template")
     args = parser.parse_args()
+    if args.init is not None:
+        if args.validate or not args.from_config:
+            parser.error("--init requires --name and --from-config, and cannot combine with --validate")
+        try:
+            initialize_config(args.init, name=args.name, template_path=args.from_config)
+        except (ConfigError, OSError) as e:
+            print(f"config error: {e}", file=sys.stderr)
+            sys.exit(1)
+        print("created named project config")
+        sys.exit(0)
 
     if args.validate is not None:
         # Validation mode: resolve + validate the given file, report via exit code.

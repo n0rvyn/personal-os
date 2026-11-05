@@ -243,10 +243,18 @@ def _default_dispatch(
 # (see _run_gate); in real runs, the persona dispatch writes a body much
 # larger than the bypass threshold, so the bypass is dormant.
 # ---------------------------------------------------------------------------
-def _check_stance_card_absent(output_dir: Any, date: str, show: str) -> dict[str, Any]:
+def _episode_kwargs(ctx):
+    return {"language": "en"} if ctx.get("output_language") == "en" else {}
+
+
+def _slot_show(ctx):
+    return ctx["show"] + ("-en" if ctx.get("output_language") == "en" else "")
+
+
+def _check_stance_card_absent(output_dir: Any, date: str, show: str, *, language: Optional[str] = None) -> dict[str, Any]:
     """Gate for step 3a: fail-fast on same-day re-run (card already exists).
     ok=True iff the slot is free (no card yet)."""
-    if stance_card_exists(output_dir, date, show):
+    if stance_card_exists(output_dir, date, show, language=language):
         return {
             "ok": False,
             "reason": (
@@ -366,7 +374,7 @@ def _call_gate(
             json_field=resolved_args.get("json_field"),
         )
     if gate_fn_name == "check_stance_card_absent":
-        return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"])
+        return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"], **_episode_kwargs(ctx))
     if gate_fn_name == "check_factcheck":
         return gate_fn(ctx["scratch_dir"], ctx.get("material_summary_path"))
     if gate_fn_name == "check_resonance_present":
@@ -376,7 +384,7 @@ def _call_gate(
     if gate_fn_name == "check_topic_log_appended":
         return gate_fn(ctx.get("topic_log_path"))
     if gate_fn_name == "check_stance_card":
-        return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"])
+        return gate_fn(_subdir(ctx, "episodes"), ctx["date"], ctx["show"], **_episode_kwargs(ctx))
     # P3 paper line: `check_ledger_verify(ledger_path, ctx)` — the
     # collection gate composes `validate_ledger` (schema) THEN
     # `verify_anchors` (recompute). The signature differs from the
@@ -698,13 +706,11 @@ def _read_finalize_title(scratch: Path) -> str:
 
 
 def _publish_step(ctx: dict[str, Any]) -> Optional[dict[str, Path]]:
-    """Step 15 — compute the canonical output paths, write the reader
-    .md from the finalize body, and move the audio .mp3 from scratch
-    (skipped under no_tts).
+    """Land manuscript/audio in the existing episodes directory without clobbering.
 
-    All file IO is wrapped in try/except so a missing output_dir (test
-    scenario) does not halt the run — the publish is best-effort and
-    the test only inspects the runner's dispatch ordering.
+    Identical completed files are reusable. Different bytes at an existing path
+    stop both languages, including a legacy title that happens to end in -en.
+    Missing legacy test/output directories retain the historical best-effort path.
     """
     episodes_dir = _subdir(ctx, "episodes")
     date_str: str = ctx["date"]
@@ -712,17 +718,38 @@ def _publish_step(ctx: dict[str, Any]) -> Optional[dict[str, Path]]:
     scratch: Path = ctx["scratch_dir"]
     no_tts: bool = ctx.get("no_tts", False)
     title = _read_finalize_title(scratch)
+    if ctx.get("output_language") == "en":
+        from lib.english import check_english_title
+        if not check_english_title(title):
+            raise RunnerError("English final title is missing or has non-English script; no publication")
 
     try:
-        paths = episode_paths(episodes_dir, date_str, title, show)
+        paths = episode_paths(episodes_dir, date_str, title, show, **_episode_kwargs(ctx))
     except (FileNotFoundError, NotADirectoryError, ValueError, OSError):
+        if ctx.get("output_language") == "en":
+            raise RunnerError("English publication paths could not be resolved; scratch retained")
         return None
 
+    if ctx.get("output_language") == "en":
+        from lib.openai_runtime import land_once
+        body = load_finalize_body(scratch / "finalize-result.json")
+        land_once(paths["script"], body)
+        if not no_tts:
+            source = scratch / "audio-files.mp3"
+            if not source.is_file() or not source.stat().st_size:
+                raise RunnerError("English audio is missing; scratch and manuscript retained for recovery")
+            land_once(paths["audio"], source.read_bytes())
+        ctx["published_script_path"] = paths["script"]
+        return paths
+
+    from lib.openai_runtime import land_once, OpenAIError
     finalize_path = scratch / "finalize-result.json"
     if finalize_path.exists():
         try:
             body = load_finalize_body(finalize_path)
-            paths["script"].write_text(body, encoding="utf-8")
+            land_once(paths["script"], body)
+        except OpenAIError as e:
+            raise RunnerError(str(e)) from e
         except (ValueError, json.JSONDecodeError, OSError):
             pass
 
@@ -730,10 +757,11 @@ def _publish_step(ctx: dict[str, Any]) -> Optional[dict[str, Path]]:
         audio_src = scratch / "audio-files.mp3"
         if audio_src.exists():
             try:
-                audio_src.replace(paths["audio"])
+                land_once(paths["audio"], audio_src.read_bytes())
             except OSError:
                 pass
 
+    ctx["published_script_path"] = paths["script"]
     return paths
 
 
@@ -1071,7 +1099,7 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
         if isinstance(b, dict) and isinstance(b.get("id"), str)
     }
     distilled = _distilled_stance_fields(
-        ctx.get("scratch_dir"), date_str, show, due_bet_ids
+        ctx.get("scratch_dir"), date_str, _slot_show(ctx), due_bet_ids
     )
 
     # resonance: prefer the distiller's; fall back to ctx (step 15a stub "")
@@ -1125,6 +1153,8 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
     if apparatus_used:
         card["apparatus_used"] = apparatus_used
 
+    if ctx.get("output_language") == "en":
+        card["episode"]["language"] = "en"
     try:
         return write_card(episodes_dir, date_str, show, card)
     except Exception:
@@ -1142,6 +1172,8 @@ def _stance_write_step(ctx: dict[str, Any]) -> Optional[Path]:
         }
         if apparatus_used:
             thin["apparatus_used"] = apparatus_used
+        if ctx.get("output_language") == "en":
+            thin["episode"]["language"] = "en"
         try:
             return write_card(episodes_dir, date_str, show, thin)
         except Exception:
@@ -1332,15 +1364,26 @@ def _resolve_scratch_dir(
     `.scratch-{date}-{show}-*` dir (so a re-run skips steps whose artifacts
     already landed there — opt-in, the user explicitly accepts the reuse).
     Falls through to make_scratch when none exists."""
+    def compatible(path):
+        # The legacy glob also matches morning-en-*. A provider switch must
+        # never reuse English artifacts or bypass their paid-request receipts.
+        if show.endswith("-en"):
+            return True  # OpenAI bind_run validates the full identity afterward.
+        return (not path.name.startswith(f".scratch-{date_str}-{show}-en-")
+                and not any(path.glob(".openai-*")))
+
     if scratch_dir is not None:
-        return Path(scratch_dir)
+        injected = Path(scratch_dir)
+        if not compatible(injected):
+            raise RunnerError("English/OpenAI scratch cannot be reused by the legacy Chinese workflow")
+        return injected
     output_dir = getattr(config.vault, "output_dir", None)
     if not output_dir:
         raise RunnerError("config.vault.output_dir is required when scratch_dir is not injected")
     if resume:
         existing = [
             p for p in Path(str(output_dir)).glob(f".scratch-{date_str}-{show}-*")
-            if p.is_dir()
+            if p.is_dir() and compatible(p)
         ]
         if existing:
             existing.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1496,7 +1539,7 @@ def _check_continuity_landed(ctx: dict[str, Any]) -> None:
         return
     try:
         from lib.stance import stance_card_exists  # leaf import
-        if stance_card_exists(episodes_dir, date, show):
+        if stance_card_exists(episodes_dir, date, show, **_episode_kwargs(ctx)):
             return
     except Exception:  # noqa: BLE001 — an absence check must never crash a good run
         return
@@ -1732,7 +1775,7 @@ def _coveredground_update_executor(ctx: dict[str, Any]) -> Any:
             return None
         store = load_store(state_dir)
         update_store(
-            store, anchors, date_str, {"date": date_str, "show": show},
+            store, anchors, date_str, {"date": date_str, "show": _slot_show(ctx)},
         )
         write_store(state_dir, store)
     except Exception as e:  # noqa: BLE001 — fail-soft post-publish
@@ -1767,7 +1810,7 @@ def _thesis_ledger_update_executor(ctx: dict[str, Any]) -> Any:
             return None
         store = load_store(state_dir)
         update_store(
-            store, theses, date_str, {"date": date_str, "show": show},
+            store, theses, date_str, {"date": date_str, "show": _slot_show(ctx)},
         )
         write_store(state_dir, store)
     except Exception as e:  # noqa: BLE001 — fail-soft post-publish
@@ -2073,6 +2116,11 @@ def _bible_distill_step(
     config = ctx.get("config")
     state_dir = _subdir(ctx, "state")
 
+    if ctx.get("output_language") == "en":
+        existing_bible = Path(state_dir) / "character-bible.md"
+        if existing_bible.is_file() and existing_bible.stat().st_size:
+            return None
+
     corpus_dir = _bible_corpus_dir(config)
 
     # --- gather the corpus (isolation source: ONLY the voice-corpus dir) ---
@@ -2284,6 +2332,7 @@ def _scorecard_step(
         today=date_str,
         judge_verdict=judge_verdict,
         thesis_verdict=judge_verdict,
+        **({"output_language": "en"} if ctx.get("output_language") == "en" else {}),
     )
 
     # Write the verdict (overwrites the persona's raw 3-dim output).
@@ -2298,7 +2347,7 @@ def _scorecard_step(
     try:
         md = _scorecard.render_scorecard_md(result)
         if reports_dir.exists():
-            (reports_dir / f"{date_str}-{show}.scorecard.md").write_text(
+            (reports_dir / f"{date_str}-{_slot_show(ctx)}.scorecard.md").write_text(
                 md, encoding="utf-8",
             )
     except Exception as e:  # noqa: BLE001 — a render failure must not crash the run
@@ -2420,6 +2469,10 @@ def _build_step_prompt(
         # verbatim. `recent_bodies` is conceptual (handled by the
         # generic loop above).
         if name in ("coveredground-distill", "thesis-distill") and inp == "published.md":
+            exact = ctx.get("published_script_path")
+            if exact and Path(exact).is_file():
+                resolved_inputs.append(str(exact))
+                continue
             from lib.episode import episode_paths as _ep
             # episode_paths needs a title; we use the best-known
             # placeholder (the persona reads by glob anyway). The
@@ -2430,7 +2483,8 @@ def _build_step_prompt(
                 # Use the first matching .md in episodes/ for the date.
                 # Fallback to the scratch-published mirror if no on-disk
                 # publish landed (test scenarios).
-                candidates = sorted(episodes_dir.glob(f"{ctx['date']}-*.md"))
+                candidates = sorted(p for p in episodes_dir.glob(f"{ctx['date']}-*.md")
+                                    if p.stem.endswith("-en") == (ctx.get("output_language") == "en"))
                 if candidates:
                     resolved_inputs.append(str(candidates[0]))
                 elif (scratch / "published.md").exists():
@@ -2448,7 +2502,7 @@ def _build_step_prompt(
             # (named_concept / bets / open_questions / settles) as the input
             # for its durable-thesis extraction + advance verdict.
             from lib.episode import stance_path as _st_path
-            sp = _st_path(_subdir(ctx, "episodes"), ctx["date"], ctx["show"])
+            sp = _st_path(_subdir(ctx, "episodes"), ctx["date"], ctx["show"], **_episode_kwargs(ctx))
             if Path(str(sp)).exists():
                 resolved_inputs.append(str(sp))
             continue
@@ -2565,6 +2619,15 @@ def run_pipeline(
     if plugin_root is None:
         plugin_root = str(Path(__file__).resolve().parent.parent)
 
+    from lib.openai_runtime import settings_from_config
+    runtime_settings = settings_from_config(config)
+    if runtime_settings is not None:
+        if show not in ("morning", "evening") or dispatch is not _default_dispatch:
+            raise RunnerError("OpenAI settings apply to the existing opinion pipeline")
+        from lib.openai_runtime import OpenAIDispatch
+        dispatch = OpenAIDispatch(runtime_settings, config,
+                                 authorize_sources=runtime_settings.get("source_authorized", False))
+
     # Load the per-show editorial (references/{show}.md). The drafting spec —
     # 4-段 structure, ~7000 字 target / 6500 floor, cold-open/stakes/turn/payoff
     # — lives HERE, not in davinci's system prompt (which is collection-only).
@@ -2582,8 +2645,11 @@ def run_pipeline(
     if not output_dir:
         raise RunnerError("config.vault.output_dir is required")
 
-    scratch = _resolve_scratch_dir(scratch_dir, config, date, show, resume=resume)
+    scratch = _resolve_scratch_dir(scratch_dir, config, date,
+                                   show + "-en" if runtime_settings is not None else show, resume=resume)
     scratch.mkdir(parents=True, exist_ok=True)
+    if runtime_settings is not None:
+        dispatch.bind_run(scratch, resume=resume, date=date, show=show)
 
     ctx: dict[str, Any] = {
         "show": show,
@@ -2599,6 +2665,7 @@ def run_pipeline(
         "state_dir": getattr(config.vault, "state_dir", None) or str(Path(str(output_dir)) / "state"),
         "reports_dir": getattr(config.vault, "reports_dir", None) or str(Path(str(output_dir)) / "reports"),
         "config": config,
+        "output_language": "en" if runtime_settings is not None else None,
         "plugin_root": plugin_root,
         "dispatch": dispatch,
         # G7: the factcheck gate (step 12a) reads ctx["material_summary_path"]
@@ -2621,6 +2688,16 @@ def run_pipeline(
     steps_run = 0
     halted_at: Optional[dict[str, str]] = None
     succeeded = False  # gates the finally cleanup: preserve scratch on halt
+    continuity_lock = None
+    state_path = Path(ctx["state_dir"])
+    if state_path.is_dir():
+        import fcntl
+        continuity_lock = (state_path / ".pipeline.lock").open("a")
+        try:
+            fcntl.flock(continuity_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            continuity_lock.close()
+            raise RunnerError("Another run is using this project's shared continuity; retry after it finishes") from None
 
     try:
         for step in steps:
@@ -2630,6 +2707,18 @@ def run_pipeline(
 
             attempt = 0
             while attempt < attempts:
+                if runtime_settings is not None and name in {"tts", "publish-paths"}:
+                    from lib.english import check_english, check_english_title
+                    from lib.episode import load_finalize_body
+                    try:
+                        body = load_finalize_body(scratch / "finalize-result.json")
+                        spoken = (scratch / f"broadcast-script-{date}.txt").read_text()
+                    except (OSError, ValueError, TypeError):
+                        body, spoken = "", ""
+                    if (not check_english(body)["ok"] or not check_english(spoken)["ok"]
+                            or not check_english_title(_read_finalize_title(scratch))):
+                        halted_at = {"failed_step": name, "reason": "English output/word-count gate failed"}
+                        break
                 result = _execute_step(step, ctx, gates, dispatch)
                 if result is None:
                     steps_run += 1
@@ -2710,6 +2799,8 @@ def run_pipeline(
                 cleanup_scratch(scratch)
             except Exception:
                 pass
+        if continuity_lock is not None:
+            continuity_lock.close()
 
 
 # ---------------------------------------------------------------------------

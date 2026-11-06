@@ -1,3 +1,4 @@
+from test_openai_runtime import synthetic_meaning_review
 """Independent-review regressions. All provider responses and sources are synthetic."""
 import concurrent.futures
 import datetime as dt
@@ -55,6 +56,7 @@ def test_legacy_title_collision_cannot_overwrite_english_publication(setup):
     (scratch / 'audio-files.mp3').write_bytes(b'synthetic-English-audio')
     ctx = {'output_dir': root / 'out', 'scratch_dir': scratch, 'date': '2026-11-05',
            'show': 'morning', 'output_language': 'en', 'no_tts': False}
+    (scratch / 'audio-disclosure.md').write_text('Voice disclosure: AI-generated voice, not a human narrator.')
     paths = _publish_step(ctx)
     before = {k: paths[k].read_bytes() for k in ('script', 'audio')}
     final.write_text(json.dumps({'title': 'Policy-en', 'body': '原有中文节目'}))
@@ -79,6 +81,8 @@ def test_budget_day_rollover_stops_remaining_pre_reserved_speech(setup, monkeypa
         return {'pcm': b'\0\0' * 240, 'transcript': payload['response']['input'][0]['content'][0]['text']}
     a = adapter(setup, transport)
     (setup[0] / 'scratch/broadcast-script-test.txt').write_text(ENGLISH)
+    (setup[0] / 'scratch/finalize-result.json').write_text(json.dumps({'title':'Title','body':ENGLISH}))
+    synthetic_meaning_review(setup[0] / 'scratch', ENGLISH)
     with pytest.raises(BudgetError, match='date changed'):
         a.synthesize(setup[0] / 'scratch', setup[0] / 'scratch/audio.mp3')
     assert len(calls) == 1
@@ -170,6 +174,8 @@ def test_narration_comparison_preserves_word_boundaries(setup):
     # Adapter budget is instantiated already; this fixture explicitly raises its synthetic cap.
     a.budget.daily = 10
     (setup[0] / 'scratch/broadcast-script-test.txt').write_text(ENGLISH)
+    (setup[0] / 'scratch/finalize-result.json').write_text(json.dumps({'title':'Title','body':ENGLISH}))
+    synthetic_meaning_review(setup[0] / 'scratch', ENGLISH)
     with pytest.raises(OpenAIError, match='does not match'):
         a.synthesize(setup[0] / 'scratch', setup[0] / 'scratch/audio.mp3')
     assert not (setup[0] / 'scratch/audio.mp3').exists()

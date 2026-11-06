@@ -27,12 +27,15 @@ def narration_words(text):
             re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text)]
 
 
-def speech_payload(text, voice, max_tokens=4096):
+def speech_payload(text, voice, max_tokens=1536, *, speaking_rate_wpm=130):
     if voice not in VOICES or type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
         raise ValueError('Invalid narration voice/output token limit')
+    if type(speaking_rate_wpm) is not int or not 100 <= speaking_rate_wpm <= 160:
+        raise ValueError('Invalid speaking rate')
+    instructions = INSTRUCTIONS + f' Aim for {speaking_rate_wpm} words per minute, with clear articulation and natural sentence pauses. Add no words.'
     return {'type': 'response.create', 'response': {
         'conversation': 'none', 'output_modalities': ['audio'],
-        'instructions': INSTRUCTIONS, 'max_output_tokens': max_tokens,
+        'instructions': instructions, 'max_output_tokens': max_tokens,
         'audio': {'output': {'voice': voice, 'format': {'type': 'audio/pcm', 'rate': 24000}}},
         'input': [{'type': 'message', 'role': 'user',
                    'content': [{'type': 'input_text', 'text': text}]}],
@@ -89,13 +92,18 @@ def request_realtime(payload, *, timeout=120, connect=None, before_send=None):
             elif kind == 'response.output_audio_transcript.done':
                 transcript = event.get('transcript')
             elif kind == 'error':
-                raise ValueError('Realtime server error')  # Never expose provider bodies.
+                code = event.get('error', {}).get('code')
+                safe_code = code if isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', code) else 'redacted'
+                raise ValueError('Realtime server error (' + safe_code + ')')  # Never expose provider bodies.
             elif kind == 'response.done':
                 if not started or event.get('response', {}).get('status') != 'completed':
                     raise ValueError('Narration incomplete/refused; no chunk accepted')
                 if not audio or not isinstance(transcript, str) or not transcript:
                     raise ValueError('Narration missing audio or transcript')
-                return {'pcm': b''.join(audio), 'transcript': transcript}
+                return {'pcm': b''.join(audio), 'transcript': transcript,
+                        'usage': event.get('response', {}).get('usage'),
+                        'response_id': event.get('response', {}).get('id'),
+                        'reported_model': event.get('response', {}).get('model')}
         raise ValueError('Realtime event limit exhausted')
     finally:
         ws.close()

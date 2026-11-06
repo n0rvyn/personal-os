@@ -502,10 +502,27 @@ def _validate_production(raw: Any) -> ProductionConfig | None:
         if key in options and isinstance(options[key], str):
             try: options[key] = float(options[key])
             except ValueError: raise ConfigError(f"production.{key} must be numeric") from None
-    for key in ("max_output_tokens", "speech_output_tokens"):
+    for key in ("max_output_tokens", "speech_output_tokens", "min_words", "target_words", "max_words",
+                "min_minutes", "target_minutes", "max_minutes", "speaking_rate_wpm",
+                "max_sentence_words", "max_average_sentence_words"):
         if key in options and isinstance(options[key], str):
             try: options[key] = int(options[key])
             except ValueError: raise ConfigError(f"production.{key} must be an integer") from None
+    if provider == "openai":
+        from lib.english import length_settings, listening_settings
+        try:
+            length_settings(options)
+            listening_settings(options)
+        except ValueError as e:
+            raise ConfigError(str(e)) from None
+        if options.get("source_mode", "legacy") not in {"legacy", "public"}:
+            raise ConfigError("production.source_mode must be legacy or public")
+        if options.get("source_mode") == "public" and not isinstance(options.get("source_manifest"), str):
+            raise ConfigError("Public production requires source_manifest")
+        if options.get("source_mode") == "public":
+            import re
+            if not isinstance(options.get("source_manifest_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", options["source_manifest_sha256"]):
+                raise ConfigError("Public production requires source_manifest_sha256")
     return ProductionConfig(provider=provider, language=language, options=options)
 
 

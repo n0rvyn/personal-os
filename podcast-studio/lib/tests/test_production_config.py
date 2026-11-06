@@ -137,10 +137,10 @@ def test_realtime_narration_protocol_and_hard_token_budget(monkeypatch):
     assert len(ws.sent) == 2 and ws.sent[-1] == payload
     assert ws.sent[0]['session']['audio']['input']['turn_detection'] is None
     assert payload['response']['conversation'] == 'none'
-    assert payload['response']['max_output_tokens'] == 4096
+    assert payload['response']['max_output_tokens'] == 1536
     assert payload['response']['audio']['output']['format'] == {'type': 'audio/pcm', 'rate': 24000}
     assert result['transcript'] == 'Read this exactly.' and result['pcm'] == b'\0\0' * 240
-    assert cost_bound(payload) >= 4096 * 20 / 1_000_000
+    assert cost_bound(payload) >= 1536 * 20 / 1_000_000
     assert ws.closed
 
 

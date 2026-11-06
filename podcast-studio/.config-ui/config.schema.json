@@ -144,7 +144,90 @@
         "speech_output_tokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 4096
+          "maximum": 4096,
+          "default": 1536
+        },
+        "source_mode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "public"
+          ],
+          "description": "Public selects exact manifested news/archive files; legacy preserves the original private viewpoint workflow."
+        },
+        "source_manifest": {
+          "type": "string",
+          "description": "Existing exact public source manifest path; no whole-vault scope."
+        },
+        "min_words": {
+          "type": "integer",
+          "minimum": 300
+        },
+        "target_words": {
+          "type": "integer",
+          "minimum": 300
+        },
+        "max_words": {
+          "type": "integer",
+          "minimum": 300
+        },
+        "source_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Pins the exact reviewed public-source manifest; changing scope requires updating this configuration."
+        },
+        "min_minutes": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 90
+        },
+        "target_minutes": {
+          "type": "integer",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 90
+        },
+        "max_minutes": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 90
+        },
+        "speaking_rate_wpm": {
+          "type": "integer",
+          "default": 130,
+          "minimum": 100,
+          "maximum": 160
+        },
+        "max_average_sentence_words": {
+          "type": "integer",
+          "default": 18,
+          "minimum": 10,
+          "maximum": 22
+        },
+        "max_sentence_words": {
+          "type": "integer",
+          "default": 32,
+          "minimum": 10,
+          "maximum": 45
+        },
+        "episode_kind": {
+          "type": "string",
+          "enum": [
+            "full",
+            "demo"
+          ],
+          "default": "full",
+          "description": "Full episodes use the configured 20–30 minute range. Demo explicitly allows short technical tests."
+        },
+        "listening_level": {
+          "type": "string",
+          "enum": [
+            "b1-b2"
+          ],
+          "default": "b1-b2",
+          "description": "Listening-language target, not a proficiency certification; retain facts, caveats and substantive detail."
         }
       }
     }

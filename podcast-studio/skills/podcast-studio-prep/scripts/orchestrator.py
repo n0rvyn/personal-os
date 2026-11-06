@@ -192,7 +192,8 @@ def run_check(candidates: list, topic_log_path: str, today: str,
               show_type: str = None,
               required_domains: list = None,
               exclude_source_ids: "set | list | None" = None,
-              ief_candidates: "list | None" = None) -> dict:
+              ief_candidates: "list | None" = None,
+              source_mode: str = "legacy", archive_context: dict = None) -> dict:
     """Build the structured brief consumed by the writer agent.
 
     DP-001 A: pkos_note is supplied by the caller (达芬奇 selects a subjective note from
@@ -240,7 +241,17 @@ def run_check(candidates: list, topic_log_path: str, today: str,
     handler is the only place filesystem IO happens (mirrors the source_log
     contract above). None → empty list in the brief, fail-soft.
     """
-    if not pkos_note or not isinstance(pkos_note, dict) or not pkos_note.get("id"):
+    public = source_mode == "public"
+    if source_mode not in ("legacy", "public"):
+        return {"error": "Unknown source mode", "approved_topics": []}
+    if public:
+        if (not isinstance(archive_context, dict) or not all(archive_context.get(k) for k in
+                ("id", "title", "excerpt", "url", "published", "question"))
+                or not archive_context["url"].startswith("https://")):
+            return {"error": "Public mode requires identified external archive context", "approved_topics": []}
+        pkos_note = None
+        ief_candidates = []  # Exact manifest selection, not an implicit private exchange read.
+    if not public and (not pkos_note or not isinstance(pkos_note, dict) or not pkos_note.get("id")):
         return {
             "error": "pkos_note required — caller must select a note {id, title, excerpt} from vault.subjective_dir and pass it as --pkos-note input. See podcast-prep SKILL.md for caller protocol.",
             "approved_topics": [],
@@ -292,19 +303,19 @@ def run_check(candidates: list, topic_log_path: str, today: str,
             "required_angle": required_angle,
         })
     # Single vault walk shared by both cross-domain and self-past recall.
-    resolved_root = _resolve_vault_root(vault_root)
+    resolved_root = None if public else _resolve_vault_root(vault_root)
     today_tags = _expand_topic_tags(approved)
-    notes = load_pkos_notes(resolved_root) if today_tags else []
+    notes = load_pkos_notes(resolved_root) if today_tags and not public else []
     contrarian = _contrarian_pull(seed=seed, force_source=force_contrarian)
     brief = {
         "approved_topics": approved,
         "pkos_note": pkos_note,  # caller-provided, propagated verbatim
         "contrarian_source": contrarian,
-        "cross_domain_candidates": cross_domain_candidates(
+        "cross_domain_candidates": [] if public else cross_domain_candidates(
             today_tags, resolved_root, n=5, notes=notes, seed=seed,
             force_domain=force_domain,
             exclude_ids=exclude_source_ids),
-        "self_past_candidates": same_topic_past_notes(
+        "self_past_candidates": [] if public else same_topic_past_notes(
             today_tags, resolved_root, today=today, n=5, notes=notes),
         # Phase 5 Task 4 (B2 brief field): IEF news from upstream plugins
         # (domain-intel). Carried through verbatim from the
@@ -320,6 +331,8 @@ def run_check(candidates: list, topic_log_path: str, today: str,
         },
         "generated_at": f"{today}T00:00:00Z",
     }
+    if public:
+        brief.update(source_mode="public", archive_context=archive_context)
     # Morning branch: expose the quota-selection result so the writer step can
     # see what was filtered + which required domains are missing.
     if domain_selection is not None:
@@ -362,10 +375,12 @@ def run_check(candidates: list, topic_log_path: str, today: str,
         # D-025 single-funnel: pure selection over the already-loaded `notes` var.
         fresh_today = fresh_today_notes(notes or [], today=today, n=5)
         return {
-            "open_questions": open_q_notes,
+            "open_questions": ([{"id": archive_context["id"], "title": archive_context["question"],
+                                "excerpt": archive_context["excerpt"]}] if public else open_q_notes),
             "evidence": evidence,
             "fresh_today": fresh_today,
             "pkos_note": pkos_note,
+            **({"source_mode": "public", "archive_context": archive_context} if public else {}),
             "contrarian_source": contrarian,
             # Phase 5 Task 4: IEF news carried into evening brief too (B2
             # field, parallel to morning's ief_candidates slot). D-2 keeps
@@ -470,6 +485,8 @@ def main():
                           "<config vault.output_dir>/topic_log.yaml (resolved via lib.config).")
     chk.add_argument("--pkos-note", default=None,
                      help="REQUIRED. JSON object {id, title, excerpt} selected by the caller (达芬奇) from vault.subjective_dir. DP-001 A.")
+    chk.add_argument("--source-mode", choices=["legacy", "public"], default="legacy")
+    chk.add_argument("--archive-context", default=None, help="Identified public external context JSON; not a personal viewpoint")
     chk.add_argument("--seed", type=int, default=None)
     chk.add_argument("--vault-root", default=None,
                      help="Podcast vault root. Defaults to vault.subjective_dir from the "
@@ -538,6 +555,8 @@ def main():
         ief_cands: list = []
         try:
             import exchange_ief  # local import — keep top-level clean for unit tests
+            if args.source_mode == "public":
+                raise ConfigError("Exact public selection excludes implicit IEF collection")
             cfg = load_config()  # second call is cheap (re-resolves same path)
             ief_log_path = os.path.join(
                 os.path.dirname(args.topic_log), "ief_source_log.jsonl")
@@ -562,7 +581,8 @@ def main():
                           show_type=args.show_type,
                           required_domains=required_domains,
                           exclude_source_ids=exclude,
-                          ief_candidates=ief_cands)
+                          ief_candidates=ief_cands, source_mode=args.source_mode,
+                          archive_context=json.loads(args.archive_context) if args.archive_context else None)
         # Write this episode's offered note paths back to source_log.
         # Morning/legacy brief carries `cross_domain_candidates`; the evening
         # brief shape (Task 7) does NOT — it uses `open_questions` / `evidence` /

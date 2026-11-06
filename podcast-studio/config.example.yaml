@@ -73,3 +73,16 @@ tts:
 #   budget_timezone: APPROVED_IANA_TIMEZONE
 #   per_call_limit_usd: 0     # Replace with the actual approved cap; zero disables calls.
 #   daily_limit_usd: 0
+
+# English production defaults in the same section above (uncomment with it):
+#   episode_kind: full  # demo must be explicit for short technical tests
+#   min_minutes: 20
+#   target_minutes: 25
+#   max_minutes: 30
+#   speaking_rate_wpm: 130
+#   listening_level: b1-b2
+#   max_average_sentence_words: 18
+#   max_sentence_words: 32
+#   speech_output_tokens: 1536  # per 80-word chunk; incomplete results stop
+# Word ranges derive from minutes × pace (2600 / 3250 / 3900 by default).
+# Do not copy a demo's 450 / 520 / 600-word limits into full production.

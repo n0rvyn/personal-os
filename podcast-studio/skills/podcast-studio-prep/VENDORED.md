@@ -70,3 +70,13 @@ cd podcast-studio/skills/podcast-studio-prep && python3 -m pytest scripts/ -q
 - `__pycache__/` and `.pytest_cache/` — build artifacts, not source.
 - Upstream's `.claude-plugin/` manifest — this skill is a library inside the
   podcast-studio plugin, not separately installable.
+
+## Public archive source selection (local update, 2026-11-06)
+
+`orchestrator.py check` gains optional `--source-mode public --archive-context JSON`.
+The same selection, novelty, quota and A/B/C brief machinery is used. Legacy remains
+the default and still requires pkos_note. Public mode requires an identified HTTPS
+archive source and editorial question, carries archive_context explicitly, sets
+pkos_note=null, and excludes implicit private vault recall and IEF ingestion.
+It does not fabricate a personal stance from an external article. Network source
+verification and exact source-manifest enforcement live in the host adapter.

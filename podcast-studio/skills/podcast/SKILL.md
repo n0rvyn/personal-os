@@ -686,3 +686,47 @@ has no profile file or separate activation command. Keep the configured output,
 source and continuity paths. English artifacts add `-en` to their filenames in
 the existing directories. Follow `../../docs/openai-english.md` for the reviewed
 config and provider contracts. Never run an episode merely to verify an update.
+
+For an explicitly public-source episode, `production.source_mode: public` and
+`source_manifest` narrow the same runner to verified news/archive files. The host
+uses the real prep command's public archive context; do not fulfill older private
+pkos_note/vault-leads prose by reading personal notes. English length can be
+configured in this same section: full defaults are 20/25/30 minutes at
+130 words/minute (2600/3250/3900 words). Short 450/520/600-word tests require
+`episode_kind: demo` explicitly; all length consumers share it. Original Chinese defaults and the
+existing topology remain. See the source/privacy and cost details in the same
+English production documentation. Source selection is not a credential or budget
+approval and does not authorize publication.
+
+### English listening quality and faithful narration
+
+Use `production.episode_kind: full` for real episodes; the three-minute first
+English recording is a retained technical demo. The existing drafts, independent
+critique, polish, scoring, finalization, factcheck and broadcast stations remain
+unchanged. In the English contract, ordinary spoken vocabulary and explained
+terms make the same substantive evidence accessible to B1–B2 listeners. Preserve
+figures, dates, limitations, counterevidence, causal reasoning and host opinions;
+never shorten content into a headline digest or add invented examples to fill time.
+Sentence-load and word-retention checks catch structural failures; they do not
+prove semantic equivalence. Independent editorial review still checks meaning.
+
+The English TTS station reads only the approved broadcast script, with configurable
+clear pacing. It must never prepend an AI/provider announcement. Mandatory
+synthetic-voice disclosure stays in `audio-disclosure.md`, carried beside local
+episode audio as `.audio-disclosure.txt` show notes. Present that notice with the
+player/episode description before any external release. Full audio is measured
+with ffprobe and must fall inside the configured duration range. A failure keeps
+PCM, receipts and scratch for review; it does not trigger paid retries or padding.
+
+The existing English scorecard station also compares the finalized manuscript and
+spoken rewrite. It must return a listening/meaning verdict plus verbatim quote
+pairs covering a fact, a caveat and reasoning/opinion. Missing, negative or
+untraceable review blocks TTS even when older taste scores are advisory. This
+keeps the same station and independent editor; it adds no parallel pipeline.
+The judgment remains fallible; mechanical checks alone never certify meaning.
+Written disclosure uses a `.txt` companion in `episodes/` so continuity scanners
+that read manuscript `*.md` files do not ingest a disclosure as another episode.
+
+The host pins that review to SHA-256 hashes of both exact artifacts. Full TTS
+rechecks the review and hashes before reserving or calling the provider; edited
+or unreviewed scripts stop, including direct station invocation and resume.

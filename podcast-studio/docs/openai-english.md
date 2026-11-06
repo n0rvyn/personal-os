@@ -117,11 +117,13 @@ each small narration chunk, with one voice, PCM 24 kHz output and no tools,
 microphone input, conversation history or ephemeral credential creation.
 It requests an exact reading, validates completed status and the returned
 transcript word boundaries against the supplied English text, caches successful PCM chunks,
-and encodes/decode-checks the final MP3 with ffmpeg. It adds an AI-voice disclosure.
+and encodes/decode-checks the final MP3 with ffmpeg. It never changes or prepends to the approved spoken script. A separate written
+`audio-disclosure.md` is carried into episode show notes with the audio.
 The websocket-client dependency is declared and checked before paid narration.
 The [official model pricing](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini)
 is $0.60/M text input tokens and $20/M audio output tokens. Each request has a
-hard 4096-output-token ceiling and reserves all output at the higher audio rate;
+default 1536-output-token ceiling (configurable up to 4096) and reserves all
+output at the higher audio rate;
 the entire remaining narration job is reserved before its first request.
 No approximate per-minute rate is treated as a hard billing ceiling.
 
@@ -132,11 +134,13 @@ and append-only stance writer remain authoritative. The Responses adapter has
 controlled local read/prep tools rather than assuming Claude CLI tools transfer.
 The collector must use three actual prep results; the host appends those briefs.
 The Bible remains isolated and structured scoring remains Bible-free.
-English checks require 2340 words (target 2600), Latin letters and English
+Full English checks default to 2600–3900 words (target 3250), Latin letters and English
 function words. These are heuristics, not a semantic language guarantee. Existing
 lexical memory checks are not guaranteed to detect cross-language paraphrases.
-Live English quality, exact narration fidelity, account access and full-episode
-operation remain unverified; no paid provider call or episode is part of review.
+The first English demo verified account access, seven returned narration
+transcripts, PCM acceptance and MP3 decoding. The updated 20–30-minute workflow
+and actual learner comprehension have only offline verification; no new paid
+provider call is part of the listening-workflow update.
 
 The optional existing `studio-dev` source-loader link remains developer tooling;
 it is not a new pipeline, required English command or updated installed release.
@@ -153,3 +157,152 @@ legacy/English filename collisions, budget rollover, pre-generation checks,
 interrupted requests and parallel receipts, title drift, transcript boundaries,
 and legacy config-schema compatibility. These tests do not establish live
 editorial quality or provider voice fidelity.
+
+## Public news/archive episodes and explicit short length
+
+The existing `production` section can select `source_mode: public` and an exact
+`source_manifest` with its `source_manifest_sha256` pinned in that same config. This is source selection inside the same morning/evening DAG,
+not another pipeline. Legacy mode remains the default and retains its original
+private-viewpoint behavior. The manifest is version 1, lists exact non-hidden
+Markdown paths with SHA-256, original HTTPS URL, publication date, title and
+`kind: news|archive`, binds each domain/topic candidate to a listed news file,
+and identifies one listed archive file plus an editorial question. Declaration
+as public is not independent proof: the owner-approved source preparation must
+verify the originals first. Recheck manifest/file hashes before reads and requests.
+
+Public mode does not grant a whole-vault or output-directory read root. Read tools
+see only manifested files and selected current-run artifacts. Request journals,
+private scorecard details, old transcripts, personal notes and voice files are
+not readable. It supplies public `archive_context` to the real A/B/C prep command,
+sets `pkos_note` to null, and does not perform implicit private recall or IEF reads.
+This overrides the old persona/editorial requirement to use a private viewpoint;
+it never labels external prose as the host's own experience.
+
+Shared history is retained. Local continuity and deterministic duplicate checks
+still read existing history; public provider prompts omit private bets, obsessions,
+voice Bible and historical apparatus/thesis summaries. Existing bets are not
+invented as settled. The historical semantic thesis judge cannot compare private
+text that was not authorized for egress; its existing missing-evidence/fail-soft
+behavior remains, while local code checks still run and are recorded. Current
+public results are distilled and merged locally by the existing post-publication
+stations. Use the ordinary scorecard enforcement flag for the reviewed first run;
+no gate is satisfied by fabricated prep or factcheck output.
+
+English defaults are full episodes: `episode_kind: full`, 20/25/30
+`min_minutes`/`target_minutes`/`max_minutes`, with `speaking_rate_wpm: 130`.
+Word bounds derive from those values: 2600/3250/3900. Explicit word bounds may
+refine that range, but cannot silently shrink a full episode into a demo. Short
+technical tests require `episode_kind: demo` (defaults 450/520/600 words). The
+existing first English 217.65-second artifact remains a demo; it is not rewritten.
+The Chinese character floor and existing Chinese files are unchanged.
+
+`listening_level: b1-b2`, `max_average_sentence_words: 18` and
+`max_sentence_words: 32` steer clear listening language. These are mechanical
+load checks and a writing target, not CEFR certification. Editorial prompts
+require first-use term explanations, concrete grounded examples, exact facts,
+limitations, counterarguments and complete reasoning. Broadcast word retention
+must be at least 95% of the approved manuscript to catch accidental summaries;
+this cannot prove semantic preservation. The existing independent critique,
+scoring and factcheck remain responsible for evidence and meaning.
+
+TTS reads the supplied script exactly, with no appended disclosure or other
+unrequested words. OpenAI requires clear AI-voice disclosure; keep it visible
+in written player descriptions/show notes, using the separate disclosure file.
+The local publisher refuses to land English audio without that notice. It does
+not upload or publish externally. Audio duration is measured after decoding;
+full episodes outside the configured range stop with completed chunks retained.
+Never use silence padding, repeats, new facts or an automatic paid retry to pass.
+
+Speech still uses `gpt-realtime-2.1-mini`, the configured voice, and fresh
+80-word chunks. The default per-chunk output ceiling is now 1536 tokens, above
+the demo's observed maximum 851. It is a hard output cap, not a reasoning-effort
+setting or a guarantee of completion; incomplete output stops for review. At
+3250 ordinary words the conservative narration reservation is about $1.4,
+with actual input sizes determining the exact value before any call. Script
+generation, other retained commitments and tools also consume budget; no full
+episode or free shared balance is promised by this estimate.
+
+The $0.10 per-call and $2 daily ceilings do not authorize credential use or private
+data. A real run remains blocked until current-day cross-project commitments and
+an authorized process credential are established. Do not create a fresh empty
+ledger and declare it verified, reuse Elm's incompatible SQLite as this JSON, or
+reinterpret an older cumulative balance as today's spend.
+
+The existing English scorecard station also compares the finalized manuscript and
+spoken rewrite. It must return a listening/meaning verdict plus verbatim quote
+pairs covering a fact, a caveat and reasoning/opinion. Missing, negative or
+untraceable review blocks TTS even when older taste scores are advisory. This
+keeps the same station and independent editor; it adds no parallel pipeline.
+The judgment remains fallible; mechanical checks alone never certify meaning.
+Written disclosure uses a `.txt` companion in `episodes/` so continuity scanners
+that read manuscript `*.md` files do not ingest a disclosure as another episode.
+
+The host pins that review to SHA-256 hashes of both exact artifacts. Full TTS
+rechecks the review and hashes before reserving or calling the provider; edited
+or unreviewed scripts stop, including direct station invocation and resume.
+
+
+## First English demo: recorded usage and cost calculation (2026-11-06)
+
+The 217.65-second recording is a technical demo, not the full-length show.
+Seven completed `gpt-realtime-2.1-mini` responses recorded the usage below in
+`reports/first-english-audio-events-2.jsonl` under the existing Podcast project.
+The model alias is recorded; an immutable model snapshot/version was not retained.
+The detailed accounting is `reports/first-english-exact-audio-cost.json`.
+
+| Billed-token category | Tokens | USD per million | Computed USD |
+| --- | ---: | ---: | ---: |
+| Uncached text input | 972 | 0.60 | 0.00058320 |
+| Cached text input | 64 | 0.06 | 0.00000384 |
+| Text output | 1,121 | 2.40 | 0.00269040 |
+| Audio output | 4,353 | 20.00 | 0.08706000 |
+| **Total** | **1,036 input + 5,474 output** | | **0.09033744** |
+
+Calculation: `(972 × 0.60 + 64 × 0.06 + 1121 × 2.40 + 4353 × 20) / 1,000,000`
+`= $0.09033744`, approximately 9.03 US cents. The 215 reported reasoning tokens
+are a subset of the 1,121 text-output tokens; do not add them a second time.
+Rates: [official model pricing](https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini).
+
+This is a calculation from returned token usage and published rates, **not a
+settled invoice or independently reconciled provider charge**. The successful
+job reserved $0.5953454 conservatively. The earlier expired-key attempt retains
+another $0.5953454: $1.1906908 in combined retained reservations, not proven
+charges. The expired attempt's actual charge remains unrecorded. No reservation
+was released or retrospectively rewritten as a refund/settlement.
+
+Script drafting and editorial review were performed in the assistant session,
+without a separate paid OpenAI API script-generation call. Assistant-session
+subscription/token costs are not included in this audio calculation. The demo's
+one-episode daily-cap exception does not authorize future runs or change the
+standing $0.10/call and $2/day configuration.
+
+## Review-time implementation and release snapshot (2026-11-06)
+
+This records the state presented for release approval, before the approved
+commit/release/update. Consult installed metadata for the later deployed version.
+
+The existing source and `/Users/norvyn/Code/Content/Podcasts/config.yaml` now
+implement full/demo separation, 20/25/30-minute settings, B1–B2 listening targets,
+sentence-load gates, independent artifact-grounded meaning review, hash-pinned
+TTS review, faithful narration without spoken insertions, written disclosure and
+measured audio duration. The deterministic pipeline table is unchanged. The old
+demo, Chinese history, original-language sources and existing paths remain intact.
+
+Validation recorded 802 passing tests, 1 skipped, 80 focused passes, valid current
+configuration/schema and a clean `git diff --check`; two existing warnings remain.
+These additions are uncommitted local changes on source HEAD
+`6361122112676900b1fb03fcbb220bc228ef23ad`. They have not been pushed or installed.
+The existing standard plugin remains version **0.9.0** at
+`/Users/norvyn/.claude/plugins/cache/personal-os/podcast-studio/0.9.0`.
+The existing project's `studio-dev` link resolves to the updated canonical source;
+it is not a second plugin or pipeline. Installed 0.9.0 must not be described as
+containing these new listening-workflow fixes.
+
+Remaining: review the scoped changes and use the established release/update
+process for the same plugin. Before the first real full-length English episode,
+refresh the public news/archive selection and pins, review/authorize its source
+scope, reconcile the applicable budget and authorize paid generation. Config
+currently keeps `source_authorized: false`; the retained demo inventory is not
+blanket authorization for a new episode. Live full-length pacing, completion and
+actual learner comprehension are not yet verified. No external publication is
+part of these changes.

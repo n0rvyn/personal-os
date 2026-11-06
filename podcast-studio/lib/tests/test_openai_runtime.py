@@ -19,6 +19,18 @@ ENGLISH = ('We have a choice in the way we build this system. The tools can help
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def synthetic_meaning_review(scratch, text):
+    """Unit-test-only verdict for the synthetic ENGLISH fixture, never production."""
+    import hashlib
+    quotes=[('fact','The tools can help us'), ('caveat','but the work is ours'),
+            ('reasoning_or_opinion','the result will depend on what we do')]
+    verdict={'english_listening_review':{'accessible_language':True,'meaning_preserved':True,'issues':[],
+             'evidence':[{'category':kind,'reader_quote':quote,'spoken_quote':quote} for kind,quote in quotes]},
+             'english_review_artifact_hashes':{'reader':hashlib.sha256(text.encode()).hexdigest(),
+                                              'spoken':hashlib.sha256(text.encode()).hexdigest()}}
+    (Path(scratch)/'scorecard-verdict.json').write_text(json.dumps(verdict))
+
+
 def response(text):
     return {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
             'content': [{'type': 'output_text', 'text': text}]}]}
@@ -225,6 +237,7 @@ def test_prep_runs_real_fixed_command_without_shell(setup, monkeypatch):
 
 
 def test_speech_real_merge_and_recovery_without_paid_calls(setup):
+    setup[1].update(episode_kind='demo', min_words=2600, target_words=3000, max_words=3900)
     setup[1]['daily_limit_usd'] = 10  # Synthetic fixture, not an approved live budget.
     root = setup[0]
     # Actual ffmpeg media decoding/merging; mocked provider audio is a synthetic
@@ -235,7 +248,7 @@ def test_speech_real_merge_and_recovery_without_paid_calls(setup):
     seen = []
     def speech(endpoint, payload, **kw):
         assert endpoint == 'realtime'
-        assert payload['response']['max_output_tokens'] == 4096
+        assert payload['response']['max_output_tokens'] == 1536
         assert len(payload['response']['input'][0]['content'][0]['text'].split()) <= 80
         seen.append(payload)
         return {'pcm': tone.read_bytes(), 'transcript': payload['response']['input'][0]['content'][0]['text']}
@@ -245,7 +258,8 @@ def test_speech_real_merge_and_recovery_without_paid_calls(setup):
     out = root / 'scratch/audio-files.mp3'
     a.synthesize(root / 'scratch', out)
     assert out.stat().st_size > 0 and len(seen) > 1
-    assert script.read_text().startswith('This episode uses an AI-generated voice.')
+    assert script.read_text() == ENGLISH
+    assert 'AI-generated voice' in (root / 'scratch/audio-disclosure.md').read_text()
     count = len(seen)
     out.unlink()
     a.synthesize(root / 'scratch', out)
@@ -259,6 +273,8 @@ def test_whole_speech_job_is_budgeted_before_first_chunk(setup):
     a = adapter(setup, lambda *args, **kw: seen.append(args))
     script = setup[0] / 'scratch/broadcast-script-2026-11-05.txt'
     script.write_text(ENGLISH)
+    (setup[0] / 'scratch/finalize-result.json').write_text(json.dumps({'title':'Title','body':ENGLISH}))
+    synthetic_meaning_review(setup[0] / 'scratch', ENGLISH)
     with pytest.raises(OpenAIError, match='Daily cost'):
         a.synthesize(setup[0] / 'scratch', setup[0] / 'scratch/audio-files.mp3')
     assert not seen
@@ -327,6 +343,7 @@ def test_english_publication_recovers_partial_outputs_without_overwrite(setup):
     with pytest.raises(RunnerError, match='audio is missing'):
         _publish_step(ctx)
     (scratch / 'audio-files.mp3').write_bytes(b'synthetic-media-test')
+    (scratch / 'audio-disclosure.md').write_text('Voice disclosure: AI-generated voice, not a human narrator.')
     paths = _publish_step(ctx)
     assert paths['script'].read_text() == ENGLISH
     assert paths['audio'].read_bytes() == b'synthetic-media-test'

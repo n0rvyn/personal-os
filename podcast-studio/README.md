@@ -1,7 +1,7 @@
 # podcast-studio
 
 personal-os fleet-member podcast production plugin. The headline is a
-Claude-driven multi-persona pipeline (`/podcast morning` / `/podcast evening`)
+Deterministic multi-persona pipeline (`/podcast morning` / `/podcast evening`)
 that reads your Vault, runs prep, dispatches its persona subagents (the roster
 is the `agents/` dir + `lib/pipeline.py` `AGENT_WHITELIST`, not a fixed count)
 in sequence, and produces a reader-facing script + mp3 with stance-card
@@ -49,6 +49,24 @@ Then enable the plugin:
 ```
 /plugin enable podcast-studio
 ```
+
+## Codex / ChatGPT Work
+
+Install this existing package from the Personal OS marketplace; do not copy its
+pipeline or create another content project. If the marketplace is already
+registered, use `codex plugin add podcast-studio@personal-os --json`. Otherwise,
+register the existing marketplace first with
+`codex plugin marketplace add https://github.com/n0rvyn/personal-os.git --json`.
+Installation requires the user's authorization. Open a fresh task in the existing
+Podcast project to load `podcast-studio:podcast`; folder access alone is not an
+installation. Keep the existing cwd, config and output paths.
+
+Follow the skill's host-neutral path/Python invocation. OpenAI English
+morning/evening runs use the direct OpenAI adapter; legacy/default dispatch and
+papers still require Claude CLI. `/loop` below is Claude-specific. No scheduling,
+provider/model change, credential setup or production run is implied by import.
+Public-source mode uses manifest-selected news/archive and requires no private
+PKOS note. See [host and source-mode details](docs/openai-english.md#codexchatgpt-work-portability).
 
 ## Config
 

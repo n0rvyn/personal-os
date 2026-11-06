@@ -306,3 +306,28 @@ currently keeps `source_authorized: false`; the retained demo inventory is not
 blanket authorization for a new episode. Live full-length pacing, completion and
 actual learner comprehension are not yet verified. No external publication is
 part of these changes.
+
+
+## Codex/ChatGPT Work portability
+
+The same installed `podcast-studio:podcast` skill and deterministic runner work
+from a local Codex/ChatGPT Work project. Registration of a marketplace and access
+to source folders are separate from plugin installation. Verify installation with
+`codex plugin list --json`; install the existing package only if absent and
+approved. A fresh project task loads the new skill catalog. Resolve the package
+root from that task's actual skill file locator and use the existing project
+Python environment with the package on `PYTHONPATH`, keeping the project cwd.
+The main skill documents the exact invocation; no Claude path variable is needed.
+
+OpenAI English morning/evening selects `OpenAIDispatch`; legacy/default and papers
+still use Claude CLI. Claude tool names, `/loop` and the internal prep skill's
+legacy model hint are not portable runtime commands or permission to change any
+host/model settings. Public mode uses the existing prep tool with identified
+archive context and null `pkos_note`; older private-note instructions are scoped
+to legacy mode. Do not hand-simulate prep, editorial gates or missing backends.
+
+A no-cost smoke check is `lib.runner --help`. `--no-tts` is not a no-cost run,
+`load_config()` may create layout directories, prep `check` writes selection logs,
+and `finalize` updates continuity. Use temporary synthetic fixtures for behavioral
+checks. Native skill discovery and offline checks do not authorize source egress,
+credential access, paid generation or external publication.

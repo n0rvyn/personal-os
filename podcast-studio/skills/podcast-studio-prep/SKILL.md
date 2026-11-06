@@ -1,6 +1,6 @@
 ---
 name: podcast-studio-prep
-description: "podcast-studio's internal prep orchestrator — invoked by the podcast pipeline's 达芬奇/davinci agent via orchestrator.py (script path), not a user-facing command. Two subcommands: 'check' returns a structured brief (approved topics + required angle + caller-supplied vault note + contrarian source) given candidate topics; 'finalize' MinHash-dedupes the final script against the past 7 days and writes topic_log on accept. Not when: you want the standalone personal-os podcast-prep — this is the vendored podcast-studio copy."
+description: "podcast-studio's internal prep orchestrator — invoked by the podcast pipeline's 达芬奇/davinci agent via orchestrator.py (script path), not a user-facing command. Two subcommands: 'check' returns a structured brief (approved topics + required angle + mode-specific context (public archive or authorized legacy note) + contrarian source) given candidate topics; 'finalize' MinHash-dedupes the final script against the past 7 days and writes topic_log on accept. Not when: you want the standalone personal-os podcast-prep — this is the vendored podcast-studio copy."
 model: sonnet
 allowed-tools:
   - Read
@@ -17,7 +17,30 @@ reverse-source pool. Writer agents
 (达芬奇, 快刀青衣) call `check` for a structured brief before writing and
 `finalize` after writing to gate retry vs accept.
 
-**DP-001 A — Caller protocol**: PKOS note selection is the CALLER's responsibility.
+## Source modes and host invocation
+
+The existing runner owns this internal prep step. Use its `prep_check` local tool
+when dispatched through OpenAI, not a new host subagent or simulated JSON brief.
+The `model: sonnet` metadata is a legacy Claude skill hint, not a request to change
+the current host model or the configured OpenAI station model. Codex imports the
+same package; resolve script paths from the actual installed skill locator, not
+from an assumed `CLAUDE_PLUGIN_ROOT` environment variable.
+
+- **Public mode:** `--source-mode public --archive-context '<JSON>'`. Context has
+  `id`, `title`, `excerpt`, original HTTPS `url`, `published` date and editorial
+  `question`, derived by the runtime from the approved SHA-pinned source manifest.
+  Omit `--pkos-note`; the brief sets `pkos_note: null` and excludes private
+  cross-domain/self-past/IEF pulls. Never select a private note to repair a public
+  brief, manufacture context, or treat an external article as a personal memory.
+  The runner, not a standalone prep invocation, enforces manifest hashes/egress.
+- **Legacy mode (default):** the private-note protocol below remains required;
+  it does not grant permission to transmit private notes to a provider.
+
+`check` can write source-selection logs beside `--topic-log`; `finalize` writes
+continuity and may archive a script. They are not read-only production probes.
+Offline tests must use synthetic inputs and temporary logs, never project state.
+
+**DP-001 A — Legacy caller protocol**: PKOS note selection is the CALLER's responsibility.
 达芬奇 picks a subjective note directly from `vault.subjective_dir` (resolved from
 `~/.podcast-studio/config.yaml`) and passes the resulting `{id, title, excerpt}` object
 as `--pkos-note` to `orchestrator.py check`. The orchestrator validates the note is
@@ -27,6 +50,10 @@ present but does NOT read the vault itself. If the note is missing, `check` retu
 ## Subcommands
 
 ### check
+
+The command below is the **legacy** form. For public mode replace `--pkos-note`
+with `--source-mode public --archive-context` as described above. Both modes use
+the same command, angle rotation, topic cooldown and finalize gates.
 
 ```
 orchestrator.py check \
@@ -59,12 +86,16 @@ Returns a JSON brief with:
 - `named_concept_prompt`: a directive nudging the writer to name an emergent pattern
 - `generated_at`: ISO timestamp
 
-On missing or invalid `pkos_note`, returns `{"error": "pkos_note required ...", "approved_topics": [], cross_domain_candidates: [], self_past_candidates: [], named_concept_prompt: "...", ...}` — the error brief keeps the full schema.
+In legacy mode, on missing or invalid `pkos_note`, returns `{"error": "pkos_note required ...", "approved_topics": [], cross_domain_candidates: [], self_past_candidates: [], named_concept_prompt: "...", ...}` — the error brief keeps the full schema.
 
 `--vault-root` defaults to `vault.subjective_dir` in `~/.podcast-studio/config.yaml`
 (resolved via `lib.config.load_config()`).
 
-### Insight-density fields — writer protocol
+### Insight-density fields — legacy writer protocol
+
+Public mode uses identified public archive context instead of private cross-domain
+or self-past notes. Do not apply the private-reference obligations below to a
+public episode. Preserve evidence, limitations and independent reasoning.
 
 These three fields target the podcast's core KPI: selection → insight → opinion → thought-provocation. They are advisory inputs the writer agent (达芬奇) MUST engage with:
 
@@ -126,7 +157,7 @@ deterministically by `seed` (for testing) or randomly per run.
 
 ## Examples
 
-### Happy path — check returns full brief
+### Legacy happy path — check returns full brief
 
 ```bash
 python3 orchestrator.py check \
@@ -146,7 +177,7 @@ python3 orchestrator.py check \
 # }
 ```
 
-### Missing pkos_note — error brief
+### Legacy missing pkos_note — error brief
 
 ```bash
 python3 orchestrator.py check \

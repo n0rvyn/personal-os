@@ -1,7 +1,7 @@
 {
   "name": "podcast-studio",
   "version": "0.10.0",
-  "description": "personal-os fleet-member podcast production. A Claude-driven multi-persona pipeline (/podcast morning|evening) with stance-card continuity and a per-run Character Bible, backed by a vendored prep orchestrator (topic dedup, angle rotation, MinHash) and TTS synthesis via the personal-os fleet's tts skill. Reads all paths and credentials from ~/.podcast-studio/config.yaml.",
+  "description": "personal-os podcast production through one deterministic multi-persona runner, with independent editorial review, continuity and recovery. Supports configured OpenAI English text/speech for morning/evening from Codex/ChatGPT Work or Claude Code; legacy and papers dispatch retain Claude CLI. Uses existing project configuration and source/output paths.",
   "author": {
     "name": "Norvyn"
   }

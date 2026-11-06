@@ -192,7 +192,7 @@ READ_TOOLS = [
     _tool('list_files', 'List approved Markdown/JSON/YAML/text files in a directory.',
           {'path': {'type': 'string'}, 'offset': {'type': 'integer'}}),
 ]
-PREP_TOOL = _tool('prep_check', 'Execute the real prep check. Call three times, one per route; embed returned briefs verbatim.',
+PREP_TOOL = _tool('prep_check', 'Execute the real prep check. Call three times, one per route. The runtime appends the returned briefs verbatim; do not include JSON fenced blocks in your answer.',
     {'candidates_json': {'type': 'string'}, 'pkos_note_json': {'type': 'string'},
      'date': {'type': 'string'}, 'show': {'type': 'string', 'enum': ['morning', 'evening']},
      'domain': {'type': 'string', 'enum': ['philosophy', 'cognition', 'history']},
@@ -437,6 +437,11 @@ class OpenAIDispatch:
                 self.synthesize(scratch_dir, artifact)
                 return {'ok': True, 'reason': 'OpenAI speech complete', 'artifact_path': str(artifact)}
             system = (Path(plugin_root) / agent_dir / (agent_name + '.md')).read_text()
+            user_prompt += ('\nSource mode: public. Use only manifest-selected public news/archive '
+                            'and current-run artifacts. Do not select private notes, voice corpus, '
+                            'private IEF or historical prose. Use original source URLs/dates from '
+                            'the inventory; no WebSearch tool is available. pkos_note is null.'
+                            if self.public else '\nSource mode: legacy. Use only the authorized configured source scope.')
             # A fresh Responses conversation for EVERY station/candidate, never
             # previous_response_id or shared conversation state.
             tools = [] if agent_name == 'bible-distiller' else list(READ_TOOLS)

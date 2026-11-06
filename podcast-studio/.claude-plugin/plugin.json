@@ -1,6 +1,6 @@
 {
   "name": "podcast-studio",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "personal-os podcast production through one deterministic multi-persona runner, with independent editorial review, continuity and recovery. Supports configured OpenAI English text/speech for morning/evening from Codex/ChatGPT Work or Claude Code; legacy and papers dispatch retain Claude CLI. Uses existing project configuration and source/output paths.",
   "author": {
     "name": "Norvyn"

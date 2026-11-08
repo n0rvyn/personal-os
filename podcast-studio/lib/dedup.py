@@ -482,3 +482,49 @@ def check_dedup(
             parts.append(cross["reason"])
         reason = "; ".join(parts) if parts else "dedup failed"
     return {"ok": ok, "reason": reason, "score": round(score, 4), "hits": hits}
+
+def check_intra_dup_english(body: str) -> dict[str, Any]:
+    """English duplicate audit using words, rather than Chinese character units.
+
+    The original calibrated Chinese checker is unchanged. English has long
+    ordinary words and shared function phrases: thirteen characters is not a
+    repeated claim. Compare sentence and paragraph units using the same named
+    contiguous-run and Jaccard thresholds, with English words as the units.
+    Exact repeated short sentences are still caught by the Jaccard signal.
+    """
+    units: list[tuple[list[str], int, str]] = []
+    for origin, paragraph in enumerate(re.split(r"\n\s*\n", body)):
+        paragraph = re.sub(r"^#+[^\n]*(?:\n|$)", "", paragraph).strip()
+        if not paragraph:
+            continue
+        texts = [paragraph] + re.split(r"(?<=[.!?])\s+", paragraph.strip())
+        for text_index, text in enumerate(texts):
+            words = re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", text.lower())
+            key = tuple(words)
+            if len(words) >= 3:
+                # Avoid adding an identical single sentence twice as its own
+                # paragraph, but retain actual repeated sentence occurrences.
+                if text_index and key == tuple(re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", paragraph.lower())):
+                    continue
+                units.append((words, origin, "paragraph" if text_index == 0 else "sentence"))
+    hits: list[str] = []
+    for i, (left, origin, left_kind) in enumerate(units):
+        left_pairs = set(zip(left, left[1:]))
+        left_runs = {tuple(left[j:j + VERBATIM_NGRAM_LEN])
+                     for j in range(len(left) - VERBATIM_NGRAM_LEN + 1)}
+        for right, other_origin, right_kind in units[i + 1:]:
+            if origin == other_origin and "paragraph" in (left_kind, right_kind):
+                continue
+            right_pairs = set(zip(right, right[1:]))
+            union = left_pairs | right_pairs
+            jaccard = len(left_pairs & right_pairs) / len(union) if union else 0
+            shared = any(tuple(right[j:j + VERBATIM_NGRAM_LEN]) in left_runs
+                         for j in range(len(right) - VERBATIM_NGRAM_LEN + 1))
+            if shared or jaccard >= HIGH_JACCARD_THRESHOLD:
+                shorter = left if len(left) <= len(right) else right
+                hit = " ".join(shorter)
+                if hit not in hits:
+                    hits.append(hit)
+    return {"ok": not hits, "reason": "English word-unit duplicate audit: " +
+            ("clean" if not hits else str(len(hits)) + " repeated fragments"),
+            "score": len(hits) / max(len(units), 1), "hits": hits}

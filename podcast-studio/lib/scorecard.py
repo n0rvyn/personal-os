@@ -349,7 +349,8 @@ def build_scorecard(
         _hard_gate_betting_section(body),
         (_english_duration(script_text, english_min_words, english_max_words, english_wpm) if output_language == "en"
          else _hard_gate_duration(script_text)),
-        _hard_gate_intra_dup(body),
+        ({"name": "intra_dup", **dedup.check_intra_dup_english(body)}
+         if output_language == "en" else _hard_gate_intra_dup(body)),
         _hard_gate_cross_dup(script_text, store, today),
         _hard_gate_thesis_advance(thesis_verdict),
     ]

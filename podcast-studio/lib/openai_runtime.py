@@ -65,6 +65,30 @@ class Budget:
         if not self.per_call or not self.daily or not self.path.is_file():
             raise BudgetError('Positive approved limits and an existing verified budget ledger are required')
 
+    def snapshot(self, *, day=None):
+        """Read existing reconciled accounting under a shared lock; never initialize/reset it."""
+        today = day or dt.datetime.now(self.timezone).date().isoformat()
+        dt.date.fromisoformat(today)
+        with self.path.open('r', encoding='utf-8') as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            ledger = json.load(f)
+        if not isinstance(ledger, dict):
+            raise BudgetError('Shared budget ledger must be a JSON object')
+        if (ledger.get('date') != today or ledger.get('timezone') != self.timezone.key
+                or ledger.get('commitments_verified') is not True):
+            raise BudgetError('Actual daily commitments must be reconciled for the requested policy day')
+        records = ledger.get('reservations')
+        if not isinstance(records, list) or any(not isinstance(r, dict) for r in records):
+            raise BudgetError('Malformed budget reservations')
+        opening = _money(ledger['opening_committed_usd'])
+        held = sum(_money(r['reserved_usd']) for r in records)
+        return {'day': today, 'timezone': self.timezone.key, 'ledger': str(self.path),
+                'opening_committed_usd': opening, 'retained_reservations_usd': held,
+                'committed_usd': opening + held, 'remaining_usd': self.daily - opening - held,
+                'per_call_limit_usd': self.per_call, 'daily_limit_usd': self.daily,
+                'reservations_released': False,
+                'coverage': 'Declared ledger coverage; not an independent OpenAI billing audit'}
+
     def reserve(self, costs, purpose):
         costs = [_money(c) for c in costs]
         if not costs or any(c <= 0 or c > self.per_call for c in costs):

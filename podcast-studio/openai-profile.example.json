@@ -1,0 +1,15 @@
+{
+  "status": "superseded-review-artifact",
+  "note": "Retained to preserve the previous proposal. The runner no longer loads JSON profiles. Use podcast/production in the existing config.yaml; no English output directory.",
+  "show_title": "By the Way",
+  "model": "gpt-4.1-mini-2025-04-14",
+  "speech_model": "tts-1",
+  "voice": "alloy",
+  "max_output_tokens": 12000,
+  "english_output_dir": "REPLACE_WITH_EXISTING_EDITION_DIRECTORY_INSIDE_CONFIGURED_OUTPUT_ROOT",
+  "budget_ledger": "REPLACE_WITH_EXISTING_SHARED_VERIFIED_BUDGET_LEDGER",
+  "budget_timezone": "REPLACE_WITH_THE_APPROVED_BUDGET_TIMEZONE",
+  "per_call_limit_usd": 0,
+  "daily_limit_usd": 0,
+  "additional_read_roots": []
+}

@@ -2936,7 +2936,29 @@ def _cli() -> int:
              "Default is advisory — the scorecard is recorded but the run "
              "continues so iteration can read it.",
     )
+    parser.add_argument('--preflight', action='store_true',
+                        help='Read-only source/credential/shared-budget audit; no generation or reservations.')
+    parser.add_argument('--preflight-at', default=None,
+                        help='Audit run time as ISO datetime with offset; only used with --preflight.')
+    parser.add_argument('--preflight-timezone', default=None,
+                        help='Expected IANA policy timezone for --preflight; must match shared accounting.')
+    parser.add_argument('--max-news-age-days', type=int, default=None,
+                        help='Public news publication window for --preflight (archives exempt).')
     args = parser.parse_args()
+    if not args.preflight and any(value is not None for value in (args.preflight_at, args.preflight_timezone, args.max_news_age_days)):
+        parser.error('preflight options require --preflight; no production run started')
+    if args.preflight:
+        from lib.preflight import inspect_readiness
+        from lib.config import ConfigError
+        try:
+            result = inspect_readiness(show=args.show, run_at=args.preflight_at,
+                                       max_news_age_days=args.max_news_age_days if args.max_news_age_days is not None else 7,
+                                       policy_timezone=args.preflight_timezone)
+        except (ValueError, OSError, ConfigError) as exc:
+            print(json.dumps({'ready_for_run': False, 'error': str(exc), 'paid_calls': 0}))
+            return 2
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result['ready_for_run'] else 2
 
     try:
         result = run_pipeline(

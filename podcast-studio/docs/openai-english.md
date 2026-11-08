@@ -331,3 +331,40 @@ A no-cost smoke check is `lib.runner --help`. `--no-tts` is not a no-cost run,
 and `finalize` updates continuity. Use temporary synthetic fixtures for behavioral
 checks. Native skill discovery and offline checks do not authorize source egress,
 credential access, paid generation or external publication.
+
+
+## Read-only source and shared-budget preflight (development update)
+
+The existing runner now accepts `--show morning --preflight`. This audit reads
+configuration with the pure parser rather than `load_config()`, verifies the exact
+public manifest/file hashes, checks original news publication dates (7-day default,
+`--max-news-age-days` configurable; archives may be older), and requires an actual
+original-source `reviewed_at` ISO timestamp with offset within 24 hours of the run.
+The timestamp records a human/agent declaration; it is not independent proof that
+original sources were checked. Never copy a capture timestamp or advance it without
+reviewing the originals. Refresh discovery at execution time, not only the old
+manifest. Original sources and old manifests are preserved.
+
+It checks only whether `OPENAI_API_KEY` is present; it never reads a credential
+file or validates a key through an API. `Budget.snapshot()` reads the existing
+JSON ledger under a shared lock and retains every reservation, including unknown
+outcomes. Missing, stale, unverified or malformed accounting blocks readiness;
+no ledger is created, reset, settled or marked verified. All participating jobs
+must share reconciled accounting. A positive reported balance is not an episode
+cost guarantee; the ordinary per-call/job guards still apply.
+
+`--preflight-timezone Asia/Shanghai` pins the trial policy timezone for both news
+calendar checks and the shared ledger; a different ledger timezone blocks it.
+All audit-only options require `--preflight`, so a missing flag cannot start
+production. The manifest approval pin must be an explicit SHA-256, never null.
+`--preflight-at 2026-11-07T05:00:00+08:00` audits a planned time, not actual future
+spending. Always rerun without that override at execution time. The audit exits 2
+when blocked and creates no scratch/output directories, reservations or paid
+requests. It cannot authorize source egress, credential use or publication. It is
+an optional audit of the existing runner, not another production pipeline.
+The scheduled episode must also pass an explicit local-policy date to `--date`;
+the legacy default uses the host calendar and must not be assumed to be Shanghai.
+
+This addition is local development source, not part of installed 0.10.1 until
+reviewed and released. Use the canonical source `PYTHONPATH` for this audit only;
+do not patch an installed cache or claim the installed skill already includes it.
